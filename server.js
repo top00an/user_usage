@@ -19,6 +19,12 @@
  *      태운다(상태변경은 Authorization 헤더만 인정 → 403). 브라우저는 임의 헤더를 붙일 수
  *      없으니 화면은 자연히 조회 전용이 되고, double-submit 토큰을 둘 이유가 사라진다.
  *
+ *   ②' 보고 자격과 열람 자격의 분리(`USAGE_INTAKE_TOKEN`).  인테이크의 보고자는 팀원 PC 마다
+ *      깔린 수집기다 — 즉 그 토큰은 **팀원 수만큼 복제되어 각자의 디스크에 놓인다.** 그것이
+ *      곧 전원의 사용량·비용·머신명을 읽는 토큰이기도 하면, 사본 하나만 새도 팀 전체가 열린다.
+ *      그래서 보고 전용 토큰을 따로 둘 수 있게 하고, 그 토큰은 `POST /api/usage` **하나만**
+ *      연다(조회는 403). 안 걸면 종전대로 admin 토큰 하나로 동작한다(하위호환).
+ *
  *   ③ 테넌트 스코프(tenantStore.run).  pg 백엔드는 매 쿼리에서 currentTenant() 를 RLS 로
  *      주입한다. 감싸지 않으면 'default' 로 흐르는데, remote 로 남의 DB 를 볼 때 그게 맞는다는
  *      보장이 없다 → `USAGE_TENANT` 로 명시할 수 있게 열어 두고 요청 1지점을 감싼다.
@@ -29,6 +35,7 @@
  *                인테이크(POST /api/usage)를 등록하지 않고 상태변경 경로를 아예 열지 않는다.
  *                보존 정리기(keyword 삭제)도 띄우지 않는다. 조회 도구가 운영 데이터를
  *                건드릴 이유는 없고, "안 건드릴 것"은 규율이 아니라 배선으로 막아야 한다.
+ *                이 모드는 부팅에서 **DB 롤을 검사한다**(assertRlsSafe) — 아래 참조.
  *
  * 기동: `USAGE_ADMIN_TOKEN=… npm start` — 자세한 절차는 README.md.
  */
@@ -88,6 +95,22 @@ function readConfig(env = process.env) {
     errors.push(`USAGE_ADMIN_TOKEN 이 너무 짧다(${token.length}자) — 최소 ${MIN_TOKEN_LEN}자.`);
   }
 
+  /*
+   * 보고 전용 토큰(선택). 안 걸면 종전대로 admin 토큰 하나가 보고와 열람을 겸한다.
+   *
+   * admin 과 **같은 값이면 거부한다.** 그건 분리한 것처럼 보이지만 아무것도 분리되지 않은
+   * 상태이고, 이 레포에서 가장 비싼 사고 유형(게이트가 있다는 착각)이 정확히 그 모양이다.
+   */
+  const intakeToken = String(env.USAGE_INTAKE_TOKEN || '').trim();
+  if (intakeToken) {
+    if (intakeToken.length < MIN_TOKEN_LEN) {
+      errors.push(`USAGE_INTAKE_TOKEN 이 너무 짧다(${intakeToken.length}자) — 최소 ${MIN_TOKEN_LEN}자.`);
+    } else if (token && intakeToken === token) {
+      errors.push('USAGE_INTAKE_TOKEN 이 USAGE_ADMIN_TOKEN 과 같다 — 분리한 것처럼 보이지만 '
+        + '보고 자격이 곧 열람 자격이다. 다른 값을 쓰거나 아예 지워라.');
+    }
+  }
+
   const mode = String(env.USAGE_DB_MODE || 'local').trim().toLowerCase() || 'local';
   if (!MODES.includes(mode)) {
     errors.push(`USAGE_DB_MODE 가 '${mode}' 다 — ${MODES.join('|')} 중 하나여야 한다(오타를 local 로 접지 않는다).`);
@@ -114,6 +137,7 @@ function readConfig(env = process.env) {
 
   return {
     token,
+    intakeToken,
     mode,
     databaseUrl,
     port,
@@ -168,16 +192,67 @@ function safeEqual(a, b) {
 }
 
 /*
- * 자격증명 판정. 통과하면 **경로**('header'|'cookie')를 돌려준다 — 호출부가 그 둘을 다르게
- * 취급해야 하기 때문이다(쿠키는 조회만).
- * Authorization 이 있는데 틀렸으면 쿠키로 흘리지 않는다(폴백이 있으면 게이트가 흐려진다).
+ * 자격증명 판정. 통과하면 `{ via, scope }` 를 돌려준다 — 호출부가 둘을 **다르게** 취급한다:
+ *   via   'header' | 'cookie'    쿠키는 조회만 태운다(CSRF 표면 제거 — 파일 상단 ②).
+ *   scope 'admin' | 'intake'     intake 는 `POST /api/usage` 하나만 연다(파일 상단 ②').
+ *
+ * 규칙 둘:
+ *   · Authorization 이 있는데 틀렸으면 쿠키로 흘리지 않는다(폴백이 있으면 게이트가 흐려진다).
+ *   · **인테이크 토큰은 쿠키로 인정하지 않는다.** 그 토큰의 보고자는 수집기이지 브라우저가
+ *     아니고, 쿠키로 받아 주면 브라우저를 꾀어 임의 사용량을 밀어 넣는 자리가 생긴다.
  */
-function authenticate(req, token) {
+function authenticate(req, cfg) {
+  const token = cfg && cfg.token;
+  const intake = (cfg && cfg.intakeToken) || '';
   const h = String(req.headers.authorization || '');
-  if (h.startsWith('Bearer ')) return safeEqual(h.slice(7).trim(), token) ? 'header' : null;
+  if (h.startsWith('Bearer ')) {
+    const got = h.slice(7).trim();
+    if (safeEqual(got, token)) return { via: 'header', scope: 'admin' };
+    if (intake && safeEqual(got, intake)) return { via: 'header', scope: 'intake' };
+    return null;
+  }
   const c = parseCookies(req).usage_tok;
-  if (c) return safeEqual(c, token) ? 'cookie' : null;
+  if (c) return safeEqual(c, token) ? { via: 'cookie', scope: 'admin' } : null;
   return null;
+}
+
+/* ── RLS 성립 전제 확인(remote 전용) ─────────────────────────────────
+ * lib/db/rlsguard.js 가 판정을 갖고 있고, 여기가 그것을 **부팅 경로에 배선한다.**
+ *
+ * 왜 부팅에서 끊나: 앱이 SUPERUSER·BYPASSRLS 롤로 붙으면 FORCE ROW LEVEL SECURITY 조차
+ * 무시되어 전 테넌트의 행이 서로 보인다. 그런데 **증상이 없다** — 요청은 200 이고 데이터도
+ * 잘 보인다(남의 것까지). 이 레포의 다른 위험들과 같은 취급을 한다: 규율(README 의 경고문)이
+ * 아니라 배선으로 막는다.
+ *
+ * ⚠ 판정 불가(터널 미개통·DB 다운 등)는 **거부하지 않는다.** 붙지 못한 DB 는 노출도 없고,
+ *   여기서 죽이면 "터널을 먼저 뚫는다"는 정상 절차가 부팅 실패로 보인다. 대신 stderr 로
+ *   크게 남긴다 — 검사가 돌지 않았다는 사실 자체가 기록돼야 한다.
+ */
+const rlsguard = require('./lib/db/rlsguard');
+const RLS_PROBE_SQL = 'SELECT current_user AS role, rolsuper, rolbypassrls'
+  + ' FROM pg_roles WHERE rolname = current_user';
+const RLS_PROBE_TIMEOUT_MS = 5000;
+
+/*
+ * probe 는 위 SQL 한 행을 돌려주는 함수다(주입 가능 — 실제 슈퍼유저 계정 없이 단위 검증한다).
+ * 반환: { ok:true, role } | { ok:false, message } | { inconclusive:true, message }
+ */
+async function assertRlsSafe(probe) {
+  let row;
+  try {
+    row = await Promise.race([
+      probe(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error(`확인 시간 초과(${RLS_PROBE_TIMEOUT_MS}ms)`)),
+        RLS_PROBE_TIMEOUT_MS).unref()),
+    ]);
+  } catch (e) {
+    return { inconclusive: true, message: String((e && e.message) || e) };
+  }
+  // 행이 없으면 판정하지 않는다(rlsguard 의 계약) — 호출부인 여기가 "확인 불가"로 접는다.
+  if (!row) return { inconclusive: true, message: 'current_user 를 pg_roles 에서 찾지 못했다' };
+  const v = rlsguard.check(row);
+  if (v.ok) return { ok: true, role: row.role };
+  return { ok: false, message: rlsguard.remedy(v.message) };
 }
 
 /* ── 정적 서빙 ───────────────────────────────────────────────────────
@@ -244,23 +319,42 @@ function serveFile(req, res, abs) {
   });
 }
 
+/*
+ * 예상 못 한 예외의 응답. **원문을 클라이언트로 보내지 않는다.**
+ *
+ * 여기로 오는 것은 라우트가 스스로 응답하지 못한 예외다 — 대개 DB 드라이버 에러(테이블·컬럼명,
+ * 제약 이름, 때로는 접속 정보 조각을 문장에 담는다)이거나 JSON 파싱 실패다. 라우트가 의도해서
+ * 내는 400(검증 메시지)은 이 경로로 오지 않으므로, 여기서 원문을 접어도 사용자가 고칠 수 있는
+ * 안내는 그대로 남는다. 진단에 필요한 원문은 서버 stderr 로 간다 — 그쪽은 운영자만 본다.
+ */
+function failRequest(res, err, where) {
+  console.error(`요청 처리 실패 [${where}]:`, (err && err.stack) || err);
+  if (!res.headersSent) sendJson(res, 400, { error: 'bad request' });
+  else res.end();
+}
+
 /* ── ctx ─────────────────────────────────────────────────────────────
  * 라우트가 요구하는 것만 정확히 채운다(routes/* 가 쓰는 필드 전부):
  *   u·p·me·sendJson·jsonBody·requireRole·isLanReq·isAdminReq·syncTenant
  *
- * 게이트는 이미 handle() 이 통과시켰으므로 requireRole 은 항상 true 다 — 역할 체계를 여기서
- * 흉내내지 않는다(토큰을 가진 사람 = 이 도구의 유일한 사용자).
+ * requireRole 은 항상 true 다 — 역할 체계를 여기서 흉내내지 않는다(토큰을 가진 사람 = 이 도구의
+ * 유일한 사용자). 조회 경로에 intake 스코프가 닿는 일은 handle() 이 이미 막으므로, 여기서 false 를
+ * 돌려줄 자리가 없다(라우트는 requireRole 이 스스로 응답했다고 전제한다 — false 를 돌려주면서
+ * 응답하지 않으면 요청이 그대로 매달린다).
+ *
  * isLanReq 는 **false** 로 둔다: 인테이크가 "LAN 이면 등록됨"으로 열리는 자리인데, 이 서비스에서
- * 등록 근거는 네트워크 위치가 아니라 토큰 하나여야 한다(isAdminReq 가 그 역할을 진다).
+ * 등록 근거는 네트워크 위치가 아니라 토큰이어야 한다(isAdminReq·isIntakeReq 가 그 역할을 진다).
  */
 const ME = Object.freeze({ u: 'usage-admin', r: 'admin', role: 'admin' });
 
-function makeCtx(u, p) {
+function makeCtx(u, p, scope = 'admin') {
   return {
-    u, p, me: ME, role: ME.role,
+    u, p, me: ME, role: ME.role, scope,
     sendJson, jsonBody, readBody, parseCookies,
     requireRole: () => true,
-    isAdminReq: () => true,
+    // 스코프를 정직하게 비춘다 — 인테이크 라우트의 자체 게이트가 의미를 갖게 하기 위해서다.
+    isAdminReq: () => scope === 'admin',
+    isIntakeReq: () => scope === 'intake',
     isLanReq: () => false,
     isLocalReq: () => false,
     syncTenant: null,
@@ -312,18 +406,27 @@ function createApp(cfg, usage) {
 
     if (!p.startsWith('/api/')) return sendJson(res, 404, { error: 'not found' });
 
-    const via = authenticate(req, cfg.token);
-    if (!via) {
+    const auth = authenticate(req, cfg);
+    if (!auth) {
       return sendJson(res, 401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer realm="usage"' });
     }
+    /*
+     * 인테이크 토큰은 **보고 한 경로만** 연다(파일 상단 ②'). 이 토큰은 팀원 수만큼 복제되어
+     * 각자의 디스크에 놓이므로, 열람까지 겸하면 사본 하나가 곧 팀 전체의 노출이 된다.
+     */
+    if (auth.scope === 'intake' && !(req.method === 'POST' && p === '/api/usage')) {
+      return sendJson(res, 403, {
+        error: '인테이크 토큰으로는 조회할 수 없습니다 — 열람은 USAGE_ADMIN_TOKEN 을 사용하세요',
+      });
+    }
     // 쿠키 자격증명으로는 상태변경을 태우지 않는다(CSRF 표면 제거 — 파일 상단 ② 참조).
-    if (req.method !== 'GET' && req.method !== 'HEAD' && via === 'cookie') {
+    if (req.method !== 'GET' && req.method !== 'HEAD' && auth.via === 'cookie') {
       return sendJson(res, 403, {
         error: '쿠키 인증으로는 상태변경을 할 수 없습니다 — Authorization: Bearer 를 사용하세요',
       });
     }
 
-    const ctx = makeCtx(u, p);
+    const ctx = makeCtx(u, p, auth.scope);
     return runWithTenant(cfg.tenant, async () => {
       try {
         for (const route of routes) {
@@ -331,8 +434,7 @@ function createApp(cfg, usage) {
         }
         sendJson(res, 404, { error: 'not found' });
       } catch (err) {
-        if (!res.headersSent) sendJson(res, 400, { error: String((err && err.message) || err) });
-        else res.end();
+        failRequest(res, err, p);
       }
     });
   }
@@ -340,10 +442,7 @@ function createApp(cfg, usage) {
   // 핸들러 밖으로 새는 거부(잘못된 JSON 본문 등)가 프로세스를 죽이지 않게 하는 마지막 안전망.
   return http.createServer((req, res) => {
     Promise.resolve().then(() => handle(req, res)).catch((err) => {
-      try {
-        if (!res.headersSent) sendJson(res, 400, { error: String((err && err.message) || err) });
-        else res.end();
-      } catch { /* 응답이 이미 끊긴 경우 */ }
+      try { failRequest(res, err, req.url || ''); } catch { /* 응답이 이미 끊긴 경우 */ }
     });
   });
 }
@@ -355,6 +454,8 @@ function help() {
     '사용법: USAGE_ADMIN_TOKEN=<토큰> node server.js',
     '',
     '  USAGE_ADMIN_TOKEN  (필수) 조회 토큰. Authorization: Bearer <토큰> 또는 쿠키 usage_tok.',
+    '  USAGE_INTAKE_TOKEN (선택) 보고 전용 토큰. POST /api/usage 만 열린다(조회 403).',
+    '                     수집기에 배포할 토큰을 열람 토큰과 분리하는 용도. admin 과 같은 값은 거부한다.',
     `  USAGE_PORT         포트(기본 ${DEFAULT_PORT}). 브라우저 차단 포트(4190·6000 등)는 거부한다`,
     `  USAGE_HOST         바인드 주소(기본 ${DEFAULT_HOST} — 루프백)`,
     '  USAGE_DB_MODE      local(기본, 로컬 sqlite) | remote(DATABASE_URL 로 원격 pg, 읽기 전용)',
@@ -384,6 +485,34 @@ async function main(env = process.env) {
   if (cfg.mode === 'remote') process.env.USAGE_PG_URL = cfg.databaseUrl;
   const usage = require('./index');
 
+  /*
+   * RLS 성립 전제 확인. remote(=pg)에서만 의미가 있다 — sqlite 는 단일 테넌트라 격리 대상이 없다.
+   * 위반이면 **여기서 끊는다.** 뜨고 나면 증상이 없어서 아무도 못 잡는 종류의 사고다.
+   */
+  if (cfg.mode === 'remote') {
+    const db = require('./lib/db');
+    const verdict = await assertRlsSafe(() => db.q(RLS_PROBE_SQL).get());
+    if (verdict.ok === false) {
+      console.error('사용량 대시보드 기동을 거부한다:');
+      console.error(`  · ${verdict.message}`);
+      /*
+       * 풀을 닫고 나간다. 프로브가 성공한 뒤 거부하는 경로라 유휴 커넥션이 하나 남아 있고,
+       * 그것이 이벤트 루프를 붙잡아 **거부 메시지를 찍고도 10초를 더 산다**(실측 10.5초 —
+       * pg.Pool 의 idleTimeoutMillis 기본값). 사람이 보기엔 "에러를 냈는데 안 죽는다"이고,
+       * 재시작을 거는 감독 프로세스에겐 매 기동마다 10초 지연이다.
+       */
+      try { await db.close(); } catch { /* 종료 경로 — 정리 실패가 거부를 막지 않는다 */ }
+      process.exitCode = 2;
+      return null;
+    }
+    if (verdict.inconclusive) {
+      console.error(`  ⚠ DB 롤을 확인하지 못했다(${verdict.message}) — RLS 격리 전제가 검증되지 않은 채 뜬다. `
+        + '터널이 붙은 뒤 재기동해 확인하라.');
+    } else {
+      console.log(`  · DB 롤 '${verdict.role}' — 비-슈퍼·비-BYPASSRLS(RLS 테넌트 격리 성립)`);
+    }
+  }
+
   // 스키마 보장. sqlite 면 DDL(멱등), pg 면 조기 반환한다(스키마는 migrations 소유) —
   // 즉 remote 모드의 부팅은 원격 DB 에 아무것도 쓰지 않는다.
   await usage.init();
@@ -391,6 +520,9 @@ async function main(env = process.env) {
   const disposers = [];
   if (cfg.readOnly) {
     console.log('  · remote 모드 — 읽기 전용(인테이크·귀속 쓰기·보존 정리 모두 미등록)');
+    if (cfg.intakeToken) {
+      console.error('  ⚠ USAGE_INTAKE_TOKEN 이 걸려 있지만 remote 모드에는 인테이크가 없다 — 이 토큰은 아무것도 열지 않는다.');
+    }
   } else {
     const ret = usage.startRetention();
     if (ret) { disposers.push(() => ret.stop()); console.log(`  · 키워드 보존 정리: ${ret.days}일`); }
@@ -406,6 +538,13 @@ async function main(env = process.env) {
   // 토큰은 절대 찍지 않는다.
   console.log(`usage-dashboard: http://${cfg.host}:${cfg.port}  (mode=${cfg.mode}, tenant=${cfg.tenant})`);
   console.log('  · 브라우저에서 열고 토큰을 입력하면 두 탭(사용 추적·사용 관측)이 뜬다.');
+  // 어느 자격으로 보고가 들어오는지는 운영자가 알아야 한다(토큰 값은 절대 찍지 않는다).
+  if (!cfg.readOnly) {
+    console.log(cfg.intakeToken
+      ? '  · 인테이크 자격: USAGE_INTAKE_TOKEN(보고 전용 — 조회 불가)'
+      : '  · 인테이크 자격: USAGE_ADMIN_TOKEN 겸용 — 수집기에 배포하는 토큰이 곧 전원 열람 토큰이다. '
+        + 'USAGE_INTAKE_TOKEN 으로 분리하는 것을 권한다.');
+  }
 
   const shutdown = () => {
     for (const d of disposers) { try { d(); } catch { /* 정리 실패가 종료를 막지 않는다 */ } }
@@ -419,7 +558,10 @@ async function main(env = process.env) {
   return { server, cfg };
 }
 
-module.exports = { readConfig, createApp, authenticate, resolveStatic, buildRoutes, main };
+module.exports = {
+  readConfig, createApp, authenticate, resolveStatic, buildRoutes, main,
+  assertRlsSafe, RLS_PROBE_SQL,
+};
 
 if (require.main === module) {
   main().catch((e) => {
