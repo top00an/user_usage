@@ -1,0 +1,32 @@
+{
+  "generatedBy": "web/scripts/externalize-inline-scripts.mjs",
+  "paths": [
+    "/404.html",
+    "/__next.__PAGE__.txt",
+    "/__next._full.txt",
+    "/__next._tree.txt",
+    "/_next/static/IfSb2X-5SjlfG3PAsEk_M/_buildManifest.js",
+    "/_next/static/IfSb2X-5SjlfG3PAsEk_M/_clientMiddlewareManifest.js",
+    "/_next/static/IfSb2X-5SjlfG3PAsEk_M/_ssgManifest.js",
+    "/_next/static/chunks/08ttfj81-47mu.js",
+    "/_next/static/chunks/0cz1d0mv5g_q7.js",
+    "/_next/static/chunks/2ok_fay6l9q1p.js",
+    "/_next/static/chunks/2xanwb3-8yvi7.js",
+    "/_next/static/chunks/3fntmmi971322.js",
+    "/_next/static/chunks/3l04zcqx63h3y.js",
+    "/_next/static/chunks/3l59e9bt0ngpj.css",
+    "/_next/static/chunks/turbopack-33vp347x__vaf.js",
+    "/_next/static/inline/1027306213a85cef.js",
+    "/_next/static/inline/3814cddd18b2095e.js",
+    "/_next/static/inline/64642fc5be76ea5e.js",
+    "/_not-found.html",
+    "/_not-found.txt",
+    "/_not-found/__next._full.txt",
+    "/_not-found/__next._not-found.__PAGE__.txt",
+    "/_not-found/__next._tree.txt",
+    "/favicon.svg",
+    "/index.html",
+    "/index.txt",
+    "/theme-boot.js"
+  ]
+}
