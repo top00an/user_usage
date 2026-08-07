@@ -1,0 +1,417 @@
+{
+  "request": "GET /api/usage/summary?days=365&top=3",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "byDay": [
+      {
+        "cacheCreate": 0,
+        "cacheRead": 0,
+        "day": "2026-08-05",
+        "input": 0,
+        "output": 0,
+        "sessions": 1
+      },
+      {
+        "cacheCreate": 800,
+        "cacheRead": 20000,
+        "day": "2026-08-04",
+        "input": 500,
+        "output": 1500,
+        "sessions": 1
+      },
+      {
+        "cacheCreate": 1000,
+        "cacheRead": 40000,
+        "day": "2026-08-03",
+        "input": 1000,
+        "output": 2000,
+        "sessions": 1
+      },
+      {
+        "cacheCreate": 12000,
+        "cacheRead": 220000,
+        "day": "2026-08-02",
+        "input": 3000,
+        "output": 6000,
+        "sessions": 1
+      },
+      {
+        "cacheCreate": 2400,
+        "cacheRead": 4000,
+        "day": "2026-08-01",
+        "input": 300,
+        "output": 900,
+        "sessions": 1
+      },
+      {
+        "cacheCreate": 9000,
+        "cacheRead": 150000,
+        "day": "2026-07-31",
+        "input": 2400,
+        "output": 8100,
+        "sessions": 1
+      },
+      {
+        "cacheCreate": 5200,
+        "cacheRead": 88000,
+        "day": "2026-07-30",
+        "input": 1200,
+        "output": 3400,
+        "sessions": 1
+      },
+      {
+        "cacheCreate": 0,
+        "cacheRead": 1000,
+        "day": "2026-07-28",
+        "input": 100,
+        "output": 200,
+        "sessions": 1
+      }
+    ],
+    "byModel": [
+      {
+        "cacheCreate": 21000,
+        "cacheRead": 270000,
+        "fromSeries": {
+          "cacheCreate": 12000,
+          "cacheRead": 120000,
+          "input": 1500,
+          "output": 3000,
+          "sessions": 1
+        },
+        "fromSession": {
+          "cacheCreate": 9000,
+          "cacheRead": 150000,
+          "input": 2400,
+          "output": 8100,
+          "sessions": 1
+        },
+        "input": 3900,
+        "model": "claude-opus-5",
+        "output": 11100,
+        "sessions": 2
+      },
+      {
+        "cacheCreate": 6200,
+        "cacheRead": 198000,
+        "fromSeries": {
+          "cacheCreate": 6200,
+          "cacheRead": 182000,
+          "input": 2800,
+          "output": 6800,
+          "sessions": 3
+        },
+        "fromSession": {
+          "cacheCreate": 0,
+          "cacheRead": 16000,
+          "input": 400,
+          "output": 800,
+          "sessions": 1
+        },
+        "input": 3200,
+        "model": "claude-sonnet-5",
+        "output": 7600,
+        "sessions": 4
+      },
+      {
+        "cacheCreate": 2400,
+        "cacheRead": 35000,
+        "fromSeries": {
+          "cacheCreate": 0,
+          "cacheRead": 30000,
+          "input": 500,
+          "output": 800,
+          "sessions": 1
+        },
+        "fromSession": {
+          "cacheCreate": 2400,
+          "cacheRead": 5000,
+          "input": 400,
+          "output": 1100,
+          "sessions": 2
+        },
+        "input": 900,
+        "model": "claude-haiku-4-5-20251001",
+        "output": 1900,
+        "sessions": 3
+      },
+      {
+        "cacheCreate": 800,
+        "cacheRead": 20000,
+        "fromSeries": {
+          "cacheCreate": 0,
+          "cacheRead": 0,
+          "input": 0,
+          "output": 0,
+          "sessions": 0
+        },
+        "fromSession": {
+          "cacheCreate": 800,
+          "cacheRead": 20000,
+          "input": 500,
+          "output": 1500,
+          "sessions": 1
+        },
+        "input": 500,
+        "model": "some-unreleased-model-x",
+        "output": 1500,
+        "sessions": 1
+      }
+    ],
+    "byUser": [
+      {
+        "cacheCreate": 9000,
+        "cacheRead": 150000,
+        "input": 2400,
+        "output": 8100,
+        "sessions": 1,
+        "turns": 21,
+        "username": "bob"
+      },
+      {
+        "cacheCreate": 13000,
+        "cacheRead": 260000,
+        "input": 4000,
+        "output": 8000,
+        "sessions": 2,
+        "turns": 40,
+        "username": "carol"
+      },
+      {
+        "cacheCreate": 7600,
+        "cacheRead": 92000,
+        "input": 1500,
+        "output": 4300,
+        "sessions": 2,
+        "turns": 16,
+        "username": "alice"
+      },
+      {
+        "cacheCreate": 800,
+        "cacheRead": 20000,
+        "input": 500,
+        "output": 1500,
+        "sessions": 1,
+        "turns": 5,
+        "username": "dave"
+      },
+      {
+        "cacheCreate": 0,
+        "cacheRead": 1000,
+        "input": 100,
+        "output": 200,
+        "sessions": 1,
+        "turns": 2,
+        "username": "frank"
+      },
+      {
+        "cacheCreate": 0,
+        "cacheRead": 0,
+        "input": 0,
+        "output": 0,
+        "sessions": 1,
+        "turns": 0,
+        "username": "erin"
+      }
+    ],
+    "modelAxis": {
+      "overSessions": 0,
+      "sessions": 8,
+      "users": [
+        {
+          "noTsTurns": 4,
+          "noTsUnknown": 0,
+          "sessions": 2,
+          "username": "carol",
+          "withSeries": 2
+        },
+        {
+          "noTsTurns": 0,
+          "noTsUnknown": 1,
+          "sessions": 2,
+          "username": "alice",
+          "withSeries": 1
+        },
+        {
+          "noTsTurns": 0,
+          "noTsUnknown": 1,
+          "sessions": 1,
+          "username": "frank",
+          "withSeries": 0
+        },
+        {
+          "noTsTurns": 0,
+          "noTsUnknown": 1,
+          "sessions": 1,
+          "username": "erin",
+          "withSeries": 0
+        },
+        {
+          "noTsTurns": 0,
+          "noTsUnknown": 1,
+          "sessions": 1,
+          "username": "dave",
+          "withSeries": 0
+        },
+        {
+          "noTsTurns": 0,
+          "noTsUnknown": 1,
+          "sessions": 1,
+          "username": "bob",
+          "withSeries": 0
+        }
+      ],
+      "withSeries": 3
+    },
+    "recommendation": {
+      "gaps": [],
+      "miss": 0,
+      "total": 0
+    },
+    "retention": {
+      "keywordDays": null
+    },
+    "top": {
+      "agent": [
+        {
+          "count": 10,
+          "key": "general-purpose",
+          "sessions": 2,
+          "users": 2
+        },
+        {
+          "count": 4,
+          "key": "frontend-engineer",
+          "sessions": 1,
+          "users": 1
+        },
+        {
+          "count": 3,
+          "key": "Explore",
+          "sessions": 1,
+          "users": 1
+        }
+      ],
+      "bash": [
+        {
+          "count": 23,
+          "key": "git",
+          "sessions": 2,
+          "users": 2
+        },
+        {
+          "count": 6,
+          "key": "docker",
+          "sessions": 1,
+          "users": 1
+        },
+        {
+          "count": 4,
+          "key": "npm",
+          "sessions": 1,
+          "users": 1
+        }
+      ],
+      "keyword": [
+        {
+          "count": 7,
+          "key": "테스트",
+          "sessions": 1,
+          "users": 1
+        },
+        {
+          "count": 4,
+          "key": "리팩터",
+          "sessions": 1,
+          "users": 1
+        },
+        {
+          "count": 3,
+          "key": "마이그레이션",
+          "sessions": 1,
+          "users": 1
+        }
+      ],
+      "mcp": [
+        {
+          "count": 11,
+          "key": "sequential-thinking:sequentialthinking",
+          "sessions": 1,
+          "users": 1
+        },
+        {
+          "count": 5,
+          "key": "team-cms:cms_get_kb",
+          "sessions": 1,
+          "users": 1
+        }
+      ],
+      "skill": [
+        {
+          "count": 3,
+          "key": "superpowers:test-driven-development",
+          "sessions": 1,
+          "users": 1
+        },
+        {
+          "count": 2,
+          "key": "artifacts-builder",
+          "sessions": 1,
+          "users": 1
+        },
+        {
+          "count": 1,
+          "key": "apple-design",
+          "sessions": 1,
+          "users": 1
+        }
+      ],
+      "slash": [
+        {
+          "count": 2,
+          "key": "/clear",
+          "sessions": 1,
+          "users": 1
+        },
+        {
+          "count": 1,
+          "key": "/loop",
+          "sessions": 1,
+          "users": 1
+        }
+      ],
+      "tool": [
+        {
+          "count": 187,
+          "key": "Read",
+          "sessions": 7,
+          "users": 5
+        },
+        {
+          "count": 42,
+          "key": "Edit",
+          "sessions": 2,
+          "users": 2
+        },
+        {
+          "count": 22,
+          "key": "Bash",
+          "sessions": 1,
+          "users": 1
+        }
+      ]
+    },
+    "totals": {
+      "cacheCreate": 30400,
+      "cacheRead": 523000,
+      "input": 8500,
+      "machines": 6,
+      "output": 22100,
+      "sessions": 8,
+      "users": 6
+    }
+  }
+}

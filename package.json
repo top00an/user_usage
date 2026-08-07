@@ -13,7 +13,11 @@
     "start": "node server.js",
     "test": "node --import ./test/sqlite-setup.mjs --test --test-timeout=300000 --test-reporter=spec $(ls test/*.test.js | grep -v usage-standalone)",
     "test:standalone": "node --import ./test/sqlite-setup.mjs --test --test-timeout=300000 --test-reporter=spec --test-concurrency=1 test/usage-standalone.test.js",
-    "test:all": "npm test && npm run test:standalone"
+    "test:all": "npm test && npm run test:standalone",
+    "contract": "node contract/run.mjs capture",
+    "contract:selfcheck": "node contract/run.mjs selfcheck",
+    "contract:verify": "node contract/run.mjs verify",
+    "verify:embed": "bash scripts/build.sh && git diff --exit-code -- go/internal/httpapi/webroot"
   },
   "dependencies": {
     "pg": "^8.22.0"

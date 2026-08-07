@@ -1,9 +1,22 @@
 # 의존성
 /node_modules/
+/web/node_modules/
+
+# Go 빌드 산출물. 바이너리는 CI 가 만든다 — 커밋하면 리뷰가 불가능한 수십 MB 가 히스토리에 박힌다.
+/go/usage-server
+/go/bin/
+
+# Next.js 빌드 산출물. `out/` 은 Go 바이너리가 go:embed 로 집는 정적 export 결과물이라
+# 소스가 아니다 — 빌드로 재현되는 것을 커밋하면 소스와 어긋난 채 배포되는 날이 온다.
+/web/.next/
+/web/out/
+/web/next-env.d.ts
 
 # 로컬 데이터 — sqlite 파일과 WAL/SHM 동반 파일.
 # 이 안에 팀원별 사용량과 프롬프트 토큰이 들어간다. 절대 커밋하지 않는다.
 /data/
+# 개발용 시드 DB(contract/fixtures.mjs 를 넣어 화면을 붙여 보는 자리). 위와 같은 이유로 제외한다.
+/data-dev/
 
 # 로컬 설정 — 단가 오버라이드 등. 예시는 config.example.json 이 담당한다.
 /config.json

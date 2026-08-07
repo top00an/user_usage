@@ -1,0 +1,48 @@
+{
+  "request": "GET /api/usage/sessions/S5-dave-unpriced-model",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "cost": {
+      "byAxis": {
+        "cacheCreate": 0,
+        "cacheRead": 0,
+        "input": 0,
+        "output": 0
+      },
+      "exact": false,
+      "priced": false,
+      "pricedAt": "2026-08-04",
+      "usd": 0
+    },
+    "counters": {
+      "tool": [
+        {
+          "count": 3,
+          "key": "Read"
+        }
+      ]
+    },
+    "note": "keyword 축은 세션 단위로 제공하지 않는다(프롬프트 재구성 방지).",
+    "series": [],
+    "session": {
+      "cacheCreate": 800,
+      "cacheRead": 20000,
+      "endedAt": null,
+      "input": 500,
+      "machine": "host-d",
+      "model": "some-unreleased-model-x",
+      "output": 1500,
+      "project": "lab",
+      "reportedAt": "<string>",
+      "sessionId": "S5-dave-unpriced-model",
+      "startedAt": "2026-08-04T11:00:00.000Z",
+      "turns": 5,
+      "username": "dave",
+      "webFetch": 0,
+      "webSearch": 0
+    }
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "request": "GET /api/usage/sessions/S4-carol-residual-turns",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "cost": {
+      "byAxis": {
+        "cacheCreate": 0.0025,
+        "cacheRead": 0.0048,
+        "input": 0.0012,
+        "output": 0.012
+      },
+      "exact": true,
+      "priced": true,
+      "pricedAt": "2026-08-04",
+      "usd": 0.020499999999999997
+    },
+    "counters": {
+      "bash": [
+        {
+          "count": 2,
+          "key": "make"
+        }
+      ],
+      "tool": [
+        {
+          "count": 12,
+          "key": "Read"
+        }
+      ]
+    },
+    "note": "keyword 축은 세션 단위로 제공하지 않는다(프롬프트 재구성 방지).",
+    "series": [
+      {
+        "cacheCreate": 1000,
+        "cacheCreate1h": 0,
+        "cacheCreate5m": 0,
+        "cacheRead": 24000,
+        "hour": "2026-08-03T09",
+        "input": 600,
+        "latencyMsMax": 4000,
+        "latencyMsSum": 18000,
+        "latencyTurns": 6,
+        "machine": "host-c",
+        "model": "claude-sonnet-5",
+        "output": 1200,
+        "project": "orca-core",
+        "sessionId": "S4-carol-residual-turns",
+        "stopMaxTokens": 0,
+        "stopRefusal": 0,
+        "toolErrors": 0,
+        "turns": 6,
+        "username": "carol"
+      }
+    ],
+    "session": {
+      "cacheCreate": 1000,
+      "cacheRead": 40000,
+      "endedAt": null,
+      "input": 1000,
+      "machine": "host-c",
+      "model": "claude-sonnet-5",
+      "output": 2000,
+      "project": "orca-core",
+      "reportedAt": "<string>",
+      "sessionId": "S4-carol-residual-turns",
+      "startedAt": "2026-08-03T09:00:00.000Z",
+      "turns": 10,
+      "username": "carol",
+      "webFetch": 0,
+      "webSearch": 0
+    }
+  }
+}

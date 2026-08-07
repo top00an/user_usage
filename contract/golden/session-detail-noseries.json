@@ -1,0 +1,68 @@
+{
+  "request": "GET /api/usage/sessions/S2-bob-no-series",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "cost": {
+      "byAxis": {
+        "cacheCreate": 0.05625,
+        "cacheRead": 0.075,
+        "input": 0.012,
+        "output": 0.2025
+      },
+      "exact": false,
+      "priced": true,
+      "pricedAt": "2026-08-04",
+      "usd": 0.34575000000000006
+    },
+    "counters": {
+      "agent": [
+        {
+          "count": 9,
+          "key": "general-purpose"
+        }
+      ],
+      "bash": [
+        {
+          "count": 14,
+          "key": "git"
+        },
+        {
+          "count": 6,
+          "key": "docker"
+        }
+      ],
+      "tool": [
+        {
+          "count": 55,
+          "key": "Read"
+        },
+        {
+          "count": 8,
+          "key": "Write"
+        }
+      ]
+    },
+    "note": "keyword 축은 세션 단위로 제공하지 않는다(프롬프트 재구성 방지).",
+    "series": [],
+    "session": {
+      "cacheCreate": 9000,
+      "cacheRead": 150000,
+      "endedAt": null,
+      "input": 2400,
+      "machine": "host-b",
+      "model": "claude-opus-5",
+      "output": 8100,
+      "project": "tscorp-web",
+      "reportedAt": "<string>",
+      "sessionId": "S2-bob-no-series",
+      "startedAt": "2026-07-31T08:00:00.000Z",
+      "turns": 21,
+      "username": "bob",
+      "webFetch": 0,
+      "webSearch": 0
+    }
+  }
+}

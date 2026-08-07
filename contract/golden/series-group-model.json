@@ -1,0 +1,81 @@
+{
+  "request": "GET /api/usage/series?from=2026-07-28&to=2026-08-05&interval=hour&group_by=model",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "attribution": "turn-hour",
+    "coverage": {
+      "sessionsTotal": 8,
+      "sessionsWithSeries": 3
+    },
+    "groupBy": [
+      "model"
+    ],
+    "interval": "hour",
+    "metric": "cost",
+    "modelAttribution": "exact",
+    "pricedAt": "2026-08-04",
+    "sample": {
+      "limit": 20000,
+      "rows": 6,
+      "truncated": false
+    },
+    "series": [
+      {
+        "key": {
+          "model": "claude-opus-5"
+        },
+        "label": "claude-opus-5",
+        "points": [
+          {
+            "t": "2026-08-02T12",
+            "v": 0.26249999999999996
+          }
+        ],
+        "total": 0.26249999999999996
+      },
+      {
+        "key": {
+          "model": "claude-sonnet-5"
+        },
+        "label": "claude-sonnet-5",
+        "points": [
+          {
+            "t": "2026-07-30T10",
+            "v": 0.052199999999999996
+          },
+          {
+            "t": "2026-07-30T11",
+            "v": 0.0226
+          },
+          {
+            "t": "2026-08-02T13",
+            "v": 0.038
+          },
+          {
+            "t": "2026-08-03T18",
+            "v": 0.020499999999999997
+          }
+        ],
+        "total": 0.13329999999999997
+      },
+      {
+        "key": {
+          "model": "claude-haiku-4-5-20251001"
+        },
+        "label": "claude-haiku-4-5-20251001",
+        "points": [
+          {
+            "t": "2026-08-02T14",
+            "v": 0.007500000000000001
+          }
+        ],
+        "total": 0.007500000000000001
+      }
+    ],
+    "timezone": "KST",
+    "unpriced": []
+  }
+}

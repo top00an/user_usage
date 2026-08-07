@@ -1,0 +1,150 @@
+{
+  "request": "GET /api/usage/sessions/S3-carol-mixed-models",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "cost": {
+      "byAxis": {
+        "cacheCreate": 0.12,
+        "cacheRead": 0.077,
+        "input": 0.01,
+        "output": 0.101
+      },
+      "exact": true,
+      "priced": true,
+      "pricedAt": "2026-08-04",
+      "usd": 0.30799999999999994
+    },
+    "counters": {
+      "agent": [
+        {
+          "count": 4,
+          "key": "frontend-engineer"
+        },
+        {
+          "count": 3,
+          "key": "Explore"
+        },
+        {
+          "count": 2,
+          "key": "design-engineer"
+        }
+      ],
+      "mcp": [
+        {
+          "count": 11,
+          "key": "sequential-thinking:sequentialthinking"
+        }
+      ],
+      "skill": [
+        {
+          "count": 2,
+          "key": "artifacts-builder"
+        },
+        {
+          "count": 1,
+          "key": "apple-design"
+        }
+      ],
+      "tool": [
+        {
+          "count": 70,
+          "key": "Read"
+        },
+        {
+          "count": 30,
+          "key": "Edit"
+        },
+        {
+          "count": 15,
+          "key": "Grep"
+        }
+      ]
+    },
+    "note": "keyword 축은 세션 단위로 제공하지 않는다(프롬프트 재구성 방지).",
+    "series": [
+      {
+        "cacheCreate": 12000,
+        "cacheCreate1h": 12000,
+        "cacheCreate5m": 0,
+        "cacheRead": 120000,
+        "hour": "2026-08-02T03",
+        "input": 1500,
+        "latencyMsMax": 14000,
+        "latencyMsSum": 95000,
+        "latencyTurns": 15,
+        "machine": "host-c",
+        "model": "claude-opus-5",
+        "output": 3000,
+        "project": "tscorp-web",
+        "sessionId": "S3-carol-mixed-models",
+        "stopMaxTokens": 1,
+        "stopRefusal": 0,
+        "toolErrors": 2,
+        "turns": 15,
+        "username": "carol"
+      },
+      {
+        "cacheCreate": 0,
+        "cacheCreate1h": 0,
+        "cacheCreate5m": 0,
+        "cacheRead": 70000,
+        "hour": "2026-08-02T04",
+        "input": 1000,
+        "latencyMsMax": 7000,
+        "latencyMsSum": 40000,
+        "latencyTurns": 10,
+        "machine": "host-c",
+        "model": "claude-sonnet-5",
+        "output": 2200,
+        "project": "tscorp-web",
+        "sessionId": "S3-carol-mixed-models",
+        "stopMaxTokens": 0,
+        "stopRefusal": 0,
+        "toolErrors": 0,
+        "turns": 10,
+        "username": "carol"
+      },
+      {
+        "cacheCreate": 0,
+        "cacheCreate1h": 0,
+        "cacheCreate5m": 0,
+        "cacheRead": 30000,
+        "hour": "2026-08-02T05",
+        "input": 500,
+        "latencyMsMax": 2600,
+        "latencyMsSum": 9000,
+        "latencyTurns": 5,
+        "machine": "host-c",
+        "model": "claude-haiku-4-5-20251001",
+        "output": 800,
+        "project": "tscorp-web",
+        "sessionId": "S3-carol-mixed-models",
+        "stopMaxTokens": 0,
+        "stopRefusal": 1,
+        "toolErrors": 0,
+        "turns": 5,
+        "username": "carol"
+      }
+    ],
+    "session": {
+      "cacheCreate": 12000,
+      "cacheRead": 220000,
+      "endedAt": null,
+      "input": 3000,
+      "machine": "host-c",
+      "model": "claude-opus-5",
+      "output": 6000,
+      "project": "tscorp-web",
+      "reportedAt": "<string>",
+      "sessionId": "S3-carol-mixed-models",
+      "startedAt": "2026-08-02T03:00:00.000Z",
+      "turns": 30,
+      "username": "carol",
+      "webFetch": 0,
+      "webSearch": 0
+    }
+  }
+}

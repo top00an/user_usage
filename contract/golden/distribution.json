@@ -1,0 +1,68 @@
+{
+  "request": "GET /api/usage/distribution?from=2026-07-28&to=2026-08-05",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "distributions": {
+      "cacheHitRate": {
+        "avg": 0.8850279364759249,
+        "dropped": 0,
+        "max": 0.9523809523809523,
+        "min": 0.5970149253731343,
+        "n": 7,
+        "p": {
+          "p50": 0.9322033898305084,
+          "p95": 0.948356807511737,
+          "p99": 0.9515761234071093
+        }
+      },
+      "cacheReadPerTurn": {
+        "avg": 4472.789115646258,
+        "dropped": 0,
+        "max": 7333.333333333333,
+        "min": 500,
+        "n": 7,
+        "p": {
+          "p50": 4000,
+          "p95": 7333.333333333333,
+          "p99": 7333.333333333333
+        }
+      },
+      "sessionCostUsd": {
+        "avg": 0.11495000000000001,
+        "dropped": 0,
+        "max": 0.35,
+        "min": 0,
+        "n": 7,
+        "p": {
+          "p50": 0.0325,
+          "p95": 0.348725,
+          "p99": 0.349745
+        }
+      },
+      "turnsPerSession": {
+        "avg": 10.5,
+        "dropped": 0,
+        "max": 30,
+        "min": 0,
+        "n": 8,
+        "p": {
+          "p50": 7.5,
+          "p95": 26.849999999999994,
+          "p99": 29.369999999999997
+        }
+      }
+    },
+    "pricedAt": "2026-08-04",
+    "sample": {
+      "limit": 5000,
+      "rows": 8,
+      "truncated": false
+    },
+    "unpriced": [
+      "some-unreleased-model-x"
+    ]
+  }
+}

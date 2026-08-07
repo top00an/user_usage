@@ -1,0 +1,45 @@
+{
+  "request": "GET /api/usage/identity",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "items": [
+      {
+        "machine": "host-f",
+        "note": "계약 동결 시드",
+        "updatedAt": "<string>",
+        "updatedBy": "usage-admin",
+        "username": "frank"
+      }
+    ],
+    "unmapped": [
+      {
+        "machine": "host-c",
+        "sessions": 2,
+        "username": "carol"
+      },
+      {
+        "machine": "host-a",
+        "sessions": 2,
+        "username": "alice"
+      },
+      {
+        "machine": "host-e",
+        "sessions": 1,
+        "username": "erin"
+      },
+      {
+        "machine": "host-d",
+        "sessions": 1,
+        "username": "dave"
+      },
+      {
+        "machine": "host-b",
+        "sessions": 1,
+        "username": "bob"
+      }
+    ]
+  }
+}

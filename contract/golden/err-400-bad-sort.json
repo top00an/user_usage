@@ -1,0 +1,10 @@
+{
+  "request": "GET /api/usage/sessions?sort=nope",
+  "auth": "admin",
+  "status": 400,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "error": "정렬축은 cost|cacheRead|output|turns|startedAt 중 하나입니다"
+  }
+}

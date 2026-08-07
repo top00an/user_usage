@@ -1,0 +1,65 @@
+{
+  "request": "GET /api/usage/sessions?from=2026-07-28&to=2026-08-05&sort=cost&top=25&user=carol",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "byAxis": {
+      "cacheCreate": 0.0775,
+      "cacheRead": 0.118,
+      "input": 0.017,
+      "output": 0.16999999999999998
+    },
+    "pricedAt": "2026-08-04",
+    "sample": {
+      "limit": 5000,
+      "rows": 2,
+      "truncated": false
+    },
+    "sessions": [
+      {
+        "cacheCreate": 12000,
+        "cacheRead": 220000,
+        "endedAt": null,
+        "input": 3000,
+        "machine": "host-c",
+        "model": "claude-opus-5",
+        "output": 6000,
+        "priced": true,
+        "project": "tscorp-web",
+        "reportedAt": "<string>",
+        "sessionId": "S3-carol-mixed-models",
+        "startedAt": "2026-08-02T03:00:00.000Z",
+        "turns": 30,
+        "usd": 0.35,
+        "username": "carol",
+        "webFetch": 0,
+        "webSearch": 0
+      },
+      {
+        "cacheCreate": 1000,
+        "cacheRead": 40000,
+        "endedAt": null,
+        "input": 1000,
+        "machine": "host-c",
+        "model": "claude-sonnet-5",
+        "output": 2000,
+        "priced": true,
+        "project": "orca-core",
+        "reportedAt": "<string>",
+        "sessionId": "S4-carol-residual-turns",
+        "startedAt": "2026-08-03T09:00:00.000Z",
+        "turns": 10,
+        "usd": 0.0325,
+        "username": "carol",
+        "webFetch": 0,
+        "webSearch": 0
+      }
+    ],
+    "sort": "cost",
+    "ttlUnknownRows": 2,
+    "unpriced": [],
+    "usd": 0.38249999999999995
+  }
+}

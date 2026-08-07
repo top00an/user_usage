@@ -1,0 +1,48 @@
+{
+  "request": "GET /api/usage/sessions?from=2026-07-28&to=2026-08-05&sort=cost&top=1",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "byAxis": {
+      "cacheCreate": 0.14975000000000002,
+      "cacheRead": 0.21109999999999998,
+      "input": 0.03180000000000001,
+      "output": 0.41200000000000003
+    },
+    "pricedAt": "2026-08-04",
+    "sample": {
+      "limit": 5000,
+      "rows": 8,
+      "truncated": false
+    },
+    "sessions": [
+      {
+        "cacheCreate": 12000,
+        "cacheRead": 220000,
+        "endedAt": null,
+        "input": 3000,
+        "machine": "host-c",
+        "model": "claude-opus-5",
+        "output": 6000,
+        "priced": true,
+        "project": "tscorp-web",
+        "reportedAt": "<string>",
+        "sessionId": "S3-carol-mixed-models",
+        "startedAt": "2026-08-02T03:00:00.000Z",
+        "turns": 30,
+        "usd": 0.35,
+        "username": "carol",
+        "webFetch": 0,
+        "webSearch": 0
+      }
+    ],
+    "sort": "cost",
+    "ttlUnknownRows": 5,
+    "unpriced": [
+      "some-unreleased-model-x"
+    ],
+    "usd": 0.80465
+  }
+}

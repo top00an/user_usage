@@ -1,0 +1,150 @@
+{
+  "request": "GET /api/usage/series?from=2026-07-28&to=2026-08-05&interval=day&group_by=user,model,project",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "attribution": "session-start-day",
+    "groupBy": [
+      "user",
+      "model",
+      "project"
+    ],
+    "interval": "day",
+    "metric": "cost",
+    "modelAttribution": "session-dominant",
+    "pricedAt": "2026-08-04",
+    "sample": {
+      "limit": 5000,
+      "rows": 8,
+      "truncated": false
+    },
+    "series": [
+      {
+        "key": {
+          "model": "claude-opus-5",
+          "project": "tscorp-web",
+          "user": "carol"
+        },
+        "label": "carol · claude-opus-5 · tscorp-web",
+        "points": [
+          {
+            "t": "2026-08-02",
+            "v": 0.35
+          }
+        ],
+        "total": 0.35
+      },
+      {
+        "key": {
+          "model": "claude-opus-5",
+          "project": "tscorp-web",
+          "user": "bob"
+        },
+        "label": "bob · claude-opus-5 · tscorp-web",
+        "points": [
+          {
+            "t": "2026-07-31",
+            "v": 0.34575000000000006
+          }
+        ],
+        "total": 0.34575000000000006
+      },
+      {
+        "key": {
+          "model": "claude-sonnet-5",
+          "project": "orca-core",
+          "user": "alice"
+        },
+        "label": "alice · claude-sonnet-5 · orca-core",
+        "points": [
+          {
+            "t": "2026-07-30",
+            "v": 0.067
+          }
+        ],
+        "total": 0.067
+      },
+      {
+        "key": {
+          "model": "claude-sonnet-5",
+          "project": "orca-core",
+          "user": "carol"
+        },
+        "label": "carol · claude-sonnet-5 · orca-core",
+        "points": [
+          {
+            "t": "2026-08-03",
+            "v": 0.0325
+          }
+        ],
+        "total": 0.0325
+      },
+      {
+        "key": {
+          "model": "claude-haiku-4-5-20251001",
+          "project": "orca-core",
+          "user": "alice"
+        },
+        "label": "alice · claude-haiku-4-5-20251001 · orca-core",
+        "points": [
+          {
+            "t": "2026-08-01",
+            "v": 0.008199999999999999
+          }
+        ],
+        "total": 0.008199999999999999
+      },
+      {
+        "key": {
+          "model": "claude-haiku-4-5-20251001",
+          "project": "unknown",
+          "user": "frank"
+        },
+        "label": "frank · claude-haiku-4-5-20251001 · unknown",
+        "points": [
+          {
+            "t": "2026-07-28",
+            "v": 0.0012000000000000001
+          }
+        ],
+        "total": 0.0012000000000000001
+      },
+      {
+        "key": {
+          "model": "claude-sonnet-5",
+          "project": "lab",
+          "user": "erin"
+        },
+        "label": "erin · claude-sonnet-5 · lab",
+        "points": [
+          {
+            "t": "2026-08-05",
+            "v": 0
+          }
+        ],
+        "total": 0
+      },
+      {
+        "key": {
+          "model": "some-unreleased-model-x",
+          "project": "lab",
+          "user": "dave"
+        },
+        "label": "dave · some-unreleased-model-x · lab",
+        "points": [
+          {
+            "t": "2026-08-04",
+            "v": 0
+          }
+        ],
+        "total": 0
+      }
+    ],
+    "timezone": "KST",
+    "unpriced": [
+      "some-unreleased-model-x"
+    ]
+  }
+}

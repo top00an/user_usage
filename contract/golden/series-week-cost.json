@@ -1,0 +1,41 @@
+{
+  "request": "GET /api/usage/series?from=2026-07-28&to=2026-08-05&metric=cost&interval=week",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "attribution": "session-start-day",
+    "groupBy": [],
+    "interval": "week",
+    "metric": "cost",
+    "modelAttribution": "session-dominant",
+    "pricedAt": "2026-08-04",
+    "sample": {
+      "limit": 5000,
+      "rows": 8,
+      "truncated": false
+    },
+    "series": [
+      {
+        "key": {},
+        "label": "전체",
+        "points": [
+          {
+            "t": "2026-07-27",
+            "v": 0.77215
+          },
+          {
+            "t": "2026-08-03",
+            "v": 0.0325
+          }
+        ],
+        "total": 0.80465
+      }
+    ],
+    "timezone": "KST",
+    "unpriced": [
+      "some-unreleased-model-x"
+    ]
+  }
+}

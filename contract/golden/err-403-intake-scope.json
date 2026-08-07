@@ -1,0 +1,10 @@
+{
+  "request": "GET /api/usage/summary",
+  "auth": "intake",
+  "status": 403,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "error": "인테이크 토큰으로는 조회할 수 없습니다 — 열람은 USAGE_ADMIN_TOKEN 을 사용하세요"
+  }
+}

@@ -1,0 +1,145 @@
+{
+  "request": "GET /api/usage/sessions/S1-alice-series-full",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "cost": {
+      "byAxis": {
+        "cacheCreate": 0.0208,
+        "cacheRead": 0.0176,
+        "input": 0.0024000000000000002,
+        "output": 0.034
+      },
+      "exact": true,
+      "priced": true,
+      "pricedAt": "2026-08-04",
+      "usd": 0.07479999999999999
+    },
+    "counters": {
+      "agent": [
+        {
+          "count": 2,
+          "key": "backend-engineer"
+        },
+        {
+          "count": 1,
+          "key": "general-purpose"
+        }
+      ],
+      "bash": [
+        {
+          "count": 9,
+          "key": "git"
+        },
+        {
+          "count": 4,
+          "key": "npm"
+        },
+        {
+          "count": 3,
+          "key": "pytest"
+        }
+      ],
+      "mcp": [
+        {
+          "count": 5,
+          "key": "team-cms:cms_get_kb"
+        }
+      ],
+      "skill": [
+        {
+          "count": 3,
+          "key": "superpowers:test-driven-development"
+        }
+      ],
+      "slash": [
+        {
+          "count": 2,
+          "key": "/clear"
+        },
+        {
+          "count": 1,
+          "key": "/loop"
+        }
+      ],
+      "tool": [
+        {
+          "count": 40,
+          "key": "Read"
+        },
+        {
+          "count": 22,
+          "key": "Bash"
+        },
+        {
+          "count": 12,
+          "key": "Edit"
+        }
+      ]
+    },
+    "note": "keyword 축은 세션 단위로 제공하지 않는다(프롬프트 재구성 방지).",
+    "series": [
+      {
+        "cacheCreate": 5200,
+        "cacheCreate1h": 5200,
+        "cacheCreate5m": 0,
+        "cacheRead": 50000,
+        "hour": "2026-07-30T01",
+        "input": 700,
+        "latencyMsMax": 9100,
+        "latencyMsSum": 42000,
+        "latencyTurns": 7,
+        "machine": "host-a",
+        "model": "claude-sonnet-5",
+        "output": 2000,
+        "project": "orca-core",
+        "sessionId": "S1-alice-series-full",
+        "stopMaxTokens": 0,
+        "stopRefusal": 0,
+        "toolErrors": 1,
+        "turns": 7,
+        "username": "alice"
+      },
+      {
+        "cacheCreate": 0,
+        "cacheCreate1h": 0,
+        "cacheCreate5m": 0,
+        "cacheRead": 38000,
+        "hour": "2026-07-30T02",
+        "input": 500,
+        "latencyMsMax": 6200,
+        "latencyMsSum": 21000,
+        "latencyTurns": 5,
+        "machine": "host-a",
+        "model": "claude-sonnet-5",
+        "output": 1400,
+        "project": "orca-core",
+        "sessionId": "S1-alice-series-full",
+        "stopMaxTokens": 0,
+        "stopRefusal": 0,
+        "toolErrors": 0,
+        "turns": 5,
+        "username": "alice"
+      }
+    ],
+    "session": {
+      "cacheCreate": 5200,
+      "cacheRead": 88000,
+      "endedAt": null,
+      "input": 1200,
+      "machine": "host-a",
+      "model": "claude-sonnet-5",
+      "output": 3400,
+      "project": "orca-core",
+      "reportedAt": "<string>",
+      "sessionId": "S1-alice-series-full",
+      "startedAt": "2026-07-30T01:00:00.000Z",
+      "turns": 12,
+      "username": "alice",
+      "webFetch": 0,
+      "webSearch": 0
+    }
+  }
+}

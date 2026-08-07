@@ -1,0 +1,10 @@
+{
+  "request": "GET /api/usage/sessions?from=2026-8-1",
+  "auth": "admin",
+  "status": 400,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "error": "from 은 YYYY-MM-DD 형식이어야 합니다"
+  }
+}
