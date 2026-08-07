@@ -37,3 +37,8 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Go 임시 프로브·테스트 바이너리. `go build -o` 로 만든 것들이 트리에 남으면 수 MB 짜리가
+# 조용히 커밋 후보가 된다(실측: go/_probe 4.5MB).
+/go/_probe
+/go/*.test
