@@ -39,7 +39,7 @@ const BOOT_TIMEOUT_MS = 20_000;
  */
 function childEnv(over, dataDir) {
   const env = { ...process.env, USAGE_DATA_DIR: dataDir };
-  for (const k of ['USAGE_PG_URL', 'USAGE_ADMIN_TOKEN', 'USAGE_PORT', 'USAGE_HOST',
+  for (const k of ['USAGE_PG_URL', 'USAGE_ADMIN_TOKEN', 'USAGE_INTAKE_TOKEN', 'USAGE_PORT', 'USAGE_HOST',
     'USAGE_DB_MODE', 'USAGE_TENANT', 'DATABASE_URL', 'USAGE_KEYWORD_RETENTION_DAYS']) delete env[k];
   return { ...env, ...over };
 }
@@ -117,6 +117,9 @@ async function boot(over = {}) {
 }
 
 const bearer = (t = TOKEN) => ({ Authorization: `Bearer ${t}` });
+
+// 보고 전용 토큰. admin 과 **다른 값**이어야 한다(같으면 서버가 부팅을 거부한다).
+const INTAKE_TOKEN = 'usage-standalone-intake-token-9876543210fedcba';
 
 /* ────────────────────────────────────────────────────────────────── */
 
@@ -225,6 +228,84 @@ describe('② local 모드 — 토큰 게이트', () => {
   });
 });
 
+/*
+ * 보고 자격과 열람 자격의 분리.
+ *
+ * 왜 필요한가: 인테이크의 보고자는 팀원 PC 마다 깔린 수집기다 — 그 토큰은 **팀원 수만큼
+ * 복제되어 각자의 디스크에 놓인다.** 그것이 곧 전원의 사용량·비용·머신명을 읽는 토큰이기도
+ * 하면, 사본 하나만 새도 팀 전체가 열린다. 그래서 보고 전용 토큰은 `POST /api/usage` 하나만
+ * 열어야 하고, 그 경계는 "함수가 무엇을 돌려주는가"가 아니라 **그 포트에 붙었을 때 무엇이
+ * 오는가**로만 증명된다.
+ */
+describe('②-b 인테이크 토큰 — 보고는 되고 열람은 안 된다', () => {
+  let s;
+  before(async () => { s = await boot({ USAGE_INTAKE_TOKEN: INTAKE_TOKEN }); });
+  after(async () => { if (s) await s.stop(); });
+
+  test('인테이크 토큰으로 POST /api/usage 는 200', async () => {
+    const r = await request(`${s.base}/api/usage`, {
+      method: 'POST', headers: bearer(INTAKE_TOKEN), body: { machine: 'pc-i', user: 'tester', sessions: [] },
+    });
+    assert.equal(r.status, 200, `보고 전용 토큰으로 보고가 안 된다: ${r.status} ${r.text}`);
+    assert.equal(r.json.ok, true);
+  });
+
+  test('인테이크 토큰으로 조회하면 403 — 사람별 비용이 수집기 토큰으로 열리면 안 된다', async () => {
+    for (const p of ['/api/usage/summary', '/api/usage/sessions', '/api/usage/identity', '/api/usage/series']) {
+      const r = await request(`${s.base}${p}`, { headers: bearer(INTAKE_TOKEN) });
+      assert.equal(r.status, 403, `${p} 가 인테이크 토큰에 열렸다: ${r.status} ${r.text}`);
+      assert.ok(!/username|byUser|totals/.test(r.text), `${p} 가 데이터를 흘렸다: ${r.text}`);
+    }
+  });
+
+  test('인테이크 토큰으로 귀속 교정(PUT)도 못 한다 — 보고 외에는 아무것도 아니다', async () => {
+    const r = await request(`${s.base}/api/usage/identity`, {
+      method: 'PUT', headers: bearer(INTAKE_TOKEN), body: { machine: 'pc-i', username: 'someone' },
+    });
+    assert.equal(r.status, 403, `인테이크 토큰이 쓰기를 했다: ${r.status} ${r.text}`);
+  });
+
+  test('인테이크 토큰은 쿠키로 인정되지 않는다 — 보고자는 브라우저가 아니다', async () => {
+    const r = await request(`${s.base}/api/usage/summary`, { headers: { Cookie: `usage_tok=${INTAKE_TOKEN}` } });
+    assert.equal(r.status, 401, `인테이크 토큰이 쿠키로 통과했다: ${r.status}`);
+  });
+
+  test('admin 토큰은 그대로 전부 된다 — 분리가 기존 경로를 막지 않는다', async () => {
+    assert.equal((await request(`${s.base}/api/usage/summary`, { headers: bearer() })).status, 200);
+    const r = await request(`${s.base}/api/usage`, {
+      method: 'POST', headers: bearer(), body: { machine: 'pc-x', sessions: [] },
+    });
+    assert.equal(r.status, 200);
+  });
+
+  test('기동 로그가 어느 자격으로 보고를 받는지 말한다(토큰 값은 찍지 않는다)', () => {
+    assert.match(s.log(), /USAGE_INTAKE_TOKEN/);
+    assert.ok(!s.log().includes(INTAKE_TOKEN), '기동 로그에 토큰 값이 찍혔다');
+    assert.ok(!s.log().includes(TOKEN), '기동 로그에 admin 토큰 값이 찍혔다');
+  });
+});
+
+describe('②-c 인테이크 토큰 — 분리한 척하는 설정은 뜨지 않는다', () => {
+  test('admin 과 같은 값이면 부팅을 거부한다', async () => {
+    const { code, log } = await bootFails({ USAGE_ADMIN_TOKEN: TOKEN, USAGE_INTAKE_TOKEN: TOKEN });
+    assert.notEqual(code, 0, '같은 값인데 떴다 — 분리한 것처럼 보이지만 아무것도 분리되지 않았다');
+    assert.match(log, /USAGE_INTAKE_TOKEN/);
+  });
+
+  test('짧은 인테이크 토큰도 거부한다 — admin 과 같은 하한을 쓴다', async () => {
+    const { code, log } = await bootFails({ USAGE_ADMIN_TOKEN: TOKEN, USAGE_INTAKE_TOKEN: 'short' });
+    assert.notEqual(code, 0);
+    assert.match(log, /16/);
+  });
+
+  test('안 걸면 종전대로 admin 하나로 동작한다(하위호환)', () => {
+    const { readConfig } = require('../server');
+    const cfg = readConfig({ USAGE_ADMIN_TOKEN: TOKEN });
+    assert.deepEqual(cfg.errors, []);
+    assert.equal(cfg.intakeToken, '');
+  });
+});
+
 describe('③ remote 모드 — 운영 DB 에 쓰기 경로가 열리지 않는다', () => {
   let s;
   // 접속하지 않는 URL 로 충분하다: 이 절의 검증은 **라우팅**이지 조회가 아니다.
@@ -256,6 +337,88 @@ describe('③ remote 모드 — 운영 DB 에 쓰기 경로가 열리지 않는�
   test('기동 로그가 remote·읽기전용임을 말한다', () => {
     assert.match(s.log(), /remote/);
     assert.match(s.log(), /읽기 전용|read-only/i);
+  });
+
+  /*
+   * RLS 성립 전제 검사가 **실제로 돌았는가.**
+   *
+   * 원래 결함이 정확히 이 자리였다: lib/db/rlsguard.js 는 판정을 갖고 있는데 그것을 부르는
+   * 코드가 아무 데도 없었다. 판정이 맞는지는 usage-rlsguard.test.js 가 보고, 여기서는 그것이
+   * 부팅 경로에 걸려 있는지를 본다 — 둘은 다른 사실이고, 둘 다 깨져도 화면은 멀쩡하다.
+   *
+   * 이 하네스의 DATABASE_URL 은 아무도 듣지 않는 포트라 판정은 '확인 불가'로 끝난다. 그것이
+   * 정상 동작이다(터널을 뚫기 전 기동을 막지 않는다). 검증하는 것은 **검사가 침묵하지
+   * 않았다**는 사실이다 — 확인 못 했다는 것 자체가 기록돼야 한다.
+   *
+   * ⚠ 여기서 검증되지 않는 것: 위반 롤(SUPERUSER·BYPASSRLS)이 실제로 부팅을 끊는가.
+   *   그건 진짜 슈퍼유저 롤이 붙은 pg 가 있어야 하고, 그 조합은 assertRlsSafe 단위 테스트가
+   *   주입으로 덮는다.
+   */
+  test('RLS 전제 검사가 부팅 경로에서 실제로 돈다 — 확인 못 했으면 그 사실을 남긴다', () => {
+    assert.match(s.log(), /DB 롤/,
+      'RLS 검사 흔적이 기동 로그에 없다 — rlsguard 가 다시 배선에서 떨어졌다');
+    assert.match(s.log(), /확인하지 못했다|RLS 테넌트 격리 성립/);
+  });
+});
+
+/*
+ * ③-b RLS 위반 롤이 **실제로** 부팅을 끊는가 — 진짜 PostgreSQL 이 붙었을 때만 돈다.
+ *
+ * 왜 별도 관문인가: ③ 은 닿지 않는 URL 을 쓰므로 판정이 늘 '확인 불가'로 끝난다. 그 경로는
+ * "검사가 돌았다"만 증명하고, **위반을 잡는다**는 것은 증명하지 않는다. 이 둘을 한 관문으로
+ * 묶으면 가드가 아무것도 안 잡는 상태로 퇴화해도 스위트는 초록색이다(원래 결함이 정확히
+ * 그 모양이었다 — 판정 로직은 멀쩡했고 부르는 코드가 없었다).
+ *
+ * 돌리는 법(로컬 클러스터 예):
+ *   USAGE_TEST_PG_SUPER_URL=postgres://pgsuper@127.0.0.1:15433/usage \
+ *   USAGE_TEST_PG_APP_URL=postgres://usage_app:<pw>@127.0.0.1:15433/usage \
+ *   npm run test:standalone
+ *
+ * 앱 롤은 `CREATE ROLE … LOGIN NOSUPERUSER NOBYPASSRLS` 로 만든다. 스키마는 필요 없다 —
+ * remote 부팅은 원격 DB 에 아무것도 쓰지 않고, 프로브는 pg_roles 만 읽는다.
+ */
+const PG_SUPER_URL = process.env.USAGE_TEST_PG_SUPER_URL || '';
+const PG_APP_URL = process.env.USAGE_TEST_PG_APP_URL || '';
+const pgMatrix = (PG_SUPER_URL && PG_APP_URL) ? describe : describe.skip;
+
+pgMatrix('③-b RLS 위반 롤 — 실 PostgreSQL 대조', () => {
+  test('SUPERUSER·BYPASSRLS 롤이면 부팅을 거부한다', async () => {
+    const { code, log } = await bootFails({
+      USAGE_ADMIN_TOKEN: TOKEN, USAGE_DB_MODE: 'remote', DATABASE_URL: PG_SUPER_URL,
+    });
+    assert.notEqual(code, 0, '격리가 성립하지 않는 롤로 떴다 — 전 테넌트 데이터가 서로 보인다');
+    assert.match(log, /RLS 테넌트 격리가 성립하지 않습니다/);
+    assert.match(log, /NOSUPERUSER/, '고치는 방법이 없으면 거부가 막다른 길이 된다');
+  });
+
+  /*
+   * 거부가 **즉시** 끝나야 한다.
+   *
+   * 실측 회귀(고치기 전): 거부 메시지를 찍고도 10.5초를 더 살았다. 프로브가 성공한 뒤
+   * 거부하는 경로라 pg.Pool 의 유휴 커넥션이 이벤트 루프를 붙잡았기 때문이다(idleTimeoutMillis
+   * 기본 10초). 사람이 보기엔 "에러를 냈는데 안 죽는다"이고, 재시작을 거는 감독 프로세스에겐
+   * 매 기동마다 10초 지연이다. 종료 자체는 되므로 exit code 만 보는 검사로는 안 잡힌다.
+   */
+  test('거부가 풀을 붙잡고 늘어지지 않는다(유휴 커넥션 회귀 방지)', async () => {
+    const t0 = Date.now();
+    const { code } = await bootFails({
+      USAGE_ADMIN_TOKEN: TOKEN, USAGE_DB_MODE: 'remote', DATABASE_URL: PG_SUPER_URL,
+    });
+    const elapsed = Date.now() - t0;
+    assert.notEqual(code, 0);
+    assert.ok(elapsed < 5000, `거부에 ${elapsed}ms 걸렸다 — 풀을 닫지 않아 유휴 커넥션이 루프를 잡고 있다`);
+  });
+
+  test('비-슈퍼·비-BYPASSRLS 앱 롤은 뜨고, 격리 성립을 로그로 말한다', async () => {
+    const s = await boot({ USAGE_DB_MODE: 'remote', DATABASE_URL: PG_APP_URL });
+    try {
+      assert.match(s.log(), /RLS 테넌트 격리 성립/);
+      assert.ok(!/확인하지 못했다/.test(s.log()), '앱 롤이 붙었는데 확인 불가로 접혔다');
+      // 게이트는 remote 에서도 그대로다 — 롤이 정상이라고 무인증이 되지 않는다.
+      assert.equal((await request(`${s.base}/api/usage/summary`)).status, 401);
+    } finally {
+      await s.stop();
+    }
   });
 });
 

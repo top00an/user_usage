@@ -27,9 +27,15 @@ async function usageIntake(req, res, ctx) {
    *
    * 이건 쓰기 경로이고, 인증 게이트보다 앞에서 돌 수 있다. 세션을 등록 근거로 인정하면 로그인한
    * 사람의 브라우저를 꾀어 임의 사용량을 밀어 넣을 수 있는 자리가 된다.
-   * 이 엔드포인트의 보고자는 언제나 수집기(LAN·동기화 토큰·관리자 토큰)이지 브라우저가 아니다.
+   * 이 엔드포인트의 보고자는 언제나 수집기(LAN·동기화 토큰·인테이크/관리자 토큰)이지
+   * 브라우저가 아니다.
+   *
+   * isIntakeReq 는 보고 전용 토큰(USAGE_INTAKE_TOKEN)으로 온 요청이다 — 이 경로 **하나만**
+   * 열려 있고 조회는 호스트가 막는다(server.js 상단 ②'). 호스트가 그 함수를 안 주는 임베드
+   * 환경도 있으므로 존재 여부를 먼저 본다.
    */
   const enrolled = ctx.isLanReq(req) || ctx.isAdminReq(req)
+    || (typeof ctx.isIntakeReq === 'function' && ctx.isIntakeReq(req))
     || (ctx.syncTenant && ctx.syncTenant === require('../lib/tenant').currentTenant());
   if (!enrolled) { sendJson(res, 403, { error: 'not enrolled' }); return true; }
 

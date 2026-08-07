@@ -24,16 +24,28 @@ const app = document.getElementById('app');
  *
  * SameSite=Strict: 이 쿠키는 조회 자격증명이라 교차 사이트 요청에 실릴 이유가 전혀 없다.
  * (서버도 쿠키로는 상태변경을 태우지 않는다 — 이중 방어.)
- * Secure 는 붙이지 않는다: 로컬 http 기동이 기본 시나리오라 붙이면 쿠키가 아예 저장되지 않는다.
- * 원격 노출은 이 서비스의 범위가 아니다(터널·루프백 전제 — README.md).
+ *
+ * Secure 는 **프로토콜을 보고 정한다.** 무조건 붙이면 로컬 http 기동(기본 시나리오)에서 쿠키가
+ * 아예 저장되지 않아 로그인이 성립하지 않고, 무조건 빼면 누군가 리버스 프록시 뒤에 https 로
+ * 올렸을 때 조회 토큰이 평문으로 흐른다. https 로 열렸다면 그 페이지는 이미 저장이 되므로
+ * 붙이는 쪽에 손실이 없다 — 그래서 조건부가 정답이다.
+ *
+ * ⚠ HttpOnly 는 붙일 수 없다. 이 쿠키는 게이트 화면이 document.cookie 로 직접 쓰기 때문이다
+ *   (서버가 Set-Cookie 를 내지 않는다). 대신 셸이 인라인 스크립트를 두지 않아 CSP 가
+ *   script-src 'self' 로 잠겨 있다 — 그것이 여기서의 실질 방어다(index.html 계약).
  */
 const COOKIE = 'usage_tok';
+const secureFlag = () => (location.protocol === 'https:' ? '; Secure' : '');
 const readToken = () => {
   const m = /(?:^|;\s*)usage_tok=([^;]*)/.exec(document.cookie || '');
   try { return m ? decodeURIComponent(m[1]) : ''; } catch { return m ? m[1] : ''; }
 };
-const writeToken = (t) => { document.cookie = `${COOKIE}=${encodeURIComponent(t)}; path=/; SameSite=Strict`; };
-const clearToken = () => { document.cookie = `${COOKIE}=; path=/; Max-Age=0; SameSite=Strict`; };
+const writeToken = (t) => {
+  document.cookie = `${COOKIE}=${encodeURIComponent(t)}; path=/; SameSite=Strict${secureFlag()}`;
+};
+const clearToken = () => {
+  document.cookie = `${COOKIE}=; path=/; Max-Age=0; SameSite=Strict${secureFlag()}`;
+};
 
 /*
  * 뷰는 core 의 ME 를 직접 읽지 않지만(권한 분기는 서버 응답으로 한다), core.api 가 401 에서
