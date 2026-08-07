@@ -1,0 +1,20 @@
+{
+  "_comment": "config.json 으로 복사해 쓴다. usage 블록만 읽으며, 없거나 깨져도 서비스는 시드 단가로 정상 동작한다(throw 하지 않는다).",
+
+  "usage": {
+    "_pricedAt": "이 단가표가 언제 것인지. 화면이 그대로 표시해 낡은 값이 보이게 한다.",
+    "pricedAt": "2026-08-04",
+
+    "_pricing": "USD / 1M 토큰. 여기 적은 모델만 시드를 덮어쓴다(부분 오버라이드). input·output 이 둘 다 있어야 인정된다.",
+    "pricing": {
+      "claude-opus-5": { "input": 5, "output": 25 },
+      "claude-sonnet-5": { "input": 3, "output": 15 },
+      "claude-haiku-4-5": { "input": 1, "output": 5 }
+    },
+
+    "_mult": "캐시 축의 입력가 대비 배수. 캐시읽기 0.1배, 캐시생성은 5분 TTL 1.25배·1시간 TTL 2배가 기본이다.",
+    "cacheReadMult": 0.1,
+    "cacheCreateMult": 1.25,
+    "cacheCreate1hMult": 2
+  }
+}

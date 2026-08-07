@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>사용량 대시보드</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<!--
+  셸 — 뷰 두 개가 뜨는 데 필요한 **최소한**만 담는다.
+
+  이 문서가 반드시 지켜야 하는 계약은 셋이고, 어기면 뷰가 조용히 안 뜬다:
+    ① #app 과 #toast 가 스크립트보다 **먼저** 존재해야 한다 — core.js 는 로드 시점에
+       document.getElementById('app') 을 잡고, toast() 는 #toast 를 찾는다.
+    ② 뷰가 쓰는 클래스(.card/.glass/.tabs/.uday …)는 전부 /app.css 한 곳에 있다.
+       여기서 CSS 를 따로 쓰면 두 벌이 되고 한 벌만 고쳐지는 날이 온다.
+    ③ 인라인 <script> 를 두지 않는다. 하나라도 있으면 CSP 의 script-src 'self' 를 포기해야 한다
+       (테마 선반영도 그래서 /js/theme-boot.js 파일이다).
+-->
+<script src="/js/theme-boot.js"></script>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="bg"></div>
+<div id="app"><div class="login-wrap"><div class="muted">로딩 중…</div></div></div>
+<div id="toast" class="glass-strong" role="status" aria-live="polite" aria-atomic="true"></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

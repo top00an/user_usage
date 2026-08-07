@@ -1,0 +1,18 @@
+-- usage_sessions.no_ts_turns — 시각이 없어 시계열(series)에 올릴 자리가 없던 턴 수.
+--
+-- 왜(2026-08-05 실측): series 버킷은 클라이언트의 `hourOf(timestamp)` 가 성공할 때만 만들어진다
+-- (bin/team-usage.js: `const b = hour ? bucketOf(hour, model) : null`). 세션 합계는 시각이 필요
+-- 없으므로, 어떤 PC 의 트랜스크립트에 시각이 없으면 **합계는 정상인데 series 만 빈다.**
+-- 그 상태가 어디에도 기록되지 않아, 사용자별 series 커버리지가 user-a 91.3% · user-c 100% ·
+-- user-b **2.2%**(847세션 중 19)인 것을 사람이 DB 를 열어야 알 수 있었다.
+--
+-- 이 컬럼은 그 사실을 데이터로 남긴다. 모델별 표가 그 사용자에 대해 "세션 최빈 모델 기준" 으로
+-- 떨어지는 이유를 화면이 말할 수 있게 된다.
+--
+-- ⚠ NOT NULL 을 걸지 않는다. 구버전 수집기는 이 값을 보내지 않고, 그때는 **0 이 아니라 NULL** 이어야
+--   한다 — 0 은 "전 턴에 시각이 있었다"는 주장이고 NULL 은 "모른다"다. 둘을 뭉치면 화면이
+--   구버전 PC 를 "정상" 으로 단정한다.
+-- ⚠ integer 다. 턴 수는 정수이고, 이 레포는 숫자 축에 대해 방언 간 동형(sqlite INTEGER)을 유지한다.
+--
+-- RLS: 새 테이블이 아니라 **컬럼 추가**이므로 정책을 새로 걸지 않는다(usage_sessions 에 이미 있다).
+ALTER TABLE usage_sessions ADD COLUMN IF NOT EXISTS no_ts_turns integer;

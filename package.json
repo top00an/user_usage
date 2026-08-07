@@ -1,0 +1,21 @@
+{
+  "name": "user-usage",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code 사용량 관측 대시보드 — 팀원 PC 의 토큰·도구 사용량을 모아 비용과 분포로 보여준다.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "main": "index.js",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --import ./test/sqlite-setup.mjs --test --test-timeout=300000 --test-reporter=spec $(ls test/*.test.js | grep -v usage-standalone)",
+    "test:standalone": "node --import ./test/sqlite-setup.mjs --test --test-timeout=300000 --test-reporter=spec --test-concurrency=1 test/usage-standalone.test.js",
+    "test:all": "npm test && npm run test:standalone"
+  },
+  "dependencies": {
+    "pg": "^8.22.0"
+  }
+}

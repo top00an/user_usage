@@ -1,0 +1,26 @@
+# 의존성
+/node_modules/
+
+# 로컬 데이터 — sqlite 파일과 WAL/SHM 동반 파일.
+# 이 안에 팀원별 사용량과 프롬프트 토큰이 들어간다. 절대 커밋하지 않는다.
+/data/
+
+# 로컬 설정 — 단가 오버라이드 등. 예시는 config.example.json 이 담당한다.
+/config.json
+
+# 환경 변수 — USAGE_ADMIN_TOKEN·DATABASE_URL 이 들어간다.
+.env
+.env.*
+!.env.example
+
+# 로그·임시
+*.log
+/tmp/
+/coverage/
+
+# 편집기·OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
