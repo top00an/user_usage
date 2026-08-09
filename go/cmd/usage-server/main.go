@@ -34,6 +34,13 @@ const rlsProbeTimeout = 5 * time.Second
 const shutdownGrace = 3 * time.Second
 
 func main() {
+	// 프로비저닝 서브커맨드(멀티테넌트 운영 CLI). 없으면 서버를 띄운다.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "org", "key":
+			os.Exit(provision(os.Args[1:]))
+		}
+	}
 	os.Exit(run())
 }
 

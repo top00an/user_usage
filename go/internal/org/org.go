@@ -48,6 +48,11 @@ func Resolve(ctx context.Context, plaintext string) (tenant, orgID string, ok bo
 // pg 는 migrations 가 스키마를 소유하지만, 이 DDL 은 IF NOT EXISTS 라 remote 에서도 안전하게 무시된다.
 func Init(ctx context.Context, d db.DB) error {
 	handle = d
+	// pg 는 스키마를 migrations 가 소유한다(store·identity 와 같은 규칙). 앱 롤은 CREATE 권한이
+	// 없을 수 있으므로 DDL 을 걸지 않는다 — orgs·ingest_keys 는 migrations/pg 가 만든다.
+	if d.Dialect() == db.DialectPostgres {
+		return nil
+	}
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS orgs (` +
 			`id TEXT PRIMARY KEY,` +
@@ -157,6 +162,22 @@ func ResolveIngestKey(ctx context.Context, d db.DB, plaintext string) (tenant, o
 	// last_used_at 갱신은 베스트에포트 — 실패해도 해석은 성립한다(관측용 필드).
 	_ = d.Exec(ctx, "UPDATE ingest_keys SET last_used_at=? WHERE key_hash=?", nowUTC(), HashKey(plaintext))
 	return tenant, orgID, true, nil
+}
+
+// ListOrgs 는 등록된 org 를 이름순으로 돌려준다(프로비저닝 CLI 용).
+func ListOrgs(ctx context.Context, d db.DB) ([]Org, error) {
+	rows, err := d.Query(ctx, "SELECT id, tenant_id, name, status FROM orgs ORDER BY name")
+	if err != nil {
+		return nil, fmt.Errorf("org: 목록 조회 실패: %w", err)
+	}
+	out := make([]Org, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Org{
+			ID: str(r, "id"), TenantID: str(r, "tenant_id"),
+			Name: str(r, "name"), Status: str(r, "status"),
+		})
+	}
+	return out, nil
 }
 
 // RevokeKey 는 평문 키를 해지한다(멱등 — 이미 해지/없음이어도 오류 아님).
