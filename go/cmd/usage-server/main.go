@@ -37,7 +37,7 @@ func main() {
 	// 프로비저닝 서브커맨드(멀티테넌트 운영 CLI). 없으면 서버를 띄운다.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "org", "key":
+		case "org", "key", "team":
 			os.Exit(provision(os.Args[1:]))
 		}
 	}

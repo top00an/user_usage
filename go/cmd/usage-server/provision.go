@@ -9,6 +9,7 @@ import (
 
 	"github.com/tscorp/user-usage/internal/db"
 	"github.com/tscorp/user-usage/internal/org"
+	"github.com/tscorp/user-usage/internal/store"
 	"github.com/tscorp/user-usage/internal/tenant"
 )
 
@@ -25,7 +26,9 @@ const provisionUsage = `usage-server 프로비저닝:
   org create --name <이름>       org+tenant 생성
   org list                       org 목록
   key issue --org <org-id>       인제스트 키 발급(평문 1회 출력)
-  key revoke --key <평문키>       키 해지`
+  key revoke --key <평문키>       키 해지
+  team assign --user <u> --team <t>   사용자를 팀에 배정
+  team list                      팀 멤버십 목록`
 
 func provision(args []string) int {
 	if len(args) == 0 {
@@ -50,6 +53,56 @@ func provision(args []string) int {
 		return orgCmd(ctx, d, os.Stdout, args[1:])
 	case "key":
 		return keyCmd(ctx, d, os.Stdout, args[1:])
+	case "team":
+		return teamCmd(ctx, d, os.Stdout, args[1:])
+	default:
+		fmt.Fprintln(os.Stderr, provisionUsage)
+		return 2
+	}
+}
+
+// teamCmd — 팀 멤버십 관리. store 를 쓰므로 store.Init 이 선행돼야 한다(provision 에서 호출).
+func teamCmd(ctx context.Context, d db.DB, out io.Writer, args []string) int {
+	if err := store.Init(ctx, d); err != nil {
+		fmt.Fprintf(os.Stderr, "team: store 초기화 실패: %v\n", err)
+		return 1
+	}
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, provisionUsage)
+		return 2
+	}
+	switch args[0] {
+	case "assign":
+		fs := flag.NewFlagSet("team assign", flag.ContinueOnError)
+		user := fs.String("user", "", "사용자명(필수)")
+		team := fs.String("team", "", "팀 이름(필수)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if *user == "" || *team == "" {
+			fmt.Fprintln(os.Stderr, "team assign: --user 와 --team 이 필요하다")
+			return 2
+		}
+		if err := store.AssignTeam(ctx, *user, *team); err != nil {
+			fmt.Fprintf(os.Stderr, "team assign 실패: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(out, "배정됨: %s → %s\n", *user, *team)
+		return 0
+	case "list":
+		members, err := store.ListTeamMembers(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "team list 실패: %v\n", err)
+			return 1
+		}
+		if len(members) == 0 {
+			fmt.Fprintln(out, "(배정된 멤버 없음)")
+			return 0
+		}
+		for _, m := range members {
+			fmt.Fprintf(out, "%s\t%s\n", m.Team, m.Username)
+		}
+		return 0
 	default:
 		fmt.Fprintln(os.Stderr, provisionUsage)
 		return 2

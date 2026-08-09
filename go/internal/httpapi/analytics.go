@@ -202,7 +202,14 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 		"/api/usage/series": true, "/api/usage/distribution": true,
 		"/api/usage/sessions": true, "/api/usage/quality": true,
 		"/api/usage/coverage": true, "/api/usage/leaderboard": true,
-		"/api/usage/dispatch": true,
+		"/api/usage/dispatch": true, "/api/usage/seats": true,
+		"/api/usage/teams": true,
+	}
+	if p == "/api/usage/seats" {
+		return s.routeSeats(w, r, c)
+	}
+	if p == "/api/usage/teams" {
+		return s.routeTeams(w, r, c)
 	}
 	if !known[p] && detail == nil {
 		return false, nil
