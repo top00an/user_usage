@@ -743,3 +743,20 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
 .gbarcell { position:relative; padding:5px 6px; }
 .gbar { position:absolute; left:0; top:2px; bottom:2px; border-radius:2px; opacity:.4; }
 .glab { position:relative; }
+
+/* ── 차트 빌더 · 커스텀 패널 ─────────────────────────────────────────────── */
+.builder { display: flex; flex-direction: column; gap: 12px; }
+.builder-row { display: grid; grid-template-columns: 52px 1fr; align-items: center; gap: 10px; }
+.builder-row > span:first-child { color: var(--fg-muted); font-size: .84rem; }
+.seg-group { display: flex; flex-wrap: wrap; gap: 6px; }
+.segbtn { padding: 5px 11px; font-size: .82rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--fg-muted); }
+.segbtn.on { border-color: var(--accent); color: var(--fg); background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); font-weight: 600; }
+.builder-input { padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); font: inherit; }
+.builder-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.panel-x { border: none; background: transparent; color: var(--fg-faint); padding: 2px 6px; font-size: .8rem; }
+.panel-x:hover { color: var(--err); border: none; }
+
+/* '그래프로 추가' 버튼 (추적/관측 탭 → 대시보드 빌더) */
+.aside-row { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pin-btn { padding: 4px 10px; font-size: .78rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--accent); white-space: nowrap; }
+.pin-btn:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); }

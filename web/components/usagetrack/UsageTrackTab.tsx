@@ -6,15 +6,21 @@ import { softly, useResource } from '@/hooks/useResource';
 import type { DayRow, Dispatch, RecommendationSummary, Summary, UserRow } from '@/lib/types';
 import { n, shortTokens } from '@/lib/format';
 import { Card, Empty, ErrorState, Loading, TableWrap, TokenCount } from '@/components/ui';
-import { Section, Panel, Donut, AreaTrend, BarGauge } from '@/components/charts';
 import ModelTable from './ModelTable';
 import AxisExplorer from './AxisExplorer';
+import { setBuilderPrefill, type GroupBy, type Metric } from '@/lib/customPanels';
 
-/* 모델 이름은 길다(global.anthropic.claude-opus-4-8-…) — 끝의 식별 토큰만 남긴다. */
-function shortModel(m: string): string {
-  const parts = m.split(/[./]/).filter(Boolean);
-  const tail = parts.slice(-1)[0] ?? m;
-  return tail.replace(/^claude-/, '').slice(0, 22);
+/* '그래프로 추가' — 대시보드 빌더에 프리필을 넘기고 대시보드 탭으로 이동한다. */
+function PinButton({ metric, groupBy, title }: { metric: Metric; groupBy: GroupBy; title: string }) {
+  return (
+    <button
+      type="button"
+      className="pin-btn"
+      onClick={() => { setBuilderPrefill({ metric, groupBy, type: groupBy === 'none' ? 'line' : 'bar', days: 30, title }); location.hash = '#/overview'; }}
+    >
+      ＋ 그래프로 추가
+    </button>
+  );
 }
 import { AX_CACHE_CREATE, AX_CACHE_READ, IN_HINT, IN_LABEL, TURNS_HINT } from './labels';
 
@@ -201,41 +207,14 @@ export default function UsageTrackTab() {
         같은 맥락을 다시 보낼 때는 캐시읽기로 잡히므로, 캐싱이 잘 도는 사람일수록 입력(비캐시)만 작아집니다.
       </p>
 
-      {!empty && (() => {
-        const days = (d.byDay ?? []);
-        const tokenTrend = days.map((r) => ({ t: r.day, v: r.input + r.output + r.cacheRead + r.cacheCreate }));
-        const cacheTrend = days.map((r) => ({ t: r.day, v: r.cacheRead }));
-        const modelTokens = (d.byModel ?? []).map((m) => ({
-          label: shortModel(m.model), value: m.input + m.output + m.cacheRead + m.cacheCreate,
-        }));
-        const toolTop = (d.top?.tool ?? []).map((k) => ({ label: k.key, value: k.count }));
-        const agentTop = (d.top?.agent ?? []).map((k) => ({ label: k.key, value: k.count }));
-        const skillTop = (d.top?.skill ?? []).map((k) => ({ label: k.key, value: k.count }));
-        return (
-          <>
-            <Section title="추이">
-              <Panel title="토큰 추이 (일별 · 입력+출력+캐시)" span={2}>
-                <AreaTrend points={tokenTrend} unit=" tok" />
-              </Panel>
-              <Panel title="캐시 읽기 추이">
-                <AreaTrend points={cacheTrend} unit=" tok" />
-              </Panel>
-            </Section>
-
-            <Section title="모델">
-              <Panel title="모델별 토큰" span={3}>
-                <BarGauge data={modelTokens} fmt={(v) => shortTokens(v)} />
-              </Panel>
-            </Section>
-
-            <Section title="도구 · 활용">
-              <Panel title="도구 사용 분포"><Donut data={toolTop} unit="회" /></Panel>
-              <Panel title="에이전트 분포"><Donut data={agentTop} unit="회" /></Panel>
-              <Panel title="스킬 분포"><Donut data={skillTop} unit="회" /></Panel>
-            </Section>
-          </>
-        );
-      })()}
+      {/* 그래프는 '대시보드' 탭이 담당한다. 이 탭은 표·텍스트 중심으로 두고, 각 항목은
+          '그래프로 추가'(PinButton)로 대시보드에 커스텀 패널을 만들 수 있다. */}
+      {!empty && (
+        <p className="help mt-sm">
+          추이·분포 그래프는 <b>대시보드</b> 탭에 있습니다. 아래 표의 <b>그래프로 추가</b> 버튼으로
+          원하는 지표를 대시보드에 패널로 고정할 수 있습니다.
+        </p>
+      )}
 
       {empty && (
         <Card title="아직 보고가 없습니다" className="mt">
@@ -257,7 +236,7 @@ export default function UsageTrackTab() {
         <Card
           title="사용자별"
           className="mb"
-          aside={<span className="help">이름이 실제 담당자와 다르면 <b>귀속 교정</b>(/api/usage/identity)으로 묶습니다</span>}
+          aside={<span className="aside-row"><span className="help">이름이 실제 담당자와 다르면 <b>귀속 교정</b>(/api/usage/identity)으로 묶습니다</span><PinButton metric="cost" groupBy="user" title="사용자별 비용" /></span>}
         >
           <UserTable rows={d.byUser ?? []} />
         </Card>
@@ -265,7 +244,7 @@ export default function UsageTrackTab() {
         <Card
           title="모델별"
           className="mb"
-          aside={<span className="help">series 가 있는 세션은 모델별 정확값 · 없는 세션은 세션 최빈 모델 기준</span>}
+          aside={<span className="aside-row"><span className="help">series 가 있는 세션은 모델별 정확값 · 없는 세션은 세션 최빈 모델 기준</span><PinButton metric="tokens" groupBy="model" title="모델별 토큰" /></span>}
         >
           <ModelTable rows={d.byModel ?? []} axis={d.modelAxis} />
         </Card>
