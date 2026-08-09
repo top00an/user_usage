@@ -271,6 +271,62 @@ export interface Leaderboard {
   unpriced: string[];
 }
 
+/* ── GET /api/usage/seats — 좌석당 비용·ROI + 기간 비교 ─────────────── */
+export interface Seat {
+  username: string;
+  sessions: number;
+  turns: number;
+  tokens: number;
+  usd: number;
+  usdPerSession: number;
+  cacheHitRate: number;
+  priced: boolean;
+  usdDeltaPct: number | null; // 직전 기간 대비 %. null = 신규 좌석
+  isNew: boolean;
+}
+
+export interface SeatsSummary {
+  activeSeats: number;
+  prevActiveSeats: number;
+  totalUsd: number;
+  prevTotalUsd: number;
+  usdPerSeat: number;
+  totalUsdDeltaPct: number | null;
+}
+
+export interface Seats {
+  days: number;
+  from: string;
+  to: string;
+  prevFrom: string;
+  prevTo: string;
+  summary: SeatsSummary;
+  seats: Seat[];
+  pricedAt: string;
+  unpriced: string[];
+}
+
+/* ── GET /api/usage/teams — 팀별 롤업 ──────────────────────────────── */
+export interface TeamRow {
+  team: string;
+  members: number;
+  sessions: number;
+  turns: number;
+  tokens: number;
+  usd: number;
+  usdPerMember: number;
+  usernames: string[];
+}
+
+export interface Teams {
+  days: number;
+  from: string;
+  to: string;
+  teams: TeamRow[];
+  pricedAt: string;
+  unpriced: string[];
+}
+
 /* ── GET /api/usage/series ──────────────────────────────────────────── */
 
 export interface SeriesPoint {

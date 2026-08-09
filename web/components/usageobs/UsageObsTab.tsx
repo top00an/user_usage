@@ -2,16 +2,18 @@
 
 import { useCallback, useState } from 'react';
 import {
-  getCoverage, getDistribution, getLeaderboard, getQuality, getSessions,
+  getCoverage, getDistribution, getLeaderboard, getQuality, getSeats, getSessions, getTeams,
 } from '@/lib/api';
 import { softly, useResource } from '@/hooks/useResource';
 import type {
-  Coverage, Distribution, DistributionKey, Leaderboard, Quality, SessionsResponse,
+  Coverage, Distribution, DistributionKey, Leaderboard, Quality, Seats, SessionsResponse, Teams,
 } from '@/lib/types';
 import { n, pctOf, relTime, fmtTime, seconds, shortTokens, usd } from '@/lib/format';
 import { Card, ErrorState, Flag, Loading, TableWrap } from '@/components/ui';
 import CostCard from './CostCard';
+import SeatsCard from './SeatsCard';
 import SessionsCard from './SessionsCard';
+import TeamsCard from './TeamsCard';
 import UserDetailModal from './UserDetailModal';
 
 /*
@@ -28,6 +30,8 @@ interface ObsData {
   leaderboard: Leaderboard;
   quality: Quality | null;
   coverage: Coverage;
+  seats: Seats | null;
+  teams: Teams | null;
 }
 
 /* 분포 — 합계가 감춘 이상치를 끌어올린다. */
@@ -229,14 +233,18 @@ export default function UsageObsTab() {
    * 반대로 sessions 는 이 화면의 뼈대라 실패하면 화면 전체가 실패로 간다.
    */
   const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<ObsData> => {
-    const [dist, sessions, leaderboard, quality, coverage] = await Promise.all([
+    const [dist, sessions, leaderboard, quality, coverage, seats, teams] = await Promise.all([
       getDistribution({ signal }),
       getSessions({ sort: 'cost', top: 25 }, { signal }),
       softly(getLeaderboard({ signal }), { users: [], pricedAt: '', sample: { limit: 0, rows: 0, truncated: false }, unpriced: [] } as Leaderboard),
       softly(getQuality({ signal }), null as Quality | null),
       softly(getCoverage({ signal }), { now: '', reporters: [] } as Coverage),
+      // seats·teams 는 관리자 전용(교차 뷰) — member 스코프는 403 이라 softly 로 null 처리해
+      // 카드가 스스로 숨는다. 이것이 프런트의 RBAC 화면 분기다.
+      softly(getSeats(30, { signal }), null as Seats | null),
+      softly(getTeams(30, { signal }), null as Teams | null),
     ]);
-    return { dist, sessions, leaderboard, quality, coverage };
+    return { dist, sessions, leaderboard, quality, coverage, seats, teams };
   }, []);
 
   const { state, reload } = useResource(load, []);
@@ -244,7 +252,7 @@ export default function UsageObsTab() {
   if (state.status === 'loading') return <Loading />;
   if (state.status === 'error') return <ErrorState what="사용 관측을 불러오지 못했습니다." error={state.error} onRetry={reload} />;
 
-  const { dist, sessions, leaderboard, quality, coverage } = state.data;
+  const { dist, sessions, leaderboard, quality, coverage, seats, teams } = state.data;
 
   if (!sessions.sessions?.length) {
     return (
@@ -261,6 +269,8 @@ export default function UsageObsTab() {
         토큰 수가 큰 축과 비용이 큰 축이 다릅니다.
       </p>
       <CostCard s={sessions} />
+      <SeatsCard d={seats} />
+      <TeamsCard d={teams} />
       <LeaderboardCard d={leaderboard} onDetail={setDetailUser} />
       <QualityCard q={quality} />
       <DistCard d={dist.distributions ?? {}} />

@@ -6,6 +6,8 @@ import {
   setUnauthorizedHandler,
   getSummary,
   getSessionDetail,
+  getSeats,
+  getTeams,
   seriesQuery,
 } from '@/lib/api';
 
@@ -114,5 +116,19 @@ describe('lib/api — 유일한 서버 호출구', () => {
   it('series 질의는 파라미터를 인코딩해 붙인다', () => {
     expect(seriesQuery({ metric: 'tokens', interval: 'day', groupBy: 'model', user: 'a b', from: '2026-08-01' }))
       .toBe('/api/usage/series?metric=tokens&interval=day&group_by=model&user=a+b&from=2026-08-01');
+  });
+
+  it('getSeats 는 days 를 붙여 seats 를 부른다', async () => {
+    const spy = vi.fn().mockResolvedValue(jsonResponse(200, { seats: [], summary: {} }));
+    vi.stubGlobal('fetch', spy);
+    await getSeats(14);
+    expect(spy.mock.calls[0]?.[0]).toBe('/api/usage/seats?days=14');
+  });
+
+  it('getTeams 는 days 를 붙여 teams 를 부른다(기본 30)', async () => {
+    const spy = vi.fn().mockResolvedValue(jsonResponse(200, { teams: [] }));
+    vi.stubGlobal('fetch', spy);
+    await getTeams();
+    expect(spy.mock.calls[0]?.[0]).toBe('/api/usage/teams?days=30');
   });
 });
