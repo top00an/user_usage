@@ -7,7 +7,7 @@
  * 데이터 갭(LOC·Edit 수락/거부·Active Time)은 백엔드 미수집이라 넣지 않고, 실제 수집 지표
  * (토큰 I/O·캐시·세션·도구·에이전트·스킬)로 채운다 — 가짜 숫자 금지.
  */
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { getSummary, getSeats, getDev } from '@/lib/api';
 import { softly, useResource } from '@/hooks/useResource';
 import type { Dev, Seats, Summary } from '@/lib/types';
@@ -15,6 +15,12 @@ import { ErrorState, Loading } from '@/components/ui';
 import EChart from '@/components/charts/EChart';
 import DragGrid, { resetLayout, type GridItem } from './DragGrid';
 import { areaOption, gaugeOption, donutOption, barOption, short, fmtInt } from './options';
+import ChartBuilder from './ChartBuilder';
+import CustomPanelView from './CustomPanelView';
+import {
+  removePanel, subscribePanels, panelsSnapshot, takeBuilderPrefill,
+  type CustomPanel,
+} from '@/lib/customPanels';
 
 interface Data { summary: Summary | null; seats: Seats | null; dev: Dev | null; }
 
@@ -77,6 +83,18 @@ export default function GrafanaDash() {
     return { summary, seats, dev };
   }, []);
   const { state, reload } = useResource(load, []);
+
+  // 커스텀 패널(내 그래프) — 저장소 구독으로 추가/삭제 즉시 반영.
+  const panelsSnap = useSyncExternalStore(subscribePanels, panelsSnapshot, () => '[]');
+  const customPanels: CustomPanel[] = (() => { try { return JSON.parse(panelsSnap); } catch { return []; } })();
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const [prefill, setPrefill] = useState<Partial<Omit<CustomPanel, 'id'>> | undefined>(undefined);
+
+  // 추적/관측 탭의 '그래프로 추가'로 넘어온 프리필이 있으면 빌더를 연다.
+  useEffect(() => {
+    const p = takeBuilderPrefill();
+    if (p) { setPrefill(p); setBuilderOpen(true); }
+  }, []);
 
   if (state.status === 'loading') return <Loading />;
   if (state.status === 'error') return <ErrorState what="대시보드를 불러오지 못했습니다." error={state.error} onRetry={reload} />;
@@ -169,12 +187,33 @@ export default function GrafanaDash() {
     </section>
   );
 
+  // '내 그래프' — 사용자가 만든 커스텀 패널. 각 패널에 삭제 버튼.
+  const customItems: GridItem[] = customPanels.map((p) => ({
+    id: p.id,
+    node: (
+      <div className="gpanel-card">
+        <div className="gpanel-head">
+          <span className="grip" aria-hidden="true">⋮⋮</span> {p.title}
+          <span style={{ flex: 1 }} />
+          <button className="panel-x" type="button" title="삭제" onClick={() => removePanel(p.id)}>✕</button>
+        </div>
+        <div className="gpanel-body"><CustomPanelView panel={p} /></div>
+      </div>
+    ),
+  }));
+
   return (
     <div className="gdash">
       <div className="gdash-top">
         <span className="sp" />
+        <button className="primary" type="button" onClick={() => { setPrefill(undefined); setBuilderOpen(true); }}>＋ 그래프 추가</button>
         <button className="ghost" type="button" onClick={resetLayout}>⤢ 레이아웃 초기화</button>
       </div>
+
+      {customItems.length > 0 && (
+        <Sect title="내 그래프" gid="custom" cls="g2" items={customItems} />
+      )}
+
       <Sect title="Live Status" gid="live" cls="g6" items={live} />
       <Sect title="Cost & Tokens" gid="cost" cls="g-cost" items={cost2} />
       <Sect title="Development" gid="dev" cls="g3" items={dev2} />
@@ -182,6 +221,14 @@ export default function GrafanaDash() {
       <Sect title="Tool & Agent Analytics" gid="tools" cls="g3" items={tools} />
       <Sect title="Rates & Details" gid="rates" cls="g3" items={rates} />
       <Sect title="Top Tools" gid="top" cls="g1" items={top} />
+
+      {builderOpen && (
+        <ChartBuilder
+          prefill={prefill}
+          onClose={() => setBuilderOpen(false)}
+          onAdded={() => { /* 저장소 구독이 자동 반영 */ }}
+        />
+      )}
     </div>
   );
 }

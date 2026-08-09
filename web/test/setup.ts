@@ -11,6 +11,20 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 }
 
+// 이 jsdom 설정은 localStorage 를 노출하지 않는다 — 인메모리 폴리필을 둔다(커스텀 패널 저장 등).
+if (typeof globalThis.localStorage === 'undefined') {
+  const store = new Map<string, string>();
+  const mock = {
+    getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+    setItem: (k: string, v: string) => { store.set(k, String(v)); },
+    removeItem: (k: string) => { store.delete(k); },
+    clear: () => store.clear(),
+    key: (i: number) => Array.from(store.keys())[i] ?? null,
+    get length() { return store.size; },
+  };
+  Object.defineProperty(globalThis, 'localStorage', { value: mock, configurable: true });
+}
+
 afterEach(() => {
   cleanup();
   // 쿠키는 문서 전역이라 테스트 사이로 샌다 — 게이트 테스트가 앞 테스트의 토큰을 물려받으면

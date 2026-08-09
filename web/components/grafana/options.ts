@@ -27,15 +27,36 @@ const tooltipBase = {
   textStyle: { color: INK, fontSize: 12 },
 };
 
+/* 계열이 너무 많으면(예: 사용자별 다중 선) 상위 N 만 남기고 나머지는 "기타"로 합쳐 엉킴을
+ * 막는다. 색은 팔레트 고정 순서, "기타"는 회색. 반환은 areaOption 이 그대로 그릴 수 있는 형태. */
+export function capSeries(
+  series: { name: string; data: number[] }[],
+  topN = 6,
+): { name: string; data: number[]; color: string }[] {
+  const withTotal = series.map((s) => ({ ...s, total: s.data.reduce((a, b) => a + b, 0) }));
+  withTotal.sort((a, b) => b.total - a.total);
+  const head = withTotal.slice(0, topN);
+  const rest = withTotal.slice(topN);
+  const out = head.map((s, i) => ({ name: s.name, data: s.data, color: PALETTE[i % PALETTE.length]! }));
+  if (rest.length) {
+    const len = series[0]?.data.length ?? 0;
+    const merged = Array.from({ length: len }, (_, i) => rest.reduce((a, s) => a + (s.data[i] ?? 0), 0));
+    out.push({ name: `기타(+${rest.length})`, data: merged, color: '#6e7681' });
+  }
+  return out;
+}
+
 /* 시계열 영역 차트 — 다중 계열. fmt 는 y축·툴팁 값 포맷터. */
 export function areaOption(
   xLabels: string[],
   series: { name: string; data: number[]; color: string }[],
   fmt: (n: number) => string = short,
 ): EChartsCoreOption {
+  const many = series.length > 3; // 선이 많으면 채움을 줄여(투명) 겹침이 덜 지저분하게
   return {
     backgroundColor: 'transparent',
-    grid: { left: 6, right: 10, top: 26, bottom: 4, containLabel: true },
+    // 오른쪽 여백을 넉넉히 — boundaryGap:false 라 마지막 날짜 라벨(예: 08-09)이 잘리지 않게.
+    grid: { left: 6, right: 28, top: 26, bottom: 4, containLabel: true },
     tooltip: {
       ...tooltipBase,
       trigger: 'axis',
@@ -43,13 +64,14 @@ export function areaOption(
       valueFormatter: (v: unknown) => fmt(Number(v)),
     },
     legend: {
-      top: 0, left: 0, icon: 'roundRect', itemWidth: 10, itemHeight: 10,
+      type: 'scroll', top: 0, left: 0, icon: 'roundRect', itemWidth: 10, itemHeight: 10,
       textStyle: { color: MUTED, fontSize: 11 },
     },
     xAxis: {
       type: 'category', data: xLabels, boundaryGap: false,
       axisLine: { lineStyle: { color: AXISLINE } },
-      axisLabel: { color: MUTED, fontSize: 10 },
+      // 첫·마지막 라벨을 반드시 보이게 하고, 겹치면 중간을 숨긴다.
+      axisLabel: { color: MUTED, fontSize: 10, showMinLabel: true, showMaxLabel: true, hideOverlap: true },
       axisTick: { show: false },
     },
     yAxis: {
@@ -62,7 +84,8 @@ export function areaOption(
       smooth: true, showSymbol: false,
       lineStyle: { width: 1.6, color: s.color },
       itemStyle: { color: s.color },
-      areaStyle: {
+      // 선이 많으면(다중 사용자) 채움을 거의 없애 선만 보이게 — 색 면적이 겹쳐 뭉개지는 것 방지.
+      areaStyle: many ? { opacity: 0.06, color: s.color } : {
         opacity: 0.9,
         color: {
           type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
