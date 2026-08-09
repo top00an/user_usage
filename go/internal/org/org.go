@@ -32,9 +32,22 @@ type Org struct {
 	Status   string
 }
 
-// Init 은 org·ingest_keys 스키마를 보장한다(멱등). 양 방언 공통 문법이다 — pg 는
-// migrations 가 스키마를 소유하지만, 이 DDL 은 IF NOT EXISTS 라 remote 에서도 안전하게 무시된다.
+// handle 은 게이트(httpapi)가 요청마다 db 를 넘기지 않고 키를 해석하도록 두는 패키지 전역
+// 핸들이다. store·identity 와 같은 관례. Init 에서 세팅된다.
+var handle db.DB
+
+// Resolve 는 전역 핸들로 인제스트 키를 해석한다(게이트용). Init 전이면 ok=false·err.
+func Resolve(ctx context.Context, plaintext string) (tenant, orgID string, ok bool, err error) {
+	if handle == nil {
+		return "", "", false, fmt.Errorf("org: Init 되지 않았다")
+	}
+	return ResolveIngestKey(ctx, handle, plaintext)
+}
+
+// Init 은 org·ingest_keys 스키마를 보장하고(멱등) 전역 핸들을 세팅한다. 양 방언 공통 문법이다 —
+// pg 는 migrations 가 스키마를 소유하지만, 이 DDL 은 IF NOT EXISTS 라 remote 에서도 안전하게 무시된다.
 func Init(ctx context.Context, d db.DB) error {
+	handle = d
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS orgs (` +
 			`id TEXT PRIMARY KEY,` +

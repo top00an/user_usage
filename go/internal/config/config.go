@@ -104,6 +104,12 @@ type Config struct {
 	// 이니까"로 분기해야 나중에 모드가 늘어도 규칙이 흐려지지 않는다.
 	ReadOnly bool
 
+	// MultiTenant 는 SaaS 모드다(USAGE_MULTITENANT). 켜면 인테이크가 단일 토큰이 아니라
+	// **org 별 인제스트 키**로 인증되고, 키가 해석한 tenant 가 요청에 실린다(RLS 격리).
+	// 끄면(기본) 종전대로 단일 tenant·단일 토큰이라 골든 계약이 그대로 유지된다.
+	// 진짜 격리는 pg(RLS)에서만 성립한다 — sqlite 는 단일 테넌트다.
+	MultiTenant bool
+
 	// KeywordRetentionDays 는 nil 이면 **무기한 보관**이다(정리기를 아예 띄우지 않는다).
 	// 0 이 아니라 nil 인 이유: 0 은 "즉시 삭제"로 읽히고, 그건 여기서 낼 수 있는 값이 아니다.
 	KeywordRetentionDays *int
@@ -208,10 +214,20 @@ func Read(env map[string]string) (Config, []error) {
 		Tenant:               tenant,
 		DataDir:              get("USAGE_DATA_DIR"),
 		ReadOnly:             mode == "remote",
+		MultiTenant:          isTruthy(get("USAGE_MULTITENANT")),
 		KeywordRetentionDays: keywordRetention(get("USAGE_KEYWORD_RETENTION_DAYS")),
 		ConfigPath:           configPath(get("USAGE_CONFIG")),
 	}
 	return cfg, errs
+}
+
+// isTruthy 는 불리언 env 를 읽는다("1"·"true"·"yes"·"on"). 그 밖은 전부 false.
+func isTruthy(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 func known(mode string) bool {

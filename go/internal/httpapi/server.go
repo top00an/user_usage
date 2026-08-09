@@ -27,6 +27,7 @@ import (
 	"net/url"
 
 	"github.com/tscorp/user-usage/internal/config"
+	"github.com/tscorp/user-usage/internal/org"
 	"github.com/tscorp/user-usage/internal/tenant"
 )
 
@@ -123,6 +124,15 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	auth := Authenticate(r, s.cfg)
+	// 멀티테넌트(SaaS): cfg 토큰으로 못 뚫렸으면 Bearer 를 org 인제스트 키로 해석한다 —
+	// 성공하면 보고(intake) 스코프 + 해석된 tenant. 실패하면 종전대로 401.
+	if auth == nil && s.cfg.MultiTenant {
+		if bearer := bearerToken(r); bearer != "" {
+			if t, _, ok, err := org.Resolve(r.Context(), bearer); err == nil && ok {
+				auth = &Auth{Via: ViaHeader, Scope: ScopeIntake, Tenant: t}
+			}
+		}
+	}
 	if auth == nil {
 		writeJSON(tw, http.StatusUnauthorized, errBody{Error: "unauthorized"},
 			map[string]string{"WWW-Authenticate": `Bearer realm="usage"`})
@@ -142,7 +152,12 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ③ 테넌트 스코프 — 요청 1지점에서 감싼다. pg 의 모든 쿼리가 이 값을 RLS 로 받는다.
-	r = r.WithContext(tenant.With(r.Context(), s.cfg.Tenant))
+	// 멀티테넌트 모드에서 인제스트 키가 해석한 tenant 가 있으면 그것을, 없으면 cfg.Tenant.
+	tenantID := s.cfg.Tenant
+	if auth.Tenant != "" {
+		tenantID = auth.Tenant
+	}
+	r = r.WithContext(tenant.With(r.Context(), tenantID))
 	c := &rctx{path: p, query: r.URL.Query(), scope: auth.Scope}
 
 	for _, rt := range s.routes {

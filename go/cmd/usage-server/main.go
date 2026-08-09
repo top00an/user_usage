@@ -21,6 +21,7 @@ import (
 	"github.com/tscorp/user-usage/internal/db"
 	"github.com/tscorp/user-usage/internal/httpapi"
 	"github.com/tscorp/user-usage/internal/identity"
+	"github.com/tscorp/user-usage/internal/org"
 	"github.com/tscorp/user-usage/internal/store"
 	"github.com/tscorp/user-usage/internal/tenant"
 )
@@ -108,6 +109,14 @@ func run() int {
 	if err := identity.Init(initCtx, handle); err != nil {
 		fmt.Fprintf(os.Stderr, "사용량 대시보드 기동 실패: identity 스키마 보장 실패: %v\n", err)
 		return 1
+	}
+	// 멀티테넌트(SaaS) 모드에서만 org·인제스트 키 스키마를 걸고 전역 핸들을 세팅한다.
+	if cfg.MultiTenant {
+		if err := org.Init(initCtx, handle); err != nil {
+			fmt.Fprintf(os.Stderr, "사용량 대시보드 기동 실패: org 스키마 보장 실패: %v\n", err)
+			return 1
+		}
+		fmt.Println("  · 멀티테넌트 모드 — 인테이크는 org 인제스트 키로 인증한다")
 	}
 
 	var stopRetention func()

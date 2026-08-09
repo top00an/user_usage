@@ -24,6 +24,9 @@ const (
 type Auth struct {
 	Via   string
 	Scope string
+	// Tenant 는 멀티테넌트 모드에서 인제스트 키가 해석한 tenant 다. 빈 문자열이면 게이트가
+	// cfg.Tenant(단일 테넌트 기본)를 쓴다.
+	Tenant string
 }
 
 /*
@@ -60,6 +63,15 @@ func safeEqual(a, b string) bool {
  *  ③ **인테이크 토큰은 쿠키로 인정하지 않는다.** 그 토큰의 보고자는 수집기이지 브라우저가
  *     아니고, 쿠키로 받아 주면 브라우저를 꾀어 임의 사용량을 밀어 넣는 자리가 생긴다.
  */
+// bearerToken 은 `Authorization: Bearer X` 에서 X 를 꺼낸다. 없으면 빈 문자열.
+func bearerToken(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if strings.HasPrefix(h, "Bearer ") {
+		return strings.TrimSpace(h[len("Bearer "):])
+	}
+	return ""
+}
+
 func Authenticate(r *http.Request, cfg config.Config) *Auth {
 	h := r.Header.Get("Authorization")
 	if strings.HasPrefix(h, "Bearer ") {
