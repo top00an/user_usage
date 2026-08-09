@@ -5,7 +5,7 @@ import { setUnauthorizedHandler } from '@/lib/api';
 import { clearToken, subscribeToken, tokenServerSnapshot, tokenSnapshot, writeToken } from '@/lib/token';
 import { ToastProvider } from '@/components/Toast';
 import TokenGate from '@/components/TokenGate';
-import StatRow from '@/components/StatRow';
+import GrafanaDash from '@/components/grafana/GrafanaDash';
 import UsageTrackTab from '@/components/usagetrack/UsageTrackTab';
 import UsageObsTab from '@/components/usageobs/UsageObsTab';
 
@@ -19,6 +19,12 @@ import UsageObsTab from '@/components/usageobs/UsageObsTab';
  */
 
 const TABS = [
+  {
+    id: 'overview',
+    label: '대시보드',
+    desc: '실시간 메트릭 — 비용 · 토큰 · 캐시 · 도구 (드래그로 패널 재배치)',
+    icon: 'M3 3h8v8H3V3Zm10 0h8v5h-8V3ZM3 13h8v8H3v-8Zm10 3h8v5h-8v-5Z', // 대시보드 그리드
+  },
   {
     id: 'usage',
     label: '사용 추적',
@@ -153,15 +159,14 @@ export default function Dashboard() {
             </div>
           </header>
 
-          {/* Live Status — 두 탭 위에 항상 뜨는 상태 타일 행(관리자 전용, member 는 자동 숨김). */}
-          <StatRow />
-
           {/*
             ② key 로 탭마다 트리를 통째로 새로 만든다 — 앞 탭의 useEffect 정리 함수가 돌아
             진행 중인 요청이 abort 되고, 늦게 도착한 응답은 버려진다(hooks/useResource.ts).
           */}
           <div id="tabpanel" role="tabpanel" aria-labelledby={`shelltab-${tab}`} tabIndex={-1}>
-            {tab === 'usage' ? <UsageTrackTab key="usage" /> : <UsageObsTab key="usageobs" />}
+            {tab === 'overview' && <GrafanaDash key="overview" />}
+            {tab === 'usage' && <UsageTrackTab key="usage" />}
+            {tab === 'usageobs' && <UsageObsTab key="usageobs" />}
           </div>
         </main>
       </div>

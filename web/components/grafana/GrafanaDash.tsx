@@ -1,0 +1,168 @@
+'use client';
+
+/*
+ * Grafana 스타일 메인 대시보드. 실데이터(getSummary + getSeats)를 ECharts 패널로 그린다.
+ * 섹션별 그리드, 패널은 드래그로 재배치(DragGrid). 사진의 레이아웃을 따른다.
+ *
+ * 데이터 갭(LOC·Edit 수락/거부·Active Time)은 백엔드 미수집이라 넣지 않고, 실제 수집 지표
+ * (토큰 I/O·캐시·세션·도구·에이전트·스킬)로 채운다 — 가짜 숫자 금지.
+ */
+import { useCallback } from 'react';
+import { getSummary, getSeats } from '@/lib/api';
+import { softly, useResource } from '@/hooks/useResource';
+import type { Seats, Summary } from '@/lib/types';
+import { ErrorState, Loading } from '@/components/ui';
+import EChart from '@/components/charts/EChart';
+import DragGrid, { resetLayout, type GridItem } from './DragGrid';
+import { areaOption, gaugeOption, donutOption, barOption, short, fmtInt } from './options';
+
+interface Data { summary: Summary | null; seats: Seats | null; }
+
+const usd = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/* ── 패널 껍데기(드래그 핸들 = 제목바) ── */
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="gpanel-card">
+      <div className="gpanel-head"><span className="grip" aria-hidden="true">⋮⋮</span> {title}</div>
+      <div className="gpanel-body">{children}</div>
+    </div>
+  );
+}
+function StatTile({ tone, k, v, s }: { tone: string; k: string; v: string; s?: string }) {
+  return (
+    <div className={`gstat ${tone}`}>
+      <span className="gstat-k">{k}</span>
+      <span className="gstat-v num">{v}</span>
+      {s && <span className="gstat-s">{s}</span>}
+    </div>
+  );
+}
+function GaugeTile({ tone, label, value, color }: { tone: string; label: string; value: number; color: string }) {
+  return (
+    <div className={`gstat ${tone} gstat-gauge`}>
+      <span className="gstat-k">{label}</span>
+      <EChart option={gaugeOption(value, color)} height={90} />
+    </div>
+  );
+}
+function BarTable({ rows, unit, fmt }: { rows: { label: string; value: number }[]; unit: string; fmt: (n: number) => string }) {
+  const max = Math.max(...rows.map((r) => r.value), 1);
+  const palette = ['#5794f2', '#e0742f', '#73bf69', '#f2cc0c', '#b877d9', '#37872d', '#e0523e', '#8ab8ff'];
+  return (
+    <table className="gtable">
+      <thead><tr><th>Name</th><th className="r">{unit}</th></tr></thead>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={r.label}>
+            <td className="gbarcell">
+              <span className="gbar" style={{ width: `${(r.value / max) * 100}%`, background: palette[i % palette.length] }} />
+              <span className="glab">{r.label}</span>
+            </td>
+            <td className="r num">{fmt(r.value)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+export default function GrafanaDash() {
+  const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<Data> => {
+    const [summary, seats] = await Promise.all([
+      softly(getSummary({ signal }), null as Summary | null),
+      softly(getSeats(3650, { signal }), null as Seats | null),
+    ]);
+    return { summary, seats };
+  }, []);
+  const { state, reload } = useResource(load, []);
+
+  if (state.status === 'loading') return <Loading />;
+  if (state.status === 'error') return <ErrorState what="대시보드를 불러오지 못했습니다." error={state.error} onRetry={reload} />;
+
+  const { summary, seats } = state.data;
+  if (!summary?.totals) {
+    // member 스코프(전사 지표 403) 또는 무데이터.
+    return <p className="hint" style={{ padding: '24px 0' }}>이 대시보드는 관리자 토큰이 필요합니다(전사 지표). 개인 열람 토큰은 사용 관측 탭에서 자기 데이터를 봅니다.</p>;
+  }
+
+  const t = summary.totals;
+  const tokensTotal = t.input + t.output + t.cacheRead + t.cacheCreate;
+  const denom = t.cacheRead + t.cacheCreate + t.input;
+  const cacheHit = denom ? t.cacheRead / denom : 0;
+  const cacheReadShare = tokensTotal ? t.cacheRead / tokensTotal : 0;
+
+  const days = [...(summary.byDay ?? [])].reverse(); // 오름차순
+  const x = days.map((d) => d.day.slice(5));
+  const modelRows = (summary.byModel ?? [])
+    .map((m) => ({ label: m.model.replace(/^.*[./]/, '').replace(/^claude-/, ''), value: m.input + m.output + m.cacheRead + m.cacheCreate }))
+    .filter((r) => r.value > 0);
+  const donutRows = (arr?: { key: string; count: number }[]) => (arr ?? []).map((k) => ({ name: k.key, value: k.count }));
+
+  const cost = seats?.summary?.totalUsd ?? null;
+
+  // ── 섹션별 아이템 ──
+  const live: GridItem[] = [
+    { id: 'live-sessions', node: <StatTile tone="t-teal" k="Active Sessions" v={fmtInt(t.sessions)} s={`users ${t.users} · machines ${t.machines}`} /> },
+    { id: 'live-cost', node: <StatTile tone="t-blue" k="Total Cost" v={cost == null ? '—' : usd(cost)} s="90-day" /> },
+    { id: 'live-tokens', node: <StatTile tone="t-orange" k="Total Tokens" v={short(tokensTotal)} s={`cache read ${short(t.cacheRead)}`} /> },
+    { id: 'live-output', node: <StatTile tone="t-purple" k="Output Tokens" v={short(t.output)} s={`input ${short(t.input)}`} /> },
+    { id: 'live-hit', node: <GaugeTile tone="t-teal" label="Cache Hit Ratio" value={cacheHit} color="#73bf69" /> },
+    { id: 'live-share', node: <GaugeTile tone="t-blue" label="Cache Read Share" value={cacheReadShare} color="#5794f2" /> },
+  ];
+
+  const cost2: GridItem[] = [
+    { id: 'cost-models', node: <Panel title="Token Distribution by Model"><BarTable rows={modelRows} unit="Tokens" fmt={short} /></Panel> },
+    { id: 'cost-rate', node: <Panel title="Token Rate (daily)"><EChart option={areaOption(x, [{ name: 'tokens', color: '#73bf69', data: days.map((d) => d.input + d.output + d.cacheRead + d.cacheCreate) }], short)} height={180} /></Panel> },
+  ];
+
+  const dev: GridItem[] = [
+    { id: 'dev-io', node: <Panel title="Token I/O Rate"><EChart option={areaOption(x, [{ name: 'input', color: '#5794f2', data: days.map((d) => d.input) }, { name: 'output', color: '#73bf69', data: days.map((d) => d.output) }], short)} height={180} /></Panel> },
+    { id: 'dev-out', node: <Panel title="Output Tokens (daily)"><EChart option={areaOption(x, [{ name: 'output', color: '#e0742f', data: days.map((d) => d.output) }], short)} height={180} /></Panel> },
+  ];
+
+  const cache: GridItem[] = [
+    { id: 'cache-usage', node: <Panel title="Cache Read vs Creation (daily)"><EChart option={areaOption(x, [{ name: 'Cache Read', color: '#73bf69', data: days.map((d) => d.cacheRead) }, { name: 'Cache Creation', color: '#5794f2', data: days.map((d) => d.cacheCreate) }], short)} height={200} /></Panel> },
+  ];
+
+  const tools: GridItem[] = [
+    { id: 'tool-usage', node: <Panel title="Tool Usage"><EChart option={donutOption(donutRows(summary.top?.tool))} height={190} /></Panel> },
+    { id: 'tool-agents', node: <Panel title="Subagents"><EChart option={donutOption(donutRows(summary.top?.agent))} height={190} /></Panel> },
+    { id: 'tool-skills', node: <Panel title="Skills"><EChart option={donutOption(donutRows((summary.top?.skill ?? []).map((k) => ({ key: k.key.replace(/^superpowers:/, ''), count: k.count }))))} height={190} /></Panel> },
+  ];
+
+  const rates: GridItem[] = [
+    { id: 'rate-sessions', node: <Panel title="Sessions per Day"><EChart option={areaOption(x, [{ name: 'sessions', color: '#73bf69', data: days.map((d) => d.sessions) }], fmtInt)} height={170} /></Panel> },
+    { id: 'rate-bash', node: <Panel title="Bash Commands"><BarTable rows={(summary.top?.bash ?? []).map((k) => ({ label: k.key, value: k.count }))} unit="Count" fmt={fmtInt} /></Panel> },
+    { id: 'rate-mcp', node: <Panel title="MCP Calls"><BarTable rows={(summary.top?.mcp ?? []).map((k) => ({ label: k.key.replace(/^mcp__/, '').slice(0, 24), value: k.count }))} unit="Count" fmt={fmtInt} /></Panel> },
+  ];
+
+  const topTools = (summary.top?.tool ?? []).slice(0, 8).map((k) => ({ name: k.key, value: k.count }));
+  const top: GridItem[] = [
+    { id: 'top-tools', node: <Panel title="Top Tools (calls)"><EChart option={barOption(topTools, fmtInt)} height={Math.max(120, topTools.length * 30)} /></Panel> },
+  ];
+
+  const Sect = ({ title, gid, cls, items }: { title: string; gid: string; cls?: string; items: GridItem[] }) => (
+    <section className="gsect">
+      <div className="gsect-h"><span className="caret">▾</span> {title}</div>
+      <DragGrid gridId={gid} className={cls} items={items} />
+    </section>
+  );
+
+  return (
+    <div className="gdash">
+      <div className="gdash-top">
+        <span className="hint">↕ 패널의 <b>⋮⋮</b> 제목을 끌어 위치를 바꿀 수 있습니다 — 순서는 저장됩니다</span>
+        <span className="sp" />
+        <button className="ghost" type="button" onClick={resetLayout}>⤢ 레이아웃 초기화</button>
+      </div>
+      <Sect title="Live Status" gid="live" cls="g6" items={live} />
+      <Sect title="Cost & Tokens" gid="cost" cls="g-cost" items={cost2} />
+      <Sect title="Development" gid="dev" cls="g2" items={dev} />
+      <Sect title="Cache Token Usage" gid="cache" cls="g1" items={cache} />
+      <Sect title="Tool & Agent Analytics" gid="tools" cls="g3" items={tools} />
+      <Sect title="Rates & Details" gid="rates" cls="g3" items={rates} />
+      <Sect title="Top Tools" gid="top" cls="g1" items={top} />
+    </div>
+  );
+}
