@@ -16,8 +16,9 @@ const (
 	ViaHeader = "header" // Authorization: Bearer
 	ViaCookie = "cookie" // usage_tok — 조회만 태운다(CSRF 표면 제거)
 	//revive:disable-next-line
-	ScopeAdmin  = "admin"  // 열람 + 상태변경
+	ScopeAdmin  = "admin"  // 열람 + 상태변경 (전사)
 	ScopeIntake = "intake" // POST /api/usage 하나만
+	ScopeMember = "member" // 개인 열람 — 자기 데이터만(RBAC)
 )
 
 // Auth 는 통과한 자격증명이다. nil 은 "자격증명이 없거나 틀렸다"다.
@@ -27,6 +28,9 @@ type Auth struct {
 	// Tenant 는 멀티테넌트 모드에서 인제스트 키가 해석한 tenant 다. 빈 문자열이면 게이트가
 	// cfg.Tenant(단일 테넌트 기본)를 쓴다.
 	Tenant string
+	// Username 은 member 스코프에서 이 토큰이 대표하는 사용자다. 게이트가 조회를 이 이름으로
+	// 강제한다(자기 것만 본다). 다른 스코프에서는 빈 문자열.
+	Username string
 }
 
 /*

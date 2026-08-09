@@ -28,6 +28,7 @@ import (
 
 	"github.com/tscorp/user-usage/internal/config"
 	"github.com/tscorp/user-usage/internal/org"
+	"github.com/tscorp/user-usage/internal/store"
 	"github.com/tscorp/user-usage/internal/tenant"
 )
 
@@ -37,6 +38,19 @@ type rctx struct {
 	query url.Values
 	// scope 를 정직하게 비춘다 — 인테이크 라우트의 자체 게이트가 의미를 갖게 하기 위해서다.
 	scope string
+	// viewer 는 member 스코프에서 이 요청이 볼 수 있는 유일한 사용자다(RBAC). 빈 문자열이면
+	// 제한 없음(admin). 게이트가 member 조회를 이 이름으로 강제한다.
+	viewer string
+}
+
+// memberSelfEndpoints — member(개인) 스코프가 접근할 수 있는 조회 화이트리스트. 전부 user
+// 필터를 존중하는 엔드포인트다(게이트가 user=viewer 로 강제하면 자기 것만 나온다). summary·
+// leaderboard·seats·teams·dispatch 는 전사/교차 뷰라 여기에 없다 → member 는 403(deny-by-default).
+var memberSelfEndpoints = map[string]bool{
+	"/api/usage/sessions":     true,
+	"/api/usage/series":       true,
+	"/api/usage/distribution": true,
+	"/api/usage/quality":      true,
 }
 
 // route 는 `내가 응답했다` 를 bool 로, 예상 못 한 실패를 error 로 돌려준다.
@@ -141,10 +155,31 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// 개인 열람 토큰(RBAC): admin/intake/인제스트키로 못 뚫렸으면 Bearer 를 member 토큰으로
+	// 해석한다. 성공하면 member 스코프 + 그 사용자. (member 토큰은 조회 자격이라 헤더로만 받는다.)
+	if auth == nil {
+		if bearer := bearerToken(r); bearer != "" {
+			if u, ok, err := store.ResolveMemberToken(r.Context(), bearer); err == nil && ok {
+				auth = &Auth{Via: ViaHeader, Scope: ScopeMember, Username: u}
+			}
+		}
+	}
 	if auth == nil {
 		writeJSON(tw, http.StatusUnauthorized, errBody{Error: "unauthorized"},
 			map[string]string{"WWW-Authenticate": `Bearer realm="usage"`})
 		return
+	}
+	// member(개인) 스코프 정책: 조회 전용 + self 화이트리스트 + user=본인 강제(deny-by-default).
+	if auth.Scope == ScopeMember {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			sendError(tw, http.StatusForbidden, "개인 열람 토큰으로는 상태변경을 할 수 없습니다")
+			return
+		}
+		if !memberSelfEndpoints[p] {
+			sendError(tw, http.StatusForbidden,
+				"개인 열람 토큰은 자기 데이터만 볼 수 있습니다 — 전사·팀 화면은 관리자 토큰이 필요합니다")
+			return
+		}
 	}
 	// 인테이크 토큰/키는 **보고 경로만** 연다(패키지 주석 ②'). 퍼스트파티(/api/usage)와 OTLP(/v1/logs).
 	if auth.Scope == ScopeIntake && !(r.Method == http.MethodPost && (p == "/api/usage" || p == "/v1/logs")) {
@@ -172,6 +207,13 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r = r.WithContext(tenant.With(r.Context(), tenantID))
 	c := &rctx{path: p, query: r.URL.Query(), scope: auth.Scope}
+	// member(RBAC): user 필터를 **본인 이름으로 덮어쓴다.** 클라이언트가 ?user=남 을 보내도
+	// 자기 것만 나온다 — 화이트리스트 엔드포인트가 전부 user 필터를 존중하므로 이 한 줄이
+	// "자기 데이터만" 을 강제한다(위 게이트가 교차 뷰는 이미 403 으로 막았다).
+	if auth.Scope == ScopeMember {
+		c.viewer = auth.Username
+		c.query.Set("user", auth.Username)
+	}
 
 	for _, rt := range s.routes {
 		handled, err := rt(tw, r, c)

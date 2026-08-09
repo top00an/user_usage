@@ -153,7 +153,7 @@ func TestPGMigrateRunnerAppliesAll(t *testing.T) {
 		t.Fatalf("dialect: %v", res.Dialect)
 	}
 	// migrations/pg 에는 0014·0015·0017·0026 네 파일이 있다.
-	wantVersions := []int64{14, 15, 17, 26, 30, 31} // 0030_orgs·0031_teams (SaaS 멀티테넌트)
+	wantVersions := []int64{14, 15, 17, 26, 30, 31, 32} // 0030_orgs·0031_teams·0032_member_tokens
 	if res.Total != len(wantVersions) {
 		t.Fatalf("파일 수: want %d, got %d", len(wantVersions), res.Total)
 	}

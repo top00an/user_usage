@@ -28,7 +28,10 @@ const provisionUsage = `usage-server 프로비저닝:
   key issue --org <org-id>       인제스트 키 발급(평문 1회 출력)
   key revoke --key <평문키>       키 해지
   team assign --user <u> --team <t>   사용자를 팀에 배정
-  team list                      팀 멤버십 목록`
+  team list                      팀 멤버십 목록
+  member issue --user <u>        개인 열람 토큰 발급(자기 데이터만·평문 1회 출력)
+  member list                    개인 토큰 목록
+  member revoke --token <t>      개인 토큰 해지`
 
 func provision(args []string) int {
 	if len(args) == 0 {
@@ -55,6 +58,77 @@ func provision(args []string) int {
 		return keyCmd(ctx, d, os.Stdout, args[1:])
 	case "team":
 		return teamCmd(ctx, d, os.Stdout, args[1:])
+	case "member":
+		return memberCmd(ctx, d, os.Stdout, args[1:])
+	default:
+		fmt.Fprintln(os.Stderr, provisionUsage)
+		return 2
+	}
+}
+
+// memberCmd — 개인 열람 토큰(RBAC) 관리. store 를 쓰므로 store.Init 선행.
+func memberCmd(ctx context.Context, d db.DB, out io.Writer, args []string) int {
+	if err := store.Init(ctx, d); err != nil {
+		fmt.Fprintf(os.Stderr, "member: store 초기화 실패: %v\n", err)
+		return 1
+	}
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, provisionUsage)
+		return 2
+	}
+	switch args[0] {
+	case "issue":
+		fs := flag.NewFlagSet("member issue", flag.ContinueOnError)
+		user := fs.String("user", "", "사용자명(필수)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if *user == "" {
+			fmt.Fprintln(os.Stderr, "member issue: --user 가 필요하다")
+			return 2
+		}
+		tok, err := store.IssueMemberToken(ctx, *user)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "member issue 실패: %v\n", err)
+			return 1
+		}
+		// 평문은 여기서 한 번만 보인다(저장은 해시).
+		fmt.Fprintf(out, "%s\n", tok)
+		return 0
+	case "list":
+		toks, err := store.ListMemberTokens(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "member list 실패: %v\n", err)
+			return 1
+		}
+		if len(toks) == 0 {
+			fmt.Fprintln(out, "(발급된 개인 토큰 없음)")
+			return 0
+		}
+		for _, m := range toks {
+			state := "active"
+			if m.Revoked {
+				state = "revoked"
+			}
+			fmt.Fprintf(out, "%s\t%s\n", m.Username, state)
+		}
+		return 0
+	case "revoke":
+		fs := flag.NewFlagSet("member revoke", flag.ContinueOnError)
+		tok := fs.String("token", "", "평문 개인 토큰(필수)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if *tok == "" {
+			fmt.Fprintln(os.Stderr, "member revoke: --token 이 필요하다")
+			return 2
+		}
+		if err := store.RevokeMemberToken(ctx, *tok); err != nil {
+			fmt.Fprintf(os.Stderr, "member revoke 실패: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(out, "해지됨")
+		return 0
 	default:
 		fmt.Fprintln(os.Stderr, provisionUsage)
 		return 2
