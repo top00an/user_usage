@@ -127,16 +127,19 @@ describe('셸 — 게이트 · 탭 · 401 복구', () => {
     expect(summaryCall).toBeTruthy();
   });
 
-  it('탭은 키보드 좌우 화살표로도 옮겨진다', async () => {
+  it('탭은 키보드 상하 화살표로도 옮겨진다(세로 내비)', async () => {
     writeToken(TOKEN);
     mockFetch(allRoutes());
     const user = userEvent.setup();
     render(<Dashboard />);
 
+    // 좌측 세로 내비 레일이라 방향키는 위/아래다(WAI-ARIA vertical tablist).
     const first = await screen.findByRole('tab', { name: '사용 추적' });
     first.focus();
-    await user.keyboard('{ArrowRight}');
+    await user.keyboard('{ArrowDown}');
     await waitFor(() => expect(screen.getByRole('tab', { name: '사용 관측' })).toHaveAttribute('aria-selected', 'true'));
+    await user.keyboard('{ArrowUp}');
+    await waitFor(() => expect(screen.getByRole('tab', { name: '사용 추적' })).toHaveAttribute('aria-selected', 'true'));
   });
 });
 

@@ -6,8 +6,16 @@ import { softly, useResource } from '@/hooks/useResource';
 import type { DayRow, Dispatch, RecommendationSummary, Summary, UserRow } from '@/lib/types';
 import { n, shortTokens } from '@/lib/format';
 import { Card, Empty, ErrorState, Loading, TableWrap, TokenCount } from '@/components/ui';
+import { Section, Panel, Donut, AreaTrend, BarGauge } from '@/components/charts';
 import ModelTable from './ModelTable';
 import AxisExplorer from './AxisExplorer';
+
+/* 모델 이름은 길다(global.anthropic.claude-opus-4-8-…) — 끝의 식별 토큰만 남긴다. */
+function shortModel(m: string): string {
+  const parts = m.split(/[./]/).filter(Boolean);
+  const tail = parts.slice(-1)[0] ?? m;
+  return tail.replace(/^claude-/, '').slice(0, 22);
+}
 import { AX_CACHE_CREATE, AX_CACHE_READ, IN_HINT, IN_LABEL, TURNS_HINT } from './labels';
 
 /* ================================================================
@@ -192,6 +200,42 @@ export default function UsageTrackTab() {
         입력(비캐시) + 캐시읽기 + 캐시생성 = 그 세션이 실제로 넣은 입력 전부입니다.
         같은 맥락을 다시 보낼 때는 캐시읽기로 잡히므로, 캐싱이 잘 도는 사람일수록 입력(비캐시)만 작아집니다.
       </p>
+
+      {!empty && (() => {
+        const days = (d.byDay ?? []);
+        const tokenTrend = days.map((r) => ({ t: r.day, v: r.input + r.output + r.cacheRead + r.cacheCreate }));
+        const cacheTrend = days.map((r) => ({ t: r.day, v: r.cacheRead }));
+        const modelTokens = (d.byModel ?? []).map((m) => ({
+          label: shortModel(m.model), value: m.input + m.output + m.cacheRead + m.cacheCreate,
+        }));
+        const toolTop = (d.top?.tool ?? []).map((k) => ({ label: k.key, value: k.count }));
+        const agentTop = (d.top?.agent ?? []).map((k) => ({ label: k.key, value: k.count }));
+        const skillTop = (d.top?.skill ?? []).map((k) => ({ label: k.key, value: k.count }));
+        return (
+          <>
+            <Section title="추이">
+              <Panel title="토큰 추이 (일별 · 입력+출력+캐시)" span={2}>
+                <AreaTrend points={tokenTrend} unit=" tok" />
+              </Panel>
+              <Panel title="캐시 읽기 추이">
+                <AreaTrend points={cacheTrend} unit=" tok" />
+              </Panel>
+            </Section>
+
+            <Section title="모델">
+              <Panel title="모델별 토큰" span={3}>
+                <BarGauge data={modelTokens} fmt={(v) => shortTokens(v)} />
+              </Panel>
+            </Section>
+
+            <Section title="도구 · 활용">
+              <Panel title="도구 사용 분포"><Donut data={toolTop} unit="회" /></Panel>
+              <Panel title="에이전트 분포"><Donut data={agentTop} unit="회" /></Panel>
+              <Panel title="스킬 분포"><Donut data={skillTop} unit="회" /></Panel>
+            </Section>
+          </>
+        );
+      })()}
 
       {empty && (
         <Card title="아직 보고가 없습니다" className="mt">
