@@ -26,6 +26,14 @@ jobs:
       - name: collector test
         run: cd collector && go vet ./... && go test ./... -count=1
 
+      - name: collector e2e (수집기→서버→조회 전 경로)
+        run: |
+          bash scripts/build.sh
+          go -C collector build -o /tmp/usage-collector ./cmd/usage-collector
+          USAGE_E2E_SERVER_BIN="$PWD/go/usage-server" \
+          USAGE_E2E_COLLECTOR_BIN=/tmp/usage-collector \
+            go -C collector test -run E2E -v -count=1
+
       - name: web test
         run: cd web && npm ci && npm test
 

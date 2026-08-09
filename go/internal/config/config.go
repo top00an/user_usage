@@ -219,7 +219,10 @@ func Read(env map[string]string) (Config, []error) {
 		Host:                 host,
 		Tenant:               tenant,
 		DataDir:              get("USAGE_DATA_DIR"),
-		ReadOnly:             mode == "remote",
+		// remote(pg)는 기본 읽기 전용이다(이미 운영 중인 DB 를 들여다보는 용도). 그러나
+		// **멀티테넌트(SaaS)는 pg 에 인테이크를 써야** 하므로 그때는 읽기 전용을 풀어야 한다 —
+		// org 별 격리는 RLS(부팅 프로브가 NOBYPASSRLS 를 강제)가 지므로 쓰기를 열어도 안전하다.
+		ReadOnly:             mode == "remote" && !isTruthy(get("USAGE_MULTITENANT")),
 		MultiTenant:          isTruthy(get("USAGE_MULTITENANT")),
 		IntakeRate:           floatDefault(get("USAGE_INTAKE_RATE"), 20),
 		IntakeBurst:          floatDefault(get("USAGE_INTAKE_BURST"), 40),
