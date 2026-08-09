@@ -34,6 +34,12 @@ type SessionInput struct {
 	// NoTsTurns 는 시각이 없어 series 에 못 올린 턴 수다.
 	// nil = 구버전 수집기라 **모른다** · 0 = 전 턴에 시각이 있었다. 뭉치면 안 된다.
 	NoTsTurns *int64
+
+	// 개발 지표 — Edit/Write/MultiEdit 에서 센 줄 수와 편집 결과(accept/reject).
+	LinesAdded    int64
+	LinesRemoved  int64
+	EditsAccepted int64
+	EditsRejected int64
 }
 
 // SeriesRow 는 (시간, 모델) 버킷 하나다.

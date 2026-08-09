@@ -122,6 +122,12 @@ type Session struct {
 	// 0 과 nil 은 다른 사실이다: 0 은 "전 턴에 시각이 있었다", nil 은 "모른다".
 	NoTsTurns *int64
 
+	// 개발 지표 — Edit/Write/MultiEdit 에서 센 줄 수와 편집 결과. 코드 내용은 담지 않는다.
+	LinesAdded    int64
+	LinesRemoved  int64
+	EditsAccepted int64
+	EditsRejected int64
+
 	Counters []Counter
 	Series   []Bucket
 }
@@ -288,6 +294,10 @@ func NormSession(raw map[string]any, ctx ...Ctx) (Session, bool) {
 		WebSearch:   nat(raw["webSearch"]),
 		WebFetch:    nat(raw["webFetch"]),
 		Turns:       nat(raw["turns"]),
+		LinesAdded:    nat(raw["linesAdded"]),
+		LinesRemoved:  nat(raw["linesRemoved"]),
+		EditsAccepted: nat(raw["editsAccepted"]),
+		EditsRejected: nat(raw["editsRejected"]),
 		Counters:    []Counter{},
 		Series:      []Bucket{},
 	}

@@ -8,15 +8,15 @@
  * (토큰 I/O·캐시·세션·도구·에이전트·스킬)로 채운다 — 가짜 숫자 금지.
  */
 import { useCallback } from 'react';
-import { getSummary, getSeats } from '@/lib/api';
+import { getSummary, getSeats, getDev } from '@/lib/api';
 import { softly, useResource } from '@/hooks/useResource';
-import type { Seats, Summary } from '@/lib/types';
+import type { Dev, Seats, Summary } from '@/lib/types';
 import { ErrorState, Loading } from '@/components/ui';
 import EChart from '@/components/charts/EChart';
 import DragGrid, { resetLayout, type GridItem } from './DragGrid';
 import { areaOption, gaugeOption, donutOption, barOption, short, fmtInt } from './options';
 
-interface Data { summary: Summary | null; seats: Seats | null; }
+interface Data { summary: Summary | null; seats: Seats | null; dev: Dev | null; }
 
 const usd = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -69,18 +69,19 @@ function BarTable({ rows, unit, fmt }: { rows: { label: string; value: number }[
 
 export default function GrafanaDash() {
   const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<Data> => {
-    const [summary, seats] = await Promise.all([
+    const [summary, seats, dev] = await Promise.all([
       softly(getSummary({ signal }), null as Summary | null),
       softly(getSeats(3650, { signal }), null as Seats | null),
+      softly(getDev(365, { signal }), null as Dev | null),
     ]);
-    return { summary, seats };
+    return { summary, seats, dev };
   }, []);
   const { state, reload } = useResource(load, []);
 
   if (state.status === 'loading') return <Loading />;
   if (state.status === 'error') return <ErrorState what="대시보드를 불러오지 못했습니다." error={state.error} onRetry={reload} />;
 
-  const { summary, seats } = state.data;
+  const { summary, seats, dev } = state.data;
   if (!summary?.totals) {
     // member 스코프(전사 지표 403) 또는 무데이터.
     return <p className="hint" style={{ padding: '24px 0' }}>이 대시보드는 관리자 토큰이 필요합니다(전사 지표). 개인 열람 토큰은 사용 관측 탭에서 자기 데이터를 봅니다.</p>;
@@ -116,9 +117,28 @@ export default function GrafanaDash() {
     { id: 'cost-rate', node: <Panel title="Token Rate (daily)"><EChart option={areaOption(x, [{ name: 'tokens', color: '#73bf69', data: days.map((d) => d.input + d.output + d.cacheRead + d.cacheCreate) }], short)} height={180} /></Panel> },
   ];
 
-  const dev: GridItem[] = [
+  // 개발 지표(LOC·편집 결정) — 실제 수집값. dev 가 null 이거나 값이 0 이면 해당 패널은 대체 없이 안내.
+  const devDays = [...(dev?.byDay ?? [])].reverse();
+  const devX = devDays.map((d) => d.day.slice(5));
+  const dt = dev?.totals;
+  const dev2: GridItem[] = [
+    { id: 'dev-loc', node: (
+      <Panel title="Lines of Code (Added vs Removed, daily)">
+        <EChart option={areaOption(devX, [
+          { name: 'added', color: '#73bf69', data: devDays.map((d) => d.linesAdded) },
+          { name: 'removed', color: '#e0523e', data: devDays.map((d) => d.linesRemoved) },
+        ], fmtInt)} height={180} />
+      </Panel>
+    ) },
+    { id: 'dev-edit', node: (
+      <Panel title="Code Edit Decisions (Accept vs Reject)">
+        <EChart option={donutOption([
+          { name: 'accept', value: dt?.editsAccepted ?? 0 },
+          { name: 'reject', value: dt?.editsRejected ?? 0 },
+        ])} height={190} />
+      </Panel>
+    ) },
     { id: 'dev-io', node: <Panel title="Token I/O Rate"><EChart option={areaOption(x, [{ name: 'input', color: '#5794f2', data: days.map((d) => d.input) }, { name: 'output', color: '#73bf69', data: days.map((d) => d.output) }], short)} height={180} /></Panel> },
-    { id: 'dev-out', node: <Panel title="Output Tokens (daily)"><EChart option={areaOption(x, [{ name: 'output', color: '#e0742f', data: days.map((d) => d.output) }], short)} height={180} /></Panel> },
   ];
 
   const cache: GridItem[] = [
@@ -152,13 +172,12 @@ export default function GrafanaDash() {
   return (
     <div className="gdash">
       <div className="gdash-top">
-        <span className="hint">↕ 패널의 <b>⋮⋮</b> 제목을 끌어 위치를 바꿀 수 있습니다 — 순서는 저장됩니다</span>
         <span className="sp" />
         <button className="ghost" type="button" onClick={resetLayout}>⤢ 레이아웃 초기화</button>
       </div>
       <Sect title="Live Status" gid="live" cls="g6" items={live} />
       <Sect title="Cost & Tokens" gid="cost" cls="g-cost" items={cost2} />
-      <Sect title="Development" gid="dev" cls="g2" items={dev} />
+      <Sect title="Development" gid="dev" cls="g3" items={dev2} />
       <Sect title="Cache Token Usage" gid="cache" cls="g1" items={cache} />
       <Sect title="Tool & Agent Analytics" gid="tools" cls="g3" items={tools} />
       <Sect title="Rates & Details" gid="rates" cls="g3" items={rates} />

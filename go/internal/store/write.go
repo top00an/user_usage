@@ -24,7 +24,9 @@ var sessionCols = []string{
 	"machine", "username", "project", "model",
 	"input", "output", "cache_read", "cache_create",
 	"web_search", "web_fetch", "turns",
-	"started_at", "ended_at", "no_ts_turns", "reported_at",
+	"started_at", "ended_at", "no_ts_turns",
+	"lines_added", "lines_removed", "edits_accepted", "edits_rejected",
+	"reported_at",
 }
 
 // SessionUpsert 는 세션 사용량 한 건을 덮어쓴다(멱등).
@@ -56,6 +58,7 @@ func SessionUpsert(ctx context.Context, s SessionInput) error {
 		// 구버전 수집기는 안 보낸다 — 그 경우 NULL 로 남아 "모른다"가 화면에 그대로 보인다.
 		nullStr(clip(s.EndedAt, 40)),
 		noTs,
+		nonNeg(s.LinesAdded), nonNeg(s.LinesRemoved), nonNeg(s.EditsAccepted), nonNeg(s.EditsRejected),
 		nowISO(),
 	}
 	return d.Exec(ctx, upsertSQL(

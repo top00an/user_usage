@@ -18,6 +18,7 @@ import type {
   Dispatch,
   Distribution,
   ErrorBody,
+  Dev,
   Leaderboard,
   Quality,
   Seats,
@@ -145,6 +146,8 @@ export const getSeats = (days = 30, o?: RequestOptions) =>
   request<Seats>(`/api/usage/seats?days=${days}`, o);
 export const getTeams = (days = 30, o?: RequestOptions) =>
   request<Teams>(`/api/usage/teams?days=${days}`, o);
+export const getDev = (days = 30, o?: RequestOptions) =>
+  request<Dev>(`/api/usage/dev?days=${days}`, o);
 export const getIdentity = (o?: RequestOptions) => request<unknown>('/api/usage/identity', o);
 
 export const getSessions = (

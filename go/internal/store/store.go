@@ -214,7 +214,16 @@ func Init(ctx context.Context, d db.DB) error {
 		return err
 	}
 	// pg 는 migrations/pg/0026_usage_no_ts_turns.sql 이 같은 컬럼을 소유한다(양 방언 동기).
-	return ensureColumn(ctx, d, "usage_sessions", "no_ts_turns", "INTEGER")
+	if err := ensureColumn(ctx, d, "usage_sessions", "no_ts_turns", "INTEGER"); err != nil {
+		return err
+	}
+	// 개발 지표 컬럼(LOC·편집결정). pg 는 migrations/pg/0033_dev_metrics.sql 이 소유.
+	for _, col := range []string{"lines_added", "lines_removed", "edits_accepted", "edits_rejected"} {
+		if err := ensureColumn(ctx, d, "usage_sessions", col, "INTEGER"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ensureColumn 은 sqlite 전용 멱등 컬럼 추가다.

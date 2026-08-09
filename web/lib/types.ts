@@ -327,6 +327,21 @@ export interface Teams {
   unpriced: string[];
 }
 
+/* ── GET /api/usage/dev — 개발 지표(LOC·편집 결정) ─────────────────── */
+export interface DevTotals {
+  linesAdded: number;
+  linesRemoved: number;
+  editsAccepted: number;
+  editsRejected: number;
+}
+export interface DevDay extends DevTotals {
+  day: string;
+}
+export interface Dev {
+  totals: DevTotals;
+  byDay: DevDay[];
+}
+
 /* ── GET /api/usage/series ──────────────────────────────────────────── */
 
 export interface SeriesPoint {

@@ -92,7 +92,11 @@ func (s *server) storeSessions(ctx context.Context, sessions []intake.Session) i
 			CacheRead: sess.CacheRead, CacheCreate: sess.CacheCreate,
 			WebSearch: sess.WebSearch, WebFetch: sess.WebFetch, Turns: sess.Turns,
 			StartedAt: deref(sess.StartedAt), EndedAt: deref(sess.EndedAt),
-			NoTsTurns: sess.NoTsTurns,
+			NoTsTurns:     sess.NoTsTurns,
+			LinesAdded:    sess.LinesAdded,
+			LinesRemoved:  sess.LinesRemoved,
+			EditsAccepted: sess.EditsAccepted,
+			EditsRejected: sess.EditsRejected,
 		})
 		switch {
 		case err == nil:
