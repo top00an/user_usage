@@ -74,8 +74,20 @@ func quantile(sorted []float64, p float64) (float64, bool) {
 	if lo == hi {
 		return sorted[lo], true
 	}
-	return sorted[lo] + (sorted[hi]-sorted[lo])*(idx-float64(lo)), true
+	// mulRounded 로 곱을 먼저 IEEE754 로 반올림시킨 뒤 더한다. arm64 백엔드는
+	// `a + b*c` 를 SSA 단계에서 FMA 한 개로 재융합해 반올림을 한 번만 하는데,
+	// Node(V8)는 곱·합을 따로(반올림 두 번) 하므로 마지막 비트가 갈린다. 로컬
+	// 변수 분리로는 융합이 막히지 않아, 곱을 함수 경계 밖으로 밀어 강제 반올림한다.
+	prod := mulRounded(sorted[hi]-sorted[lo], idx-float64(lo))
+	return sorted[lo] + prod, true
 }
+
+// mulRounded 는 곱 결과를 IEEE754 double 로 강제 반올림시키는 값 배리어다.
+// go:noinline 이라 호출부에 인라인되며 FMA 로 융합되지 않는다 — Node 와의
+// 바이트 단위 분위수 파리티를 지키는 유일하게 안정적인 방법이다.
+//
+//go:noinline
+func mulRounded(a, b float64) float64 { return a * b }
 
 // Summarize 는 값 슬라이스를 분포 요약으로 접는다.
 //
