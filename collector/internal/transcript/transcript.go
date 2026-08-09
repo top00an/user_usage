@@ -74,17 +74,27 @@ type rawUsage struct {
 }
 
 type rawBlock struct {
-	Type    string          `json:"type"`
-	Name    string          `json:"name"`
-	Input   json.RawMessage `json:"input"`
-	IsError bool            `json:"is_error"`
-	Text    string          `json:"text"`
+	Type      string          `json:"type"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+	IsError   bool            `json:"is_error"`
+	Text      string          `json:"text"`
+	ID        string          `json:"id"`          // tool_use 블록의 id
+	ToolUseID string          `json:"tool_use_id"` // tool_result 가 가리키는 tool_use id
 }
 
 type rawToolInput struct {
 	Command      string `json:"command"`
 	SubagentType string `json:"subagent_type"`
 	Skill        string `json:"skill"`
+	// LOC 파생용(Edit/Write/MultiEdit). 내용 자체는 저장하지 않고 **줄 수만** 센다(정책 준수).
+	Content   string `json:"content"`
+	OldString string `json:"old_string"`
+	NewString string `json:"new_string"`
+	Edits     []struct {
+		OldString string `json:"old_string"`
+		NewString string `json:"new_string"`
+	} `json:"edits"`
 }
 
 // ── 누적기 ────────────────────────────────────────────────────────────────────
@@ -106,9 +116,14 @@ type sessionAgg struct {
 	input, output, cacheRead, cacheCreate int64
 	webSearch, webFetch, turns            int64
 
+	// 개발 지표(파생). Edit/Write/MultiEdit tool_use 에서 **줄 수만** 센다(내용 미저장).
+	linesAdded, linesRemoved     int64
+	editsAccepted, editsRejected int64
+
 	modelTokens map[string]int64            // 세션 대표 모델 선정용(토큰 합 최대)
 	buckets     map[string]*bucketAgg       // key = hour|model
 	counters    map[string]map[string]int64 // 축 → 키 → 횟수
+	pendingEdit map[string]bool             // 편집 tool_use id → 결과 대기(accept/reject 판정용)
 }
 
 func newSessionAgg(id string) *sessionAgg {
@@ -117,7 +132,16 @@ func newSessionAgg(id string) *sessionAgg {
 		modelTokens: map[string]int64{},
 		buckets:     map[string]*bucketAgg{},
 		counters:    map[string]map[string]int64{},
+		pendingEdit: map[string]bool{},
 	}
+}
+
+// lineCount 는 문자열의 줄 수를 센다(빈 문자열은 0). LOC 델타 계산용.
+func lineCount(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	return int64(strings.Count(s, "\n") + 1)
 }
 
 // Aggregator 는 여러 파일의 줄을 sessionId 로 묶어 누적한다.
@@ -268,6 +292,15 @@ func (sa *sessionAgg) addUser(m *rawMessage, ts string) {
 					sa.bucket(hour, sa.model).b.ToolErrors++
 				}
 			}
+			// 편집 계열 tool_use 의 결과면 accept/reject 로 센다(is_error=거부/실패 → reject).
+			if b.ToolUseID != "" && sa.pendingEdit[b.ToolUseID] {
+				delete(sa.pendingEdit, b.ToolUseID)
+				if b.IsError {
+					sa.editsRejected++
+				} else {
+					sa.editsAccepted++
+				}
+			}
 		case "text":
 			sa.slashFrom(b.Text)
 			sa.keywordsFrom(b.Text)
@@ -319,9 +352,35 @@ func (sa *sessionAgg) scanBlocks(content json.RawMessage, _ string) {
 			if json.Unmarshal(b.Input, &in) == nil && in.Skill != "" {
 				sa.count("skill", policy.NormKeyOf("skill", in.Skill))
 			}
+		case name == "Edit" || name == "Write" || name == "MultiEdit":
+			sa.count("tool", name)
+			sa.editUse(b)
 		default:
 			sa.count("tool", policy.NormKeyOf("tool", name))
 		}
+	}
+}
+
+// editUse 는 편집 계열 tool_use 에서 LOC(추가·삭제 줄 수)를 센다. 내용은 저장하지 않는다 —
+// 줄 수만 집계한다(집계-온리 정책). 그리고 결과 판정(accept/reject)을 위해 id 를 대기 등록한다.
+func (sa *sessionAgg) editUse(b rawBlock) {
+	var in rawToolInput
+	if json.Unmarshal(b.Input, &in) == nil {
+		switch b.Name {
+		case "Write":
+			sa.linesAdded += lineCount(in.Content)
+		case "Edit":
+			sa.linesAdded += lineCount(in.NewString)
+			sa.linesRemoved += lineCount(in.OldString)
+		case "MultiEdit":
+			for _, e := range in.Edits {
+				sa.linesAdded += lineCount(e.NewString)
+				sa.linesRemoved += lineCount(e.OldString)
+			}
+		}
+	}
+	if b.ID != "" {
+		sa.pendingEdit[b.ID] = true
 	}
 }
 
@@ -397,6 +456,10 @@ func (a *Aggregator) Sessions() []payload.Session {
 			WebFetch:    sa.webFetch,
 			Turns:       sa.turns,
 			NoTsTurns:   &noTs,
+			LinesAdded:    sa.linesAdded,
+			LinesRemoved:  sa.linesRemoved,
+			EditsAccepted: sa.editsAccepted,
+			EditsRejected: sa.editsRejected,
 			Counters:    capCounters(sa.counters),
 			Series:      sa.sortedBuckets(),
 		}

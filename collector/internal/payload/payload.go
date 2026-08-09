@@ -48,6 +48,13 @@ type Session struct {
 	// 이 수집기는 항상 값을 세므로 항상 0 이상의 값을 실어 nil 이 아님을 밝힌다.
 	NoTsTurns *int64 `json:"noTsTurns,omitempty"`
 
+	// 개발 지표(파생) — Edit/Write/MultiEdit 에서 센 줄 수와 편집 결과(accept/reject).
+	// 코드 내용은 싣지 않는다(줄 수·횟수만). omitempty 로 구버전 수집기와 호환.
+	LinesAdded    int64 `json:"linesAdded,omitempty"`
+	LinesRemoved  int64 `json:"linesRemoved,omitempty"`
+	EditsAccepted int64 `json:"editsAccepted,omitempty"`
+	EditsRejected int64 `json:"editsRejected,omitempty"`
+
 	// Counters 는 { 축: { 키: 횟수 } } 다. 서버 normCounters 가 이 객체 모양을 기본으로 받는다.
 	Counters map[string]map[string]int64 `json:"counters"`
 

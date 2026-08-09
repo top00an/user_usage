@@ -203,13 +203,22 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 		"/api/usage/sessions": true, "/api/usage/quality": true,
 		"/api/usage/coverage": true, "/api/usage/leaderboard": true,
 		"/api/usage/dispatch": true, "/api/usage/seats": true,
-		"/api/usage/teams": true,
+		"/api/usage/teams": true, "/api/usage/dev": true,
 	}
 	if p == "/api/usage/seats" {
 		return s.routeSeats(w, r, c)
 	}
 	if p == "/api/usage/teams" {
 		return s.routeTeams(w, r, c)
+	}
+	if p == "/api/usage/dev" {
+		days := clampInt(int(numOr(c.query.Get("days"), 30)), 1, 365)
+		tot, byDay, err := store.DevMetrics(r.Context(), days)
+		if err != nil {
+			return true, err
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"totals": tot, "byDay": byDay}, nil)
+		return true, nil
 	}
 	if !known[p] && detail == nil {
 		return false, nil
