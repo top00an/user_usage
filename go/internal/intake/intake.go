@@ -1,5 +1,5 @@
 // Package intake — 사용량 보고 인테이크. 클라이언트 페이로드를 저장 가능한 형태로 좁히는
-// **순수** 계층이다. lib/intake.js 의 포팅.
+// **순수** 계층이다.
 //
 // 왜 별도 패키지인가: 이 지점이 신뢰 경계다. 보고를 보내는 것은 팀원 PC 에서 도는 훅이고,
 // 수집기는 팀원 PC 에 따로 배포되므로 서버보다 낡을 수 있다(구버전이 새 필드를 안 보내거나,
@@ -32,8 +32,8 @@ import (
 
 // 상한과 축 목록.
 //
-// CounterKinds·MaxSeriesPerSession·MaxCountersPerSession 은 현행 JS 에서 lib/store.js 가
-// 갖고 있고 intake 가 require 해서 쓴다. 계약(go/CONTRACT.md)이 이 패키지에 **어떤 내부
+// CounterKinds·MaxSeriesPerSession·MaxCountersPerSession 은 store 패키지도 정의하지만, intake 는
+// 그것을 import 하지 않는다. 계약(go/CONTRACT.md)이 이 패키지에 **어떤 내부
 // import 도 금지**하므로 여기에 다시 둔다 — store 쪽 값과 갈라지면 인테이크가 저장 계층이
 // 받지 않는 행을 만들게 되므로, 둘 중 하나를 고칠 때는 반드시 함께 고친다.
 const (

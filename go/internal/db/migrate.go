@@ -13,7 +13,7 @@ import (
 )
 
 /*
- * 경량 마이그레이션 러너 — 양 방언 공통. 현행 lib/db/migrate.js 를 그대로 옮긴다.
+ * 경량 마이그레이션 러너 — 양 방언 공통.
  *
  *   · schema_migrations(version bigint PK, applied_at text) 버전 테이블
  *   · <dir>/NNNN_*.sql 을 버전 순 적용, 적용본은 기록·스킵(멱등)

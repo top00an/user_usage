@@ -37,7 +37,7 @@ type pgDB struct {
 	sem chan struct{}
 }
 
-// defaultPoolMax 는 현행 lib/db/pg.js 의 기본값(10)과 같다.
+// defaultPoolMax 는 커넥션 풀 상한 기본값(10)이다.
 const defaultPoolMax = 10
 
 var poolMax = defaultPoolMax

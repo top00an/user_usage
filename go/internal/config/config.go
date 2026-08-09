@@ -1,4 +1,4 @@
-// Package config 는 부팅 설정과 **거부 게이트**다. server.js 의 readConfig() 포팅이다.
+// Package config 는 부팅 설정과 **거부 게이트**다.
 //
 // 순수 함수만 둔다(부작용 없음) — 부팅 거부 판단을 서버 기동 없이 검증할 수 있게. 그래서
 // Read 는 os.Getenv 를 부르지 않고 env 맵을 인자로 받는다. 프로세스 환경을 그 맵으로 만드는
@@ -58,7 +58,7 @@ const (
 var Modes = []string{"local", "remote"}
 
 /*
- * 브라우저가 거부하는 포트(WHATWG Fetch "bad ports"). server.js:71~77 을 그대로 옮겼다.
+ * 브라우저가 거부하는 포트(WHATWG Fetch "bad ports").
  * 이 목록에 있는 포트로 띄우면 서버는 멀쩡히 뜨고 curl 도 통과하는데 **브라우저에서만**
  * 아무것도 안 된다. 그래서 부팅에서 끊는다 — 조회 도구라 대체 포트를 고르는 비용이 0 이다.
  */
@@ -240,7 +240,7 @@ func portNumber(raw string) (int, bool) {
 }
 
 /*
- * keywordRetention 은 lib/retention.js 의 configuredDays() 다.
+ * keywordRetention 은 keyword 보존 기한(일)을 읽는다.
  *
  * 'off'·'no'·'false'·'0' → nil(정리기를 띄우지 않는다 = 무기한 보관).
  * 그 밖의 값은 store 가 하한·상한으로 클램프한다 — **상수를 여기 복제하지 않는다.**

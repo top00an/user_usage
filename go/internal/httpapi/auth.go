@@ -82,10 +82,10 @@ func Authenticate(r *http.Request, cfg config.Config) *Auth {
 }
 
 /*
- * parseCookies 는 현행 server.js 의 것을 그대로 옮겼다.
+ * parseCookies 는 Cookie 헤더를 파싱한다.
  *
  * net/http 의 r.Cookie 를 쓰지 않는 이유: 그쪽은 값을 퍼센트 디코딩하지 않는데 클라이언트
- * (public/js/core.js)는 encodeURIComponent 로 넣는다. 디코딩을 빼면 특수문자가 든 토큰이
+ * 프런트(web/)는 encodeURIComponent 로 넣는다. 디코딩을 빼면 특수문자가 든 토큰이
  * 조용히 안 맞는다.
  *
  * PathUnescape 를 쓴다(QueryUnescape 아님) — 후자는 '+' 를 공백으로 바꾸지만

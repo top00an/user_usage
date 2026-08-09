@@ -1,5 +1,8 @@
 # Go 포팅 — 동결 계약
 
+> ⚠ **역사 문서.** 이 문서는 2026-08 완료된 **Node→Go 포팅 계약**이다. 본문의 `lib/*.js`·`server.js`·`public/js/*` 참조는 포팅 당시의 **구(舊) Node 소스**(현재 삭제됨)를 가리키는 이력이며, 현행 소스가 아니다. Go 패키지 경계·시그니처의 계약으로는 여전히 유효하다.
+
+
 이 문서가 **패키지 경계와 시그니처의 단일 출처**다. 오너는 자기 패키지 안에서 자유롭지만,
 여기 적힌 외부 표면은 **바꾸지 않는다.** 바꿔야 할 근거가 생기면 코드가 아니라 이 파일을 먼저
 고치고 PM 에게 알린다 — 네 명이 같은 워킹트리에서 동시에 움직이므로, 시그니처가 조용히 바뀌면
@@ -15,7 +18,7 @@ npm run contract:verify -- --base http://127.0.0.1:8080
 Go 쪽 단위 테스트가 아무리 초록색이어도 이게 빨간불이면 완료가 아니다. 반대도 참이다 —
 이 게이트가 초록불이면 내부 구조는 오너 마음이다.
 
-`npm test`(현행 Node 208개)는 **건드리지 않는다.** 포팅 중에도 Node 서버는 살아 있어야 하고,
+`npm test`(구 Node 208개)는 **건드리지 않는다.** 포팅 중에도 Node 서버는 살아 있어야 하고,
 그것이 골든의 출처이기 때문이다.
 
 ## 레이아웃과 오너십
@@ -119,7 +122,7 @@ func Remedy(msg string) string
 
 ## internal/store  [go-core]
 
-현행 `lib/store.js` 의 모든 공개 함수를 옮긴다. 반환은 도메인 구조체이며 **JSON 태그를 달지
+구 Node `lib/store.js` 의 모든 공개 함수를 옮긴다. 반환은 도메인 구조체이며 **JSON 태그를 달지
 않는다** — 응답 shape 는 `httpapi` 가 소유한다. 여기서 태그를 달면 저장 계층 변경이 곧 API
 변경이 되어, 스키마를 고칠 때마다 화면이 조용히 깨진다.
 
@@ -153,7 +156,7 @@ func RecommendationSummary(ctx) (RecoSummary, error)
 // 보존
 func PruneKeywords(ctx, days int, now time.Time) (int, error)
 // PruneSeries 는 **포팅하되 호출부를 만들지 않는다** — 모델별 값의 소급 교정이
-// 이 표가 온전하다는 데 기댄다(현행 lib/store.js 주석이 단일 출처).
+// 이 표가 온전하다는 데 기댄다(구 Node lib/store.js 주석이 단일 출처).
 
 const (SessionRowsDefault = …; SessionRowsMax = …)   // 현행 값을 그대로 읽어 온다
 var CounterKinds = []string{"tool","bash","slash","skill","agent","mcp","keyword"}
@@ -161,7 +164,7 @@ var CounterKinds = []string{"tool","bash","slash","skill","agent","mcp","keyword
 
 **`UsageByModel` 이 이 포팅의 최난도다.** 세 경로(①series 정확값 ②series 없는 세션의 최빈 모델
 귀속 ③series 가 못 덮은 잔여)를 더해야 하고, **`①+②+③ == Totals` 불변식**이 깨지면 모델별만
-작아져 사람에게는 "유실"로 보인다. 골든에 그 불변식이 박혀 있다. 현행 `lib/store.js:377~502`
+작아져 사람에게는 "유실"로 보인다. 골든에 그 불변식이 박혀 있다. 구 Node `lib/store.js:377~502`
 주석을 반드시 읽고 시작하라 — 왜 ②를 버리면 안 되는지가 실측치와 함께 적혀 있다.
 
 ## internal/identity  [go-core]
@@ -204,7 +207,7 @@ func QuantileSorted(sorted []float64, p float64) float64
 ```
 
 빈 슬라이스에서 죽지 않는다. 부동소수 출력이 Node 와 **바이트 단위로** 같아야 하므로
-(골든이 JSON 숫자를 그대로 비교한다) 분위수 보간식을 현행 `lib/stats.js` 에서 그대로 옮겨라.
+(골든이 JSON 숫자를 그대로 비교한다) 분위수 보간식을 구 Node `lib/stats.js` 에서 그대로 옮겨라.
 "같은 뜻의 다른 식"은 마지막 자리에서 갈린다.
 
 ## internal/tz  [go-pure]
@@ -217,7 +220,7 @@ func LocalHour(iso string, offsetMin int) string   // "YYYY-MM-DDTHH"
 ```
 
 **고정 오프셋이다. IANA 시간대를 쓰지 않는다** — 매 행마다 시간대 변환을 하는 비용을 서머타임
-없는 지역에 지불할 이유가 없다(현행 `lib/tz.js` 의 결정). 서머타임 지역으로 옮길 일이 생기면
+없는 지역에 지불할 이유가 없다(구 Node `lib/tz.js` 의 결정). 서머타임 지역으로 옮길 일이 생기면
 그때 바꾼다.
 
 ## internal/intake  [go-pure]
@@ -256,7 +259,7 @@ func Read(env map[string]string) (Config, []error)   // 잘못된 설정은 **�
 | remote 인데 `DATABASE_URL` 없음 | |
 | 포트가 WHATWG bad ports | 서버는 뜨고 curl 도 200 인데 **브라우저에서만** 죽는다 |
 
-bad ports 목록은 현행 `server.js:71~77` 을 그대로 옮긴다(기본 포트 4191 — **4190 이 아니다**).
+bad ports 목록은 구 Node `server.js:71~77` 을 그대로 옮긴다(기본 포트 4191 — **4190 이 아니다**).
 
 ### 인증
 
@@ -291,7 +294,7 @@ func Authenticate(r *http.Request, cfg Config) *Auth
 **경로 화이트리스트다.** 디렉터리를 열고 `..` 를 막는 대신 나갈 수 있는 URL 을 통째로 열거한다 —
 그러면 경로 탈출이라는 문제 자체가 성립하지 않는다(정규화·심링크·인코딩을 고민할 자리가 없다).
 `go:embed` 로 바이너리에 넣는다. CSP·`X-Frame-Options`·`nosniff`·`Referrer-Policy` 는
-현행 `server.js:289~293, 309~317` 을 그대로 옮긴다.
+구 Node `server.js:289~293, 309~317` 을 그대로 옮긴다.
 
 ### 오류 응답
 
@@ -315,7 +318,7 @@ https 일 때만 `Secure`)에 담고 브라우저가 싣는다. Next 서버가 �
 지켜야 할 것:
 
 - **`status` 로 분기한다, 문구로 하지 않는다.** 에러 문구는 사람이 읽는 글이라 언제든 다듬어지고,
-  분기를 문구에 걸면 그때 화면이 조용히 틀린 쪽으로 넘어간다(현행 `public/js/core.js` 의 `fail`).
+  분기를 문구에 걸면 그때 화면이 조용히 틀린 쪽으로 넘어간다(구 Node `public/js/core.js` 의 `fail`).
 - **근사값을 정확한 값으로 위장하지 않는다.** 모델별 표의 "근거" 열(`fromSeries`/`fromSession`),
   커버리지, `unpriced`, `ttlUnknownRows`, 키워드 보존 기한 — 전부 화면에 남는다.
   이걸 지우면 화면이 더 깔끔해지는데, 그게 이 도구가 하지 않기로 한 일이다.
@@ -334,7 +337,7 @@ https 일 때만 `Secure`)에 담고 브라우저가 싣는다. Next 서버가 �
 
 ## 개정 1 — go-pure 웨이브 후 (PM 확인 완료)
 
-Go 언어 제약과 현행 JS 실제 시그니처 때문에 다음이 계약과 달라졌다. **모두 승인한다** —
+Go 언어 제약과 구 Node JS 실제 시그니처 때문에 다음이 계약과 달라졌다. **모두 승인한다** —
 호출 형태는 계약대로 유지되고 추가된 것뿐이다.
 
 | 계약 원문 | 실제 | 왜 |
@@ -356,7 +359,7 @@ Go 언어 제약과 현행 JS 실제 시그니처 때문에 다음이 계약과 
 ### 감시 항목: intake 와 store 의 상수 중복
 
 `intake` 는 내부 import 가 금지되어 `CounterKinds` · `MaxSeriesPerSession(200)` ·
-`MaxCountersPerSession(400)` 을 **자기 패키지에 다시 정의한다.** 현행 JS 는 `lib/store.js` 것을
+`MaxCountersPerSession(400)` 을 **자기 패키지에 다시 정의한다.** 구 Node JS 는 `lib/store.js` 것을
 `require` 한다.
 
 **갈라지면 인테이크가 저장 계층이 받지 않는 행을 만든다.** 둘 중 하나를 고칠 때 **반드시 함께**
@@ -389,7 +392,7 @@ JS 는 모듈 파일 기준(`__dirname/..`)으로 `config.json` 을 찾지만 �
 |---|---|---|
 | `func Totals(ctx) (Totals, error)` | 타입만 **`TotalsResult`** 로 | 개정 1 의 `Multipliers` 와 같은 Go 제약. 함수 이름을 남겼다 |
 | `SeriesUpsert`/`CountersUpsert` 가 `error` 만 | **`SeriesUpsertN`·`CountersUpsertN`(`(int, error)`) 추가** | 인테이크 응답이 저장 개수를 싣는다(`{"ok":true,"sessions":N,"counters":N,"buckets":N}`). **골든을 맞추려면 go-http 는 `…N` 쪽을 부른다** |
-| — | `RecommendationGapsAt` · `PruneKeywordsDetail` · `MachineActivity` 추가 | 현행 JS 가 쓰는 표면 |
+| — | `RecommendationGapsAt` · `PruneKeywordsDetail` · `MachineActivity` 추가 | 구 Node JS 가 쓰는 표면 |
 
 ### ⚠ go-http 가 반드시 배선할 것 두 가지
 

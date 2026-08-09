@@ -45,7 +45,7 @@ USAGE_ADMIN_TOKEN=$(openssl rand -hex 24) \
 
 `keyword` 축은 어휘가 열려 있는 유일한 축이라 서버가 한 번 더 거릅니다. API 키·토큰 모양
 (벤더 접두사 · 32자 이상 hex · 대소문자+숫자가 섞인 24자 이상 문자열), 이메일과 접속 문자열
-조각, 10자리 이상 연속 숫자, `키=값` 형태는 **저장 전에 버립니다**(`lib/intake.js` 의
+조각, 10자리 이상 연속 숫자, `키=값` 형태는 **저장 전에 버립니다**(`go/internal/intake` 의
 `safeKeyword`). 수집기가 클라이언트에서 먼저 거른다는 전제이지만 신뢰하지 않습니다 — 수집기는
 팀원 PC 에서 도는 별도 프로세스라 서버보다 낡을 수 있고, 무엇보다 한 번 저장되면 지우는 비용이
 훨씬 큽니다. 판정은 언제나 **버리는 쪽으로** 기울입니다.
@@ -202,25 +202,14 @@ LAN 전체에 열립니다 — 이 화면에는 그 기본값을 쓰지 않습�
 
 ---
 
-## 라이브러리로 쓰기
+## 붙이기 (통합)
 
-다른 Node 서버에 라우트를 얹을 수 있습니다. **공개 API 는 `index.js` 하나입니다** —
-`lib/*` 를 직접 require 하지 마세요. 내부를 뒤지기 시작하면 컬럼 이름과 상수가 호스트 코드에 새고,
-그러면 스키마를 바꿀 때마다 호스트가 **컴파일 에러 없이 조용히** 깨집니다.
+Go 바이너리는 **독립 실행 서비스**입니다. 통합은 HTTP 로 합니다 — 사용량은 `POST /api/usage`
+(인테이크 토큰) 로 올리고, 조회는 `/api/usage/*`(관리·열람 토큰) 로 읽습니다. 수집 클라이언트는
+`collector/`(jsonl → POST) 이며, 실시간 경로로 Claude Code 훅을 병행할 수 있습니다.
 
-```js
-const usage = require('user-usage');
-
-await usage.init();                  // 테이블 보장(멱등). sqlite 는 DDL, pg 는 migrations 소유
-const stop = usage.startRetention(); // 보존이 꺼져 있으면 null
-
-// 라우트 체인에 끼운다. **순서가 계약이다** — analytics 가 admin 보다 앞이어야 한다
-// (admin 이 /api/usage 접두사를 통째로 소유하고 안 걸리면 404 를 직접 낸다).
-const routes = [usage.routes.intake, usage.routes.analytics, usage.routes.admin];
-for (const route of routes) if (await route(req, res, ctx)) return;
-```
-
-`ctx` 가 요구하는 필드는 `server.js` 의 `makeCtx()` 가 단일 출처입니다.
+> SaaS 로의 멀티테넌트 인제스트(OTLP 호환·훅·온보딩) 설계는
+> [`docs/PLAN-saas-ingestion.md`](docs/PLAN-saas-ingestion.md) 를 보십시오.
 
 ---
 
@@ -264,43 +253,48 @@ sqlite 는 로드 시점에 DDL 을 직접 겁니다(멱등). PostgreSQL 은 `mi
 ## 개발
 
 ```bash
-npm test              # 208 tests — 순수 로직·집계·라우트·뷰 렌더·RLS 판정·키워드 필터
-npm run test:standalone   # 34 tests — 자식 프로세스를 실제로 띄워 게이트·모드·정적 서빙 검증
-npm run test:all
-node test/require-all.mjs  # 모든 서버측 .js 를 실제 require — 끊어진 경로 탐지
+cd go && go test ./... && go vet ./...          # 백엔드 — 11 패키지
+cd collector && go test ./... && go vet ./...   # 수집기
+cd web && npm test                              # 프런트 — vitest
+bash scripts/build.sh                           # 유일 빌드 경로(web → webroot 임베드 → go build)
 ```
 
-**RLS 위반 롤 대조는 진짜 PostgreSQL 이 있을 때만 돕니다.** 기본 스위트는 닿지 않는 URL 을 써서
-"검사가 돌았다"까지만 증명하고, "위반을 잡는다"는 증명하지 않습니다 — 둘을 묶으면 가드가 아무것도
-안 잡는 상태로 퇴화해도 초록색입니다. 클러스터가 있으면 두 URL 을 넘겨 관문을 켜십시오:
+**계약 회귀(골든 44개)** — Go 서버를 **빈 DB** 로 띄우고 대조합니다(골든은 동결됨):
 
 ```bash
-USAGE_TEST_PG_SUPER_URL=postgres://<슈퍼유저>@127.0.0.1:5432/usage \
-USAGE_TEST_PG_APP_URL=postgres://usage_app:<pw>@127.0.0.1:5432/usage \
-npm run test:standalone
+bash scripts/build.sh
+USAGE_ADMIN_TOKEN=… USAGE_INTAKE_TOKEN=… USAGE_DATA_DIR=$(mktemp -d) \
+  USAGE_PORT=8080 USAGE_KEYWORD_RETENTION_DAYS=off ./go/usage-server &
+npm run contract:verify -- --base http://127.0.0.1:8080
 ```
 
-앱 롤은 `CREATE ROLE usage_app LOGIN NOSUPERUSER NOBYPASSRLS` 로 만듭니다. 스키마는 필요 없습니다 —
-remote 부팅은 원격 DB 에 아무것도 쓰지 않고 프로브는 `pg_roles` 만 읽습니다.
+**RLS 위반 롤 대조는 진짜 PostgreSQL 이 있을 때만 돕니다.** pg 통합 테스트는 URL 을 주면
+켜지고(없으면 skip), 앱 롤로 크로스테넌트 격리·`?→$n`·커넥션 풀을 실측합니다:
 
-테스트는 `npm install` 없이 돕니다(sqlite 는 node 내장, `pg` 는 remote 모드에서만 로드).
-프로세스마다 임시 데이터 디렉터리가 물립니다(`test/sqlite-setup.mjs`) — 안 그러면 여러 테스트
-프로세스가 같은 sqlite 파일을 열어 `database is locked` 가 **매번 다른 파일에서** 터집니다.
+```bash
+USAGE_TEST_PG_URL=postgres://usage_app:<pw>@127.0.0.1:5432/<db> \
+  go test ./go/internal/db/ -run PG -v
+```
+
+앱 롤은 `CREATE ROLE usage_app LOGIN NOSUPERUSER NOBYPASSRLS` 로 만듭니다. remote 부팅은 원격 DB 에
+아무것도 쓰지 않고 프로브는 `pg_roles` 만 읽습니다.
+
+### 구조
 
 ```
-server.js          HTTP 진입점 — 인증 게이트·정적 서빙·모드 분기
-index.js           라이브러리 공개 API(호스트가 통과하는 유일한 문)
-lib/
-  store.js         사용량 저장·집계(이 레포에서 가장 큰 파일)
-  intake.js        클라이언트 보고 정규화 — 신뢰 경계
-  identity.js      머신 → 계정 귀속(+ 과거 행 소급 재스탬프)
-  cost.js          토큰 → 비용 환산(읽을 때마다 계산)
-  stats.js  tz.js  분포 · 집계 시간대
-  retention.js     키워드 보존 정리기
-  audit.js         관리 동작 감사 로그
-  tenant.js        AsyncLocalStorage 테넌트 컨텍스트
-  db/              sqlite | pg 어댑터(동일한 q/tx/dialect 계약)
-routes/            usage.js(관리·인테이크) · usage-analytics.js(관측)
-public/            셸 · 뷰 2개 · core.js(빌드 없음)
-migrations/pg/     PostgreSQL 스키마
+go/
+  cmd/usage-server/   실행 진입점 — 부팅 게이트·시그널·보존 정리기
+  internal/
+    httpapi/          HTTP — 라우터·인증 게이트·정적 서빙·인테이크/관측 라우트
+    store/            사용량 저장·집계(가장 큰 패키지)
+    intake/           클라이언트 보고 정규화 — 신뢰 경계(순수)
+    identity/         머신 → 계정 귀속(+ 소급 재스탬프)·감사
+    cost/  stats/     토큰 → 비용 · 분포(p95/p99)
+    tz/  tenant/      집계 시간대(고정 KST) · 테넌트 컨텍스트
+    db/               sqlite | pg 어댑터 · 마이그레이션 러너 · RLS 가드
+    config/           부팅 설정 · 거부 게이트
+web/                  Next.js 프런트 — 빌드 산출물이 webroot 로 임베드됨
+collector/            수집기 — ~/.claude jsonl → POST /api/usage
+contract/             계약 검증 하네스 + 동결 골든 44개
+migrations/pg/        PostgreSQL 스키마
 ```
