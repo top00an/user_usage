@@ -68,7 +68,11 @@ func quantile(sorted []float64, p float64) (float64, bool) {
 	}
 	q = math.Max(0, math.Min(1, q))
 
-	idx := float64(n-1) * q
+	// idx 도 mulRounded 로 강제 반올림한다. 그냥 `float64(n-1)*q` 로 두면 arm64 가
+	// 이 곱을 아래 `idx-float64(lo)` 뺄셈과 FMA(fma(n-1,q,-lo)) 로 융합해 반올림이
+	// 한 번만 일어나고, idx 를 먼저 반올림한 뒤 빼는 Node(V8)와 p95 마지막 비트가
+	// 갈린다(26.849999999999994 vs …998). 배리어로 idx 를 먼저 굳혀 순서를 맞춘다.
+	idx := mulRounded(float64(n-1), q)
 	lo := int(math.Floor(idx))
 	hi := int(math.Ceil(idx))
 	if lo == hi {

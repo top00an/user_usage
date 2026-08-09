@@ -298,7 +298,7 @@ func UsageModelAxis(ctx context.Context) (ModelAxis, error) {
 			" SUM(CASE WHEN s.no_ts_turns IS NULL THEN 1 ELSE 0 END) nts_unknown"+
 			" FROM usage_sessions s"+
 			" LEFT JOIN ("+seriesPerSession+") x ON x.sid = s.session_id"+
-			" GROUP BY 1 ORDER BY 2 DESC")
+			" GROUP BY 1 ORDER BY 2 DESC, 1 DESC")
 	if err != nil {
 		return out, err
 	}

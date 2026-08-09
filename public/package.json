@@ -1,5 +1,0 @@
-{
-  "_comment": "public/ 는 브라우저 ESM 이다. 레포 루트가 type=commonjs 라, 이 마커가 없으면 node 가 public/*.js 를 CJS 로 읽어 `export` 에서 죽는다(뷰를 노드에서 import 해 검증하는 테스트가 그 자리에서 실패한다). 브라우저는 이 파일을 보지 않는다 — 순전히 node 의 모듈 판정용이다.",
-  "type": "module",
-  "private": true
-}

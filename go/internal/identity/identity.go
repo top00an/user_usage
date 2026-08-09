@@ -310,7 +310,7 @@ func Unmapped(ctx context.Context) ([]UnmappedMachine, error) {
 		"SELECT s.machine, MIN(s.username) username, COUNT(*) sessions FROM usage_sessions s"+
 			" LEFT JOIN machine_identity m ON m.machine = s.machine"+
 			" WHERE s.machine IS NOT NULL AND m.machine IS NULL"+
-			" GROUP BY s.machine ORDER BY sessions DESC")
+			" GROUP BY s.machine ORDER BY sessions DESC, s.machine DESC")
 	if err != nil {
 		return nil, err
 	}
