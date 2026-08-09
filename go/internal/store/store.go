@@ -179,6 +179,16 @@ var sqliteDDL = []string{
 		team TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_team_members_team ON team_members(team)`,
+
+	// 개인 열람 토큰(RBAC) — 한 토큰=한 사용자. 평문은 안 저장(해시만). sqlite 는 단일 테넌트라
+	// tenant_id 없음(pg 는 migrations/pg/0032 소유).
+	`CREATE TABLE IF NOT EXISTS member_tokens (
+		token_hash TEXT PRIMARY KEY,
+		username TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		revoked_at TEXT
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_member_tokens_user ON member_tokens(username)`,
 }
 
 // Init 은 저장소를 이 DB 에 건다. sqlite 는 DDL 을 직접 걸어 **멱등하게** 초기화하고,
