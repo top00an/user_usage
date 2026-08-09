@@ -1,0 +1,10 @@
+{
+  "request": "GET /api/usage/series?metric=vibes",
+  "auth": "admin",
+  "status": 400,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "error": "metric 은 cost|tokens|sessions|turns 중 하나입니다"
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "request": "GET /api/usage/series?from=2026-07-28&to=2026-08-05&metric=tokens&interval=day",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "attribution": "session-start-day",
+    "groupBy": [],
+    "interval": "day",
+    "metric": "tokens",
+    "modelAttribution": "session-dominant",
+    "pricedAt": "2026-08-04",
+    "sample": {
+      "limit": 5000,
+      "rows": 8,
+      "truncated": false
+    },
+    "series": [
+      {
+        "key": {},
+        "label": "전체",
+        "points": [
+          {
+            "t": "2026-07-28",
+            "v": 1300
+          },
+          {
+            "t": "2026-07-30",
+            "v": 97800
+          },
+          {
+            "t": "2026-07-31",
+            "v": 169500
+          },
+          {
+            "t": "2026-08-01",
+            "v": 7600
+          },
+          {
+            "t": "2026-08-02",
+            "v": 241000
+          },
+          {
+            "t": "2026-08-03",
+            "v": 44000
+          },
+          {
+            "t": "2026-08-04",
+            "v": 22800
+          },
+          {
+            "t": "2026-08-05",
+            "v": 0
+          }
+        ],
+        "total": 584000
+      }
+    ],
+    "timezone": "KST",
+    "unpriced": [
+      "some-unreleased-model-x"
+    ]
+  }
+}

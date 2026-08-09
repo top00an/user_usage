@@ -1,0 +1,80 @@
+{
+  "request": "GET /api/usage/leaderboard?from=2026-07-28&to=2026-08-05",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "pricedAt": "2026-08-04",
+    "sample": {
+      "limit": 5000,
+      "rows": 8,
+      "truncated": false
+    },
+    "unpriced": [
+      "some-unreleased-model-x"
+    ],
+    "users": [
+      {
+        "cacheHitRate": 0.9386281588447654,
+        "priced": true,
+        "sessions": 2,
+        "tokens": 285000,
+        "turns": 40,
+        "usd": 0.38249999999999995,
+        "usdPerSession": 0.19124999999999998,
+        "username": "carol"
+      },
+      {
+        "cacheHitRate": 0.929368029739777,
+        "priced": true,
+        "sessions": 1,
+        "tokens": 169500,
+        "turns": 21,
+        "usd": 0.34575000000000006,
+        "usdPerSession": 0.34575000000000006,
+        "username": "bob"
+      },
+      {
+        "cacheHitRate": 0.9099901088031652,
+        "priced": true,
+        "sessions": 2,
+        "tokens": 105400,
+        "turns": 16,
+        "usd": 0.0752,
+        "usdPerSession": 0.0376,
+        "username": "alice"
+      },
+      {
+        "cacheHitRate": 0.9090909090909091,
+        "priced": true,
+        "sessions": 1,
+        "tokens": 1300,
+        "turns": 2,
+        "usd": 0.0012000000000000001,
+        "usdPerSession": 0.0012000000000000001,
+        "username": "frank"
+      },
+      {
+        "cacheHitRate": 0.9389671361502347,
+        "priced": false,
+        "sessions": 1,
+        "tokens": 22800,
+        "turns": 5,
+        "usd": 0,
+        "usdPerSession": 0,
+        "username": "dave"
+      },
+      {
+        "cacheHitRate": 0,
+        "priced": true,
+        "sessions": 1,
+        "tokens": 0,
+        "turns": 0,
+        "usd": 0,
+        "usdPerSession": 0,
+        "username": "erin"
+      }
+    ]
+  }
+}

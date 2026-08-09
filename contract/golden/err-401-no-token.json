@@ -1,0 +1,10 @@
+{
+  "request": "GET /api/usage/summary",
+  "auth": "none",
+  "status": 401,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "Bearer realm=\"usage\"",
+  "body": {
+    "error": "unauthorized"
+  }
+}

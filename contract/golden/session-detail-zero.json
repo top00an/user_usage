@@ -1,0 +1,41 @@
+{
+  "request": "GET /api/usage/sessions/S7-erin-zero-session",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "cost": {
+      "byAxis": {
+        "cacheCreate": 0,
+        "cacheRead": 0,
+        "input": 0,
+        "output": 0
+      },
+      "exact": false,
+      "priced": true,
+      "pricedAt": "2026-08-04",
+      "usd": 0
+    },
+    "counters": {},
+    "note": "keyword 축은 세션 단위로 제공하지 않는다(프롬프트 재구성 방지).",
+    "series": [],
+    "session": {
+      "cacheCreate": 0,
+      "cacheRead": 0,
+      "endedAt": null,
+      "input": 0,
+      "machine": "host-e",
+      "model": "claude-sonnet-5",
+      "output": 0,
+      "project": "lab",
+      "reportedAt": "<string>",
+      "sessionId": "S7-erin-zero-session",
+      "startedAt": "2026-08-05T00:00:00.000Z",
+      "turns": 0,
+      "username": "erin",
+      "webFetch": 0,
+      "webSearch": 0
+    }
+  }
+}

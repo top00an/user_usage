@@ -1,0 +1,10 @@
+{
+  "request": "GET /api/usage/series?interval=minute",
+  "auth": "admin",
+  "status": 400,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "error": "interval 은 day|hour|week 중 하나입니다"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "request": "GET /api/usage/sessions/does-not-exist",
+  "auth": "admin",
+  "status": 404,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "error": "없는 세션"
+  }
+}

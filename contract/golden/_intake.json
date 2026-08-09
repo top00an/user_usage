@@ -1,0 +1,49 @@
+{
+  "identity": {
+    "machine": "host-f",
+    "moved": {
+      "counters": 1,
+      "sessions": 1
+    },
+    "ok": true,
+    "username": "frank"
+  },
+  "intake": [
+    {
+      "buckets": 2,
+      "counters": 16,
+      "ok": true,
+      "sessions": 2
+    },
+    {
+      "buckets": 0,
+      "counters": 6,
+      "ok": true,
+      "sessions": 1
+    },
+    {
+      "buckets": 4,
+      "counters": 11,
+      "ok": true,
+      "sessions": 2
+    },
+    {
+      "buckets": 0,
+      "counters": 2,
+      "ok": true,
+      "sessions": 1
+    },
+    {
+      "buckets": 0,
+      "counters": 0,
+      "ok": true,
+      "sessions": 1
+    },
+    {
+      "buckets": 0,
+      "counters": 1,
+      "ok": true,
+      "sessions": 1
+    }
+  ]
+}

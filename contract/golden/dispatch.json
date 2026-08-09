@@ -1,0 +1,91 @@
+{
+  "request": "GET /api/usage/dispatch",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "agents": [
+      {
+        "generic": 9,
+        "items": [
+          {
+            "count": 9,
+            "key": "general-purpose"
+          }
+        ],
+        "role": 0,
+        "total": 9,
+        "username": "bob"
+      },
+      {
+        "generic": 3,
+        "items": [
+          {
+            "count": 4,
+            "key": "frontend-engineer"
+          },
+          {
+            "count": 3,
+            "key": "Explore"
+          },
+          {
+            "count": 2,
+            "key": "design-engineer"
+          }
+        ],
+        "role": 6,
+        "total": 9,
+        "username": "carol"
+      },
+      {
+        "generic": 1,
+        "items": [
+          {
+            "count": 2,
+            "key": "backend-engineer"
+          },
+          {
+            "count": 1,
+            "key": "general-purpose"
+          }
+        ],
+        "role": 2,
+        "total": 3,
+        "username": "alice"
+      }
+    ],
+    "generic": [
+      "general-purpose",
+      "Explore",
+      "Plan",
+      "claude"
+    ],
+    "skills": [
+      {
+        "items": [
+          {
+            "count": 3,
+            "key": "superpowers:test-driven-development"
+          }
+        ],
+        "total": 3,
+        "username": "alice"
+      },
+      {
+        "items": [
+          {
+            "count": 2,
+            "key": "artifacts-builder"
+          },
+          {
+            "count": 1,
+            "key": "apple-design"
+          }
+        ],
+        "total": 3,
+        "username": "carol"
+      }
+    ]
+  }
+}

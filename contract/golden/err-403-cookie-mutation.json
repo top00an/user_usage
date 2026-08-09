@@ -1,0 +1,10 @@
+{
+  "request": "DELETE /api/usage/identity?machine=host-a",
+  "auth": "cookie",
+  "status": 403,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "error": "쿠키 인증으로는 상태변경을 할 수 없습니다 — Authorization: Bearer 를 사용하세요"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "request": "GET /api/usage/quality?from=2026-07-28&to=2026-08-05",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "coverage": {
+      "sessionsTotal": 8,
+      "sessionsWithSeries": 3
+    },
+    "latencyAvgMs": 4687.5,
+    "latencyMaxMs": 14000,
+    "latencyTurns": 48,
+    "refusalRate": 0.020833333333333332,
+    "sample": {
+      "limit": 5000,
+      "rows": 8,
+      "truncated": false
+    },
+    "stopMaxRate": 0.020833333333333332,
+    "stopMaxTokens": 1,
+    "stopRefusal": 1,
+    "toolErrorRate": 0.0625,
+    "toolErrors": 3,
+    "turns": 48
+  }
+}

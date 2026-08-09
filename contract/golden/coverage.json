@@ -1,0 +1,60 @@
+{
+  "request": "GET /api/usage/coverage",
+  "auth": "admin",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "wwwAuthenticate": "",
+  "body": {
+    "now": "<string>",
+    "reporters": [
+      {
+        "lastReportedAt": "<string>",
+        "lastStartedAt": "2026-07-28T12:00:00.000Z",
+        "machine": "host-f",
+        "sendsSeries": false,
+        "sessions": 1,
+        "username": "frank"
+      },
+      {
+        "lastReportedAt": "<string>",
+        "lastStartedAt": "2026-08-05T00:00:00.000Z",
+        "machine": "host-e",
+        "sendsSeries": false,
+        "sessions": 1,
+        "username": "erin"
+      },
+      {
+        "lastReportedAt": "<string>",
+        "lastStartedAt": "2026-08-04T11:00:00.000Z",
+        "machine": "host-d",
+        "sendsSeries": false,
+        "sessions": 1,
+        "username": "dave"
+      },
+      {
+        "lastReportedAt": "<string>",
+        "lastStartedAt": "2026-08-03T09:00:00.000Z",
+        "machine": "host-c",
+        "sendsSeries": true,
+        "sessions": 2,
+        "username": "carol"
+      },
+      {
+        "lastReportedAt": "<string>",
+        "lastStartedAt": "2026-07-31T08:00:00.000Z",
+        "machine": "host-b",
+        "sendsSeries": false,
+        "sessions": 1,
+        "username": "bob"
+      },
+      {
+        "lastReportedAt": "<string>",
+        "lastStartedAt": "2026-08-01T05:30:00.000Z",
+        "machine": "host-a",
+        "sendsSeries": true,
+        "sessions": 2,
+        "username": "alice"
+      }
+    ]
+  }
+}
