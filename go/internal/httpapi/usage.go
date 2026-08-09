@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -57,9 +58,16 @@ func (s *server) routeIntake(w http.ResponseWriter, r *http.Request, c *rctx) (b
 	// 수집기는 best-effort 경로라 여기서 400 을 내면 그 사람 사용량이 통째로 사라진다.
 	payload, _ := intake.NormPayload(raw)
 
-	ctx := r.Context()
+	resp := s.storeSessions(r.Context(), payload.Sessions)
+	writeJSON(w, http.StatusOK, resp, nil)
+	return true, nil
+}
+
+// storeSessions 는 정규화된 세션들을 store 에 쓴다(서버 권위 귀속·멱등 포함). 인테이크
+// (/api/usage)와 OTLP(/v1/logs)가 공유한다 — 두 진입점이 같은 저장 규율을 타게 한다.
+func (s *server) storeSessions(ctx context.Context, sessions []intake.Session) intakeResponse {
 	stored, counters, buckets := 0, 0, 0
-	for _, sess := range payload.Sessions {
+	for _, sess := range sessions {
 		/*
 		 * 서버 권위 귀속 — 머신 매핑이 걸려 있으면 클라이언트가 보낸 사용자명을 **덮어쓴다.**
 		 *
@@ -127,10 +135,7 @@ func (s *server) routeIntake(w http.ResponseWriter, r *http.Request, c *rctx) (b
 		}
 	}
 
-	writeJSON(w, http.StatusOK, intakeResponse{
-		OK: true, Sessions: stored, Counters: counters, Buckets: buckets,
-	}, nil)
-	return true, nil
+	return intakeResponse{OK: true, Sessions: stored, Counters: counters, Buckets: buckets}
 }
 
 func deref(p *string) string {

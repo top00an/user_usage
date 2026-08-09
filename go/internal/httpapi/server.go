@@ -71,7 +71,7 @@ func New(cfg config.Config) http.Handler {
 	if cfg.ReadOnly {
 		s.routes = []route{s.routeAnalytics, s.readOnlyAdmin}
 	} else {
-		s.routes = []route{s.routeIntake, s.routeAnalytics, s.routeAdmin}
+		s.routes = []route{s.routeIntake, s.routeOTLP, s.routeAnalytics, s.routeAdmin}
 	}
 	return s
 }
@@ -124,7 +124,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if !hasPrefix(p, "/api/") {
+	// /api/* 는 대시보드·인테이크, /v1/* 는 OTLP 수신구. 둘 다 게이트를 탄다.
+	if !hasPrefix(p, "/api/") && !hasPrefix(p, "/v1/") {
 		sendError(tw, http.StatusNotFound, "not found")
 		return
 	}
@@ -144,8 +145,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"WWW-Authenticate": `Bearer realm="usage"`})
 		return
 	}
-	// 인테이크 토큰은 **보고 한 경로만** 연다(패키지 주석 ②').
-	if auth.Scope == ScopeIntake && !(r.Method == http.MethodPost && p == "/api/usage") {
+	// 인테이크 토큰/키는 **보고 경로만** 연다(패키지 주석 ②'). 퍼스트파티(/api/usage)와 OTLP(/v1/logs).
+	if auth.Scope == ScopeIntake && !(r.Method == http.MethodPost && (p == "/api/usage" || p == "/v1/logs")) {
 		sendError(tw, http.StatusForbidden,
 			"인테이크 토큰으로는 조회할 수 없습니다 — 열람은 USAGE_ADMIN_TOKEN 을 사용하세요")
 		return
