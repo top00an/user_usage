@@ -23,7 +23,7 @@ describe('셸 — 게이트 · 탭 · 401 복구', () => {
     expect(await screen.findByLabelText('사용량 대시보드 토큰')).toBeInTheDocument();
   });
 
-  it('토큰을 넣으면 쿠키에 담고 사용 추적을 그린다', async () => {
+  it('토큰을 넣으면 쿠키에 담고 대시보드를 연다 (기본 탭)', async () => {
     mockFetch(allRoutes());
     const user = userEvent.setup();
     render(<Dashboard />);
@@ -32,6 +32,10 @@ describe('셸 — 게이트 · 탭 · 401 복구', () => {
     await user.click(screen.getByRole('button', { name: '열기' }));
 
     expect(readToken()).toBe(TOKEN);
+    // 기본 랜딩은 '대시보드'(overview). 탭이 선택돼 있어야 한다.
+    expect(await screen.findByRole('tab', { name: '대시보드' })).toHaveAttribute('aria-selected', 'true');
+    // 사용 추적으로 이동하면 그 화면이 그려진다.
+    await user.click(screen.getByRole('tab', { name: '사용 추적' }));
     expect(await screen.findByRole('heading', { name: '사용자별' })).toBeInTheDocument();
   });
 
@@ -58,6 +62,7 @@ describe('셸 — 게이트 · 탭 · 401 복구', () => {
 
   it('403 은 게이트로 튕기지 않고 권한 안내를 보여준다 (문구가 아니라 status 로 분기)', async () => {
     writeToken(TOKEN);
+    location.hash = '#/usage'; // 에러 UI 를 surface 하는 탭에서 검사(대시보드는 fail-soft)
     // 문구는 403 과 무관한 아무 글자다 — 그래도 권한 안내가 나와야 한다.
     mockFetch([['/api/usage', { status: 403, body: { error: '설명이 언제든 바뀔 수 있는 문장' } }]]);
     render(<Dashboard />);
@@ -68,6 +73,7 @@ describe('셸 — 게이트 · 탭 · 401 복구', () => {
 
   it('5xx 는 연결 실패로 안내하고 다시 시도를 준다', async () => {
     writeToken(TOKEN);
+    location.hash = '#/usage'; // 에러 UI 를 surface 하는 탭에서 검사(대시보드는 fail-soft)
     mockFetch([['/api/usage', { status: 503, body: { error: '설명' } }]]);
     render(<Dashboard />);
     expect(await screen.findByRole('heading', { name: '서버가 응답하지 못했습니다' })).toBeInTheDocument();
@@ -80,7 +86,7 @@ describe('셸 — 게이트 · 탭 · 401 복구', () => {
     const user = userEvent.setup();
     render(<Dashboard />);
 
-    await screen.findByRole('heading', { name: '사용자별' });
+    await screen.findByRole('tab', { name: '대시보드' });
     await user.click(screen.getByRole('button', { name: '토큰 지우기' }));
 
     expect(await screen.findByText('토큰을 지웠습니다.')).toBeInTheDocument();
@@ -134,8 +140,8 @@ describe('셸 — 게이트 · 탭 · 401 복구', () => {
     render(<Dashboard />);
 
     // 좌측 세로 내비 레일이라 방향키는 위/아래다(WAI-ARIA vertical tablist).
-    const first = await screen.findByRole('tab', { name: '사용 추적' });
-    first.focus();
+    // 화살표는 **선택된 탭** 기준으로 이동하므로 먼저 사용 추적을 선택한다.
+    await user.click(await screen.findByRole('tab', { name: '사용 추적' }));
     await user.keyboard('{ArrowDown}');
     await waitFor(() => expect(screen.getByRole('tab', { name: '사용 관측' })).toHaveAttribute('aria-selected', 'true'));
     await user.keyboard('{ArrowUp}');
@@ -146,6 +152,7 @@ describe('셸 — 게이트 · 탭 · 401 복구', () => {
 describe('사용 추적 — ④ 근사값을 정확한 값으로 위장하지 않는다', () => {
   beforeEach(() => {
     writeToken(TOKEN);
+    location.hash = '#/usage'; // 이 블록은 '사용 추적' 탭 내용을 검사한다(기본 탭은 대시보드)
     mockFetch(allRoutes());
   });
 
@@ -251,6 +258,7 @@ describe('사용 관측 — ④ 나머지 항목', () => {
 describe('XSS — 서버 값을 마크업으로 해석하지 않는다', () => {
   it('사용자 이름에 태그가 들어와도 텍스트로 남는다', async () => {
     writeToken(TOKEN);
+    location.hash = '#/usage'; // byUser(사용 추적) 렌더에서 XSS 안전성 검사
     const s = golden<{ byUser: unknown[] }>('summary');
     const evil = '<img src=x onerror="document.title=\'xss\'">';
     mockFetch([

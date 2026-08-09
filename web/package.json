@@ -15,6 +15,7 @@
     "verify:live": "node scripts/verify-live.mjs"
   },
   "dependencies": {
+    "echarts": "^6.1.0",
     "next": "^16.3.0",
     "react": "19.1.1",
     "react-dom": "19.1.1"

@@ -1,6 +1,15 @@
 import '@testing-library/jest-dom/vitest';
-import { afterEach } from 'vitest';
+import { afterEach, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
+
+// EChart 는 echarts(canvas)를 초기화한다 — jsdom 엔 canvas·ResizeObserver 가 없어 터진다.
+// 차트 렌더 자체는 이 단위 테스트의 대상이 아니므로(브라우저에서 확인) 플레이스홀더로 모킹한다.
+vi.mock('@/components/charts/EChart', () => ({ default: () => null }));
+
+// 혹시 다른 코드가 쓸 때를 대비한 ResizeObserver 폴리필.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+}
 
 afterEach(() => {
   cleanup();
