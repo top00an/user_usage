@@ -3,7 +3,7 @@
 import { useCallback } from 'react';
 import { getDispatch, getSummary } from '@/lib/api';
 import { softly, useResource } from '@/hooks/useResource';
-import type { DayRow, Dispatch, RecommendationSummary, Summary, UserRow } from '@/lib/types';
+import type { Dispatch, Summary, UserRow } from '@/lib/types';
 import { n, shortTokens } from '@/lib/format';
 import { Card, Empty, ErrorState, Loading, TableWrap, TokenCount } from '@/components/ui';
 import ModelTable from './ModelTable';
@@ -73,67 +73,6 @@ function TotalsTiles({ t }: { t: Summary['totals'] }) {
   );
 }
 
-/*
- * 카탈로그 공백 카드 — 이 화면에서 가장 값어치 있는 자리.
- * 추천이 실패한 목표들이 공유하는 토큰을 보여준다. 여기 오래 남는 단어가 곧 만들어야 할 에이전트다.
- */
-function GapCard({ reco }: { reco?: RecommendationSummary }) {
-  const gaps = reco?.gaps ?? [];
-  const total = reco?.total ?? 0;
-  const miss = reco?.miss ?? 0;
-  const rate = total ? Math.round((miss / total) * 100) : 0;
-  return (
-    <Card
-      title="카탈로그 공백"
-      className="mb"
-      accent={gaps.length > 0}
-      aside={<span className="count">추천 {n(total)}건 중 매칭 실패 {n(miss)}건 ({rate}%)</span>}
-    >
-      {gaps.length ? (
-        <>
-          <p className="help mb">
-            <b>매칭이 약했던</b> 목표들이 공유한 단어입니다(점수 1 이하 — 위 &lsquo;실패&rsquo;는 점수 0 만 센 것이라
-            숫자가 다를 수 있습니다). <b>여기 반복해서 오르는 단어가 새 에이전트를 만들 자리</b>입니다.
-          </p>
-          <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-            {gaps.map((g) => <span className="badge" key={g.token}>{g.token} <b>{n(g.count)}</b></span>)}
-          </div>
-        </>
-      ) : (
-        <>
-          <Empty>{total ? '매칭이 약했던 목표가 아직 반복되지 않았습니다.' : '추천 호출 기록이 아직 없습니다.'}</Empty>
-          <p className="help mt-sm">추천 API 를 호출하면 그 관측이 여기에 쌓입니다.</p>
-        </>
-      )}
-    </Card>
-  );
-}
-
-/* 일별 추이 — 막대 하나가 하루. 캐시읽기는 자릿수가 달라 같은 축에 두지 않고 툴팁에만 남긴다. */
-function DayTrend({ rows }: { rows: DayRow[] }) {
-  if (!rows.length) return null;
-  const asc = rows.slice().reverse();
-  const max = Math.max(...asc.map((r) => (r.output || 0) + (r.input || 0)), 1);
-  return (
-    <Card title="일별 추이" className="mb" aside={<span className="help">막대는 입력+출력 · 캐시읽기는 툴팁</span>}>
-      <div className="udays">
-        {asc.map((r) => {
-          const h = Math.max(2, Math.round((((r.output || 0) + (r.input || 0)) / max) * 100));
-          return (
-            <div
-              className="uday"
-              key={r.day}
-              title={`${r.day} · 출력 ${n(r.output)} · 입력 ${n(r.input)} · 캐시읽기 ${n(r.cacheRead)}`}
-            >
-              <div className="uday-bar" style={{ height: `${h}%` }} />
-              <div className="uday-l">{String(r.day || '').slice(5)}</div>
-            </div>
-          );
-        })}
-      </div>
-    </Card>
-  );
-}
 
 function UserTable({ rows }: { rows: UserRow[] }) {
   if (!rows.length) return <Empty>아직 사용량 보고가 없습니다.</Empty>;
@@ -201,21 +140,6 @@ export default function UsageTrackTab() {
 
       <TotalsTiles t={t} />
 
-      {/* 세 입력 축의 관계를 한 줄로. 이게 없으면 '입력(비캐시)' 라는 이름만 남고 왜 작은지는 모른다. */}
-      <p className="help mt-sm">
-        입력(비캐시) + 캐시읽기 + 캐시생성 = 그 세션이 실제로 넣은 입력 전부입니다.
-        같은 맥락을 다시 보낼 때는 캐시읽기로 잡히므로, 캐싱이 잘 도는 사람일수록 입력(비캐시)만 작아집니다.
-      </p>
-
-      {/* 그래프는 '대시보드' 탭이 담당한다. 이 탭은 표·텍스트 중심으로 두고, 각 항목은
-          '그래프로 추가'(PinButton)로 대시보드에 커스텀 패널을 만들 수 있다. */}
-      {!empty && (
-        <p className="help mt-sm">
-          추이·분포 그래프는 <b>대시보드</b> 탭에 있습니다. 아래 표의 <b>그래프로 추가</b> 버튼으로
-          원하는 지표를 대시보드에 패널로 고정할 수 있습니다.
-        </p>
-      )}
-
       {empty && (
         <Card title="아직 보고가 없습니다" className="mt">
           <p className="help">
@@ -230,8 +154,6 @@ export default function UsageTrackTab() {
       )}
 
       <div className="mt">
-        <GapCard reco={d.recommendation} />
-        <DayTrend rows={d.byDay ?? []} />
 
         <Card
           title="사용자별"
