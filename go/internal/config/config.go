@@ -1,4 +1,4 @@
-// Package config 는 부팅 설정과 **거부 게이트**다. server.js 의 readConfig() 포팅이다.
+// Package config 는 부팅 설정과 **거부 게이트**다.
 //
 // 순수 함수만 둔다(부작용 없음) — 부팅 거부 판단을 서버 기동 없이 검증할 수 있게. 그래서
 // Read 는 os.Getenv 를 부르지 않고 env 맵을 인자로 받는다. 프로세스 환경을 그 맵으로 만드는
@@ -58,7 +58,7 @@ const (
 var Modes = []string{"local", "remote"}
 
 /*
- * 브라우저가 거부하는 포트(WHATWG Fetch "bad ports"). server.js:71~77 을 그대로 옮겼다.
+ * 브라우저가 거부하는 포트(WHATWG Fetch "bad ports").
  * 이 목록에 있는 포트로 띄우면 서버는 멀쩡히 뜨고 curl 도 통과하는데 **브라우저에서만**
  * 아무것도 안 된다. 그래서 부팅에서 끊는다 — 조회 도구라 대체 포트를 고르는 비용이 0 이다.
  */
@@ -103,6 +103,18 @@ type Config struct {
 	// ReadOnly 는 모드와 **별개 이름**으로 둔다. 호출부가 "원격이니까"가 아니라 "읽기 전용
 	// 이니까"로 분기해야 나중에 모드가 늘어도 규칙이 흐려지지 않는다.
 	ReadOnly bool
+
+	// MultiTenant 는 SaaS 모드다(USAGE_MULTITENANT). 켜면 인테이크가 단일 토큰이 아니라
+	// **org 별 인제스트 키**로 인증되고, 키가 해석한 tenant 가 요청에 실린다(RLS 격리).
+	// 끄면(기본) 종전대로 단일 tenant·단일 토큰이라 골든 계약이 그대로 유지된다.
+	// 진짜 격리는 pg(RLS)에서만 성립한다 — sqlite 는 단일 테넌트다.
+	MultiTenant bool
+
+	// IntakeRate·IntakeBurst — 멀티테넌트 인테이크 rate limit(테넌트별 토큰버킷).
+	// USAGE_INTAKE_RATE(초당 리필)·USAGE_INTAKE_BURST(버킷 상한). 기본 20/40. 음수면 무제한.
+	// 한 org 의 폭주가 다른 org 의 인테이크를 굶기지 않게 한다. 단일테넌트 경로엔 안 걸린다.
+	IntakeRate  float64
+	IntakeBurst float64
 
 	// KeywordRetentionDays 는 nil 이면 **무기한 보관**이다(정리기를 아예 띄우지 않는다).
 	// 0 이 아니라 nil 인 이유: 0 은 "즉시 삭제"로 읽히고, 그건 여기서 낼 수 있는 값이 아니다.
@@ -207,11 +219,37 @@ func Read(env map[string]string) (Config, []error) {
 		Host:                 host,
 		Tenant:               tenant,
 		DataDir:              get("USAGE_DATA_DIR"),
-		ReadOnly:             mode == "remote",
+		// remote(pg)는 기본 읽기 전용이다(이미 운영 중인 DB 를 들여다보는 용도). 그러나
+		// **멀티테넌트(SaaS)는 pg 에 인테이크를 써야** 하므로 그때는 읽기 전용을 풀어야 한다 —
+		// org 별 격리는 RLS(부팅 프로브가 NOBYPASSRLS 를 강제)가 지므로 쓰기를 열어도 안전하다.
+		ReadOnly:             mode == "remote" && !isTruthy(get("USAGE_MULTITENANT")),
+		MultiTenant:          isTruthy(get("USAGE_MULTITENANT")),
+		IntakeRate:           floatDefault(get("USAGE_INTAKE_RATE"), 20),
+		IntakeBurst:          floatDefault(get("USAGE_INTAKE_BURST"), 40),
 		KeywordRetentionDays: keywordRetention(get("USAGE_KEYWORD_RETENTION_DAYS")),
 		ConfigPath:           configPath(get("USAGE_CONFIG")),
 	}
 	return cfg, errs
+}
+
+// floatDefault 는 float env 를 읽는다. 비었거나 파싱 실패면 dflt.
+func floatDefault(s string, dflt float64) float64 {
+	if s == "" {
+		return dflt
+	}
+	if v, err := strconv.ParseFloat(s, 64); err == nil {
+		return v
+	}
+	return dflt
+}
+
+// isTruthy 는 불리언 env 를 읽는다("1"·"true"·"yes"·"on"). 그 밖은 전부 false.
+func isTruthy(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 func known(mode string) bool {
@@ -240,7 +278,7 @@ func portNumber(raw string) (int, bool) {
 }
 
 /*
- * keywordRetention 은 lib/retention.js 의 configuredDays() 다.
+ * keywordRetention 은 keyword 보존 기한(일)을 읽는다.
  *
  * 'off'·'no'·'false'·'0' → nil(정리기를 띄우지 않는다 = 무기한 보관).
  * 그 밖의 값은 store 가 하한·상한으로 클램프한다 — **상수를 여기 복제하지 않는다.**

@@ -1,0 +1,15 @@
+{
+  "//": "Claude Code settings.json 의 hooks 에 병합한다. command 의 절대경로를 실제 설치 위치로 바꾼다.",
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh /absolute/path/to/deploy/hooks/session-end.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

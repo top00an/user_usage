@@ -1,0 +1,91 @@
+name: ci
+
+# 게이트: 회귀(go test)·골든 계약(contract:verify)·크로스테넌트 격리(pg RLS).
+# 이 셋이 초록이어야 머지한다. 로컬에서 도는 것과 같은 명령을 CI 가 강제한다.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: go vet + test (백엔드 11 패키지)
+        run: cd go && go vet ./... && go test ./... -count=1
+
+      - name: collector test
+        run: cd collector && go vet ./... && go test ./... -count=1
+
+      - name: collector e2e (수집기→서버→조회 전 경로)
+        run: |
+          bash scripts/build.sh
+          go -C collector build -o /tmp/usage-collector ./cmd/usage-collector
+          USAGE_E2E_SERVER_BIN="$PWD/go/usage-server" \
+          USAGE_E2E_COLLECTOR_BIN=/tmp/usage-collector \
+            go -C collector test -run E2E -v -count=1
+
+      - name: web test
+        run: cd web && npm ci && npm test
+
+      - name: build (유일 빌드 경로)
+        run: bash scripts/build.sh
+
+      # 주의: 임베드 드리프트(git diff webroot) 검사는 걸지 않는다 — Next.js/turbopack 이 빌드마다
+      # 청크 파일명 해시를 논결정적으로 낸다. 커밋된 webroot/ 는 배포에 쓰는 유효한 산출물이고,
+      # 재빌드가 "다른 해시의 같은 내용"을 낼 뿐이라 diff 는 항상 갈린다. 드리프트 방어는
+      # static_test.go(TestIndexHTMLReferencesOnlyEmbeddedAssets)가 내용 수준에서 잡는다.
+
+      - name: contract:verify (골든 44)
+        run: |
+          USAGE_ADMIN_TOKEN=contract-admin-token-0123456789 \
+          USAGE_INTAKE_TOKEN=contract-intake-token-9876543210 \
+          USAGE_DATA_DIR=$(mktemp -d) USAGE_HOST=127.0.0.1 USAGE_PORT=8080 \
+          USAGE_KEYWORD_RETENTION_DAYS=off ./go/usage-server &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz && break; sleep 0.5; done
+          npm run contract:verify -- --base http://127.0.0.1:8080
+
+  pg-isolation:
+    # 크로스테넌트 격리 게이트 — pg RLS 는 실제 PostgreSQL 에서만 성립한다.
+    # ⚠ 첫 실행에서 role/grant 셋업을 한 번 검증할 것(로컬에 docker 가 없어 미검증).
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: 앱 롤 + DB 준비 (앱 롤이 마이그레이션을 직접 돌린다)
+        # pg_test.go 의 TestPGMigrateRunnerAppliesAll 이 **앱 롤로** 마이그레이션 러너를 돌려
+        # schema_migrations·usage_* 를 만든다. 그래서 앱 롤에 public 스키마 CREATE 권한을 준다.
+        # Postgres 15+ 는 비소유자에게 public CREATE 를 기본 차단하므로 명시 GRANT 가 필요하다.
+        # 앱 롤이 테이블 소유자가 되지만 migrations 가 FORCE ROW LEVEL SECURITY 라 소유자도 RLS 를
+        # 탄다 — NOSUPERUSER·NOBYPASSRLS 와 합쳐져 크로스테넌트 격리가 성립한다.
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -c "CREATE ROLE usage_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'app'"
+          psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE usage OWNER usage_app"
+          psql -h 127.0.0.1 -U postgres -d usage -c "GRANT ALL ON SCHEMA public TO usage_app"
+
+      - name: pg 통합·격리 게이트
+        env:
+          USAGE_TEST_PG_URL: postgres://usage_app:app@127.0.0.1:5432/usage
+        run: cd go && go test ./internal/db/ -run PG -v -count=1

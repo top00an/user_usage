@@ -25,7 +25,7 @@ npm run contract:verify -- --base http://127.0.0.1:8080   # 포팅본을 골든�
 | 관측 | `distribution` · `quality` · `coverage` · `leaderboard` · `dispatch` · `identity` |
 | **오류 계약** | 401×2 · 403×2 · 400×5 · 404×2 + 쿠키 조회 통과 |
 
-오류 계약을 따로 세는 이유: 화면이 **문자열이 아니라 `status` 로 분기한다**(`public/js/core.js` 의
+오류 계약을 따로 세는 이유: 화면이 **문자열이 아니라 `status` 로 분기한다**(프런트(web/) 의
 `fail()`). 코드가 다르면 예외가 나는 게 아니라 화면이 조용히 틀린 쪽으로 넘어간다.
 
 ## 시드가 밟는 함정

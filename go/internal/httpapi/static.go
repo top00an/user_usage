@@ -107,7 +107,7 @@ var mimeTypes = map[string]string{
 }
 
 /*
- * CSP — server.js:289~293 을 그대로 옮겼다.
+ * CSP — 콘텐츠 보안 정책.
  *
  * ⚠ script-src 는 'self' 로 끝난다. web-next 오너의 빌드 후처리
  *   (web/scripts/externalize-inline-scripts.mjs)가 Next 가 남기는 인라인 <script> 를 전부 파일로
@@ -134,7 +134,7 @@ func resolveStatic(p string) (string, bool) {
  * serveFile — 셸은 **무인증**이다. 데이터는 전부 /api/* 로 오고 그쪽에 게이트가 있다.
  * 화면 껍데기를 가리면 "토큰을 어디에 넣어야 하는가"를 안내할 자리가 사라진다.
  *
- * 보안 헤더는 server.js:309~317 을 그대로 옮겼다.
+ * 보안 헤더를 함께 실어 보낸다.
  */
 func serveFile(w http.ResponseWriter, r *http.Request, embedded string) {
 	buf, err := webroot.ReadFile(embedded)

@@ -1,5 +1,4 @@
-// Package httpapi 는 HTTP 진입점이다 — server.js 의 라우터·인증·정적 서빙과 routes/*.js 를
-// 여기로 옮겼다.
+// Package httpapi 는 HTTP 진입점이다 — 라우터·인증·정적 서빙·사용량 라우트를 한곳에 모은다.
 //
 // ── 이 패키지가 지는 세 가지 책임 ─────────────────────────────────────────────
 // 각각을 빠뜨리면 조용한 사고가 된다:
@@ -28,6 +27,7 @@ import (
 	"net/url"
 
 	"github.com/tscorp/user-usage/internal/config"
+	"github.com/tscorp/user-usage/internal/org"
 	"github.com/tscorp/user-usage/internal/tenant"
 )
 
@@ -44,8 +44,9 @@ type rctx struct {
 type route func(http.ResponseWriter, *http.Request, *rctx) (bool, error)
 
 type server struct {
-	cfg    config.Config
-	routes []route
+	cfg     config.Config
+	routes  []route
+	limiter *rateLimiter // 멀티테넌트 인테이크 rate limit. 단일테넌트면 nil(무제한).
 }
 
 /*
@@ -62,10 +63,16 @@ type server struct {
  */
 func New(cfg config.Config) http.Handler {
 	s := &server{cfg: cfg}
+	// burst<=0 이면 리미터를 만들지 않는다(무제한) — 제로값 설정이 "모든 요청 429"로
+	// 뒤집히는 footgun 을 막는다. 프로덕션 기본값은 config.Read 가 20/40 으로 채운다.
+	if cfg.MultiTenant && cfg.IntakeBurst > 0 {
+		s.limiter = newRateLimiter(cfg.IntakeRate, cfg.IntakeBurst)
+	}
 	if cfg.ReadOnly {
-		s.routes = []route{s.routeAnalytics, s.readOnlyAdmin}
+		// export 는 조회이므로 readOnly 에서도 유효하다(analytics 앞에 둬 admin 이 삼키기 전에 잡는다).
+		s.routes = []route{s.routeOTLPExport, s.routeAnalytics, s.readOnlyAdmin}
 	} else {
-		s.routes = []route{s.routeIntake, s.routeAnalytics, s.routeAdmin}
+		s.routes = []route{s.routeIntake, s.routeOTLP, s.routeOTLPExport, s.routeAnalytics, s.routeAdmin}
 	}
 	return s
 }
@@ -118,19 +125,29 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if !hasPrefix(p, "/api/") {
+	// /api/* 는 대시보드·인테이크, /v1/* 는 OTLP 수신구. 둘 다 게이트를 탄다.
+	if !hasPrefix(p, "/api/") && !hasPrefix(p, "/v1/") {
 		sendError(tw, http.StatusNotFound, "not found")
 		return
 	}
 
 	auth := Authenticate(r, s.cfg)
+	// 멀티테넌트(SaaS): cfg 토큰으로 못 뚫렸으면 Bearer 를 org 인제스트 키로 해석한다 —
+	// 성공하면 보고(intake) 스코프 + 해석된 tenant. 실패하면 종전대로 401.
+	if auth == nil && s.cfg.MultiTenant {
+		if bearer := bearerToken(r); bearer != "" {
+			if t, _, ok, err := org.Resolve(r.Context(), bearer); err == nil && ok {
+				auth = &Auth{Via: ViaHeader, Scope: ScopeIntake, Tenant: t}
+			}
+		}
+	}
 	if auth == nil {
 		writeJSON(tw, http.StatusUnauthorized, errBody{Error: "unauthorized"},
 			map[string]string{"WWW-Authenticate": `Bearer realm="usage"`})
 		return
 	}
-	// 인테이크 토큰은 **보고 한 경로만** 연다(패키지 주석 ②').
-	if auth.Scope == ScopeIntake && !(r.Method == http.MethodPost && p == "/api/usage") {
+	// 인테이크 토큰/키는 **보고 경로만** 연다(패키지 주석 ②'). 퍼스트파티(/api/usage)와 OTLP(/v1/logs).
+	if auth.Scope == ScopeIntake && !(r.Method == http.MethodPost && (p == "/api/usage" || p == "/v1/logs")) {
 		sendError(tw, http.StatusForbidden,
 			"인테이크 토큰으로는 조회할 수 없습니다 — 열람은 USAGE_ADMIN_TOKEN 을 사용하세요")
 		return
@@ -143,7 +160,17 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ③ 테넌트 스코프 — 요청 1지점에서 감싼다. pg 의 모든 쿼리가 이 값을 RLS 로 받는다.
-	r = r.WithContext(tenant.With(r.Context(), s.cfg.Tenant))
+	// 멀티테넌트 모드에서 인제스트 키가 해석한 tenant 가 있으면 그것을, 없으면 cfg.Tenant.
+	tenantID := s.cfg.Tenant
+	if auth.Tenant != "" {
+		tenantID = auth.Tenant
+	}
+	// 멀티테넌트 인테이크 rate limit — 테넌트별 토큰버킷. 한 org 의 폭주가 남을 굶기지 않게.
+	if auth.Scope == ScopeIntake && !s.limiter.allow(tenantID) {
+		sendError(tw, http.StatusTooManyRequests, "요청이 너무 잦습니다 — 잠시 후 다시 시도하세요")
+		return
+	}
+	r = r.WithContext(tenant.With(r.Context(), tenantID))
 	c := &rctx{path: p, query: r.URL.Query(), scope: auth.Scope}
 
 	for _, rt := range s.routes {
