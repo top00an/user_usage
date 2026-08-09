@@ -5,6 +5,7 @@ import { setUnauthorizedHandler } from '@/lib/api';
 import { clearToken, subscribeToken, tokenServerSnapshot, tokenSnapshot, writeToken } from '@/lib/token';
 import { ToastProvider } from '@/components/Toast';
 import TokenGate from '@/components/TokenGate';
+import StatRow from '@/components/StatRow';
 import UsageTrackTab from '@/components/usagetrack/UsageTrackTab';
 import UsageObsTab from '@/components/usageobs/UsageObsTab';
 
@@ -18,8 +19,18 @@ import UsageObsTab from '@/components/usageobs/UsageObsTab';
  */
 
 const TABS = [
-  { id: 'usage', label: '사용 추적' },
-  { id: 'usageobs', label: '사용 관측' },
+  {
+    id: 'usage',
+    label: '사용 추적',
+    desc: '누가 · 무엇을 · 얼마나 — 총계 · 일별 추이 · 모델별',
+    icon: 'M3 13h4v7H3v-7Zm7-9h4v16h-4V4Zm7 5h4v11h-4V9Z', // 막대 그래프
+  },
+  {
+    id: 'usageobs',
+    label: '사용 관측',
+    desc: '왜 그 숫자인가 — 비용 · 좌석 · 팀 · 분포',
+    icon: 'M12 3a9 9 0 1 0 9 9h-9V3Z M13 3a9 9 0 0 1 8 8h-8V3Z', // 도넛/분해
+  },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -82,59 +93,77 @@ export default function Dashboard() {
   if (auth === 'unknown') return <div className="login-wrap"><div className="muted">로딩 중…</div></div>;
   if (auth === 'no') return <TokenGate note={note} onSubmit={openWith} />;
 
+  const active = TABS.find((t) => t.id === tab) ?? TABS[0];
+
   return (
     <ToastProvider>
       <a className="skip-link" href="#tabpanel">본문으로 건너뛰기</a>
-      <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column' }}>
-        <header className="topbar">
-          <div className="logo" aria-hidden="true" />
-          <h1>사용량 대시보드</h1>
-          <span className="help">독립 기동 · 조회 전용</span>
-          <span className="spacer" />
-          <button className="ghost" id="signout" type="button" onClick={signOut}>토큰 지우기</button>
-        </header>
-
-        <div className="main" style={{ flex: 1 }}>
-          <div className="view">
-            <div className="tabs" role="tablist" aria-label="화면">
-              {TABS.map((t) => {
-                const on = t.id === tab;
-                return (
-                  <button
-                    key={t.id}
-                    id={`shelltab-${t.id}`}
-                    type="button"
-                    role="tab"
-                    className="tab"
-                    aria-selected={on}
-                    aria-controls="tabpanel"
-                    tabIndex={on ? 0 : -1}
-                    onClick={() => selectTab(t.id)}
-                    onKeyDown={(e) => {
-                      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-                      e.preventDefault();
-                      const i = TABS.findIndex((x) => x.id === tab);
-                      const next = TABS[(i + (e.key === 'ArrowRight' ? 1 : -1) + TABS.length) % TABS.length]!;
-                      selectTab(next.id);
-                      requestAnimationFrame(() => document.getElementById(`shelltab-${next.id}`)?.focus());
-                    }}
-                  >
-                    {t.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/*
-              ② key 로 탭마다 트리를 통째로 새로 만든다 — 현행의 "pane 을 갈아끼운다"와 같은 뜻이다.
-              앞 탭의 useEffect 정리 함수가 그 자리에서 돌아 진행 중인 요청이 abort 되고,
-              늦게 도착한 응답은 정리 플래그에 걸려 버려진다(hooks/useResource.ts).
-            */}
-            <div id="tabpanel" role="tabpanel" aria-labelledby={`shelltab-${tab}`} tabIndex={-1}>
-              {tab === 'usage' ? <UsageTrackTab key="usage" /> : <UsageObsTab key="usageobs" />}
-            </div>
+      <div className="app-shell">
+        {/* ── 좌측 내비게이션 레일 ── */}
+        <aside className="sidebar">
+          <div className="brand">
+            <span className="brand-mark" aria-hidden="true" />
+            <span className="brand-name">사용량<br />대시보드</span>
           </div>
-        </div>
+
+          <nav className="side-nav" role="tablist" aria-orientation="vertical" aria-label="화면">
+            {TABS.map((t) => {
+              const on = t.id === tab;
+              return (
+                <button
+                  key={t.id}
+                  id={`shelltab-${t.id}`}
+                  type="button"
+                  role="tab"
+                  className="side-item"
+                  aria-selected={on}
+                  aria-controls="tabpanel"
+                  tabIndex={on ? 0 : -1}
+                  onClick={() => selectTab(t.id)}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+                    e.preventDefault();
+                    const i = TABS.findIndex((x) => x.id === tab);
+                    const next = TABS[(i + (e.key === 'ArrowDown' ? 1 : -1) + TABS.length) % TABS.length]!;
+                    selectTab(next.id);
+                    requestAnimationFrame(() => document.getElementById(`shelltab-${next.id}`)?.focus());
+                  }}
+                >
+                  <svg className="side-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d={t.icon} />
+                  </svg>
+                  <span>{t.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="side-foot">
+            <span className="badge ok" title="이 서버는 데이터를 쓰지 않고 조회만 합니다">조회 전용</span>
+            <button className="ghost" id="signout" type="button" onClick={signOut}>토큰 지우기</button>
+          </div>
+        </aside>
+
+        {/* ── 본문 ── */}
+        <main className="content">
+          <header className="content-head">
+            <div>
+              <h1>{active.label}</h1>
+              <p className="content-desc">{active.desc}</p>
+            </div>
+          </header>
+
+          {/* Live Status — 두 탭 위에 항상 뜨는 상태 타일 행(관리자 전용, member 는 자동 숨김). */}
+          <StatRow />
+
+          {/*
+            ② key 로 탭마다 트리를 통째로 새로 만든다 — 앞 탭의 useEffect 정리 함수가 돌아
+            진행 중인 요청이 abort 되고, 늦게 도착한 응답은 버려진다(hooks/useResource.ts).
+          */}
+          <div id="tabpanel" role="tabpanel" aria-labelledby={`shelltab-${tab}`} tabIndex={-1}>
+            {tab === 'usage' ? <UsageTrackTab key="usage" /> : <UsageObsTab key="usageobs" />}
+          </div>
+        </main>
       </div>
     </ToastProvider>
   );
