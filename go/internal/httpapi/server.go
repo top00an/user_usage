@@ -44,8 +44,9 @@ type rctx struct {
 type route func(http.ResponseWriter, *http.Request, *rctx) (bool, error)
 
 type server struct {
-	cfg    config.Config
-	routes []route
+	cfg     config.Config
+	routes  []route
+	limiter *rateLimiter // 멀티테넌트 인테이크 rate limit. 단일테넌트면 nil(무제한).
 }
 
 /*
@@ -62,6 +63,11 @@ type server struct {
  */
 func New(cfg config.Config) http.Handler {
 	s := &server{cfg: cfg}
+	// burst<=0 이면 리미터를 만들지 않는다(무제한) — 제로값 설정이 "모든 요청 429"로
+	// 뒤집히는 footgun 을 막는다. 프로덕션 기본값은 config.Read 가 20/40 으로 채운다.
+	if cfg.MultiTenant && cfg.IntakeBurst > 0 {
+		s.limiter = newRateLimiter(cfg.IntakeRate, cfg.IntakeBurst)
+	}
 	if cfg.ReadOnly {
 		s.routes = []route{s.routeAnalytics, s.readOnlyAdmin}
 	} else {
@@ -156,6 +162,11 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	tenantID := s.cfg.Tenant
 	if auth.Tenant != "" {
 		tenantID = auth.Tenant
+	}
+	// 멀티테넌트 인테이크 rate limit — 테넌트별 토큰버킷. 한 org 의 폭주가 남을 굶기지 않게.
+	if auth.Scope == ScopeIntake && !s.limiter.allow(tenantID) {
+		sendError(tw, http.StatusTooManyRequests, "요청이 너무 잦습니다 — 잠시 후 다시 시도하세요")
+		return
 	}
 	r = r.WithContext(tenant.With(r.Context(), tenantID))
 	c := &rctx{path: p, query: r.URL.Query(), scope: auth.Scope}

@@ -16,6 +16,7 @@ func multiTenantCfg() config.Config {
 	return config.Config{
 		Token: testAdmin, IntakeToken: "", // 순수 키 모드(단일 인테이크 토큰 없음)
 		Mode: "local", Host: "127.0.0.1", Port: 4191, Tenant: "default", MultiTenant: true,
+		IntakeRate: 20, IntakeBurst: 40, // 프로덕션 기본값(config.Read 와 동일)
 	}
 }
 

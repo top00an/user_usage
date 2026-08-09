@@ -110,6 +110,12 @@ type Config struct {
 	// 진짜 격리는 pg(RLS)에서만 성립한다 — sqlite 는 단일 테넌트다.
 	MultiTenant bool
 
+	// IntakeRate·IntakeBurst — 멀티테넌트 인테이크 rate limit(테넌트별 토큰버킷).
+	// USAGE_INTAKE_RATE(초당 리필)·USAGE_INTAKE_BURST(버킷 상한). 기본 20/40. 음수면 무제한.
+	// 한 org 의 폭주가 다른 org 의 인테이크를 굶기지 않게 한다. 단일테넌트 경로엔 안 걸린다.
+	IntakeRate  float64
+	IntakeBurst float64
+
 	// KeywordRetentionDays 는 nil 이면 **무기한 보관**이다(정리기를 아예 띄우지 않는다).
 	// 0 이 아니라 nil 인 이유: 0 은 "즉시 삭제"로 읽히고, 그건 여기서 낼 수 있는 값이 아니다.
 	KeywordRetentionDays *int
@@ -215,10 +221,23 @@ func Read(env map[string]string) (Config, []error) {
 		DataDir:              get("USAGE_DATA_DIR"),
 		ReadOnly:             mode == "remote",
 		MultiTenant:          isTruthy(get("USAGE_MULTITENANT")),
+		IntakeRate:           floatDefault(get("USAGE_INTAKE_RATE"), 20),
+		IntakeBurst:          floatDefault(get("USAGE_INTAKE_BURST"), 40),
 		KeywordRetentionDays: keywordRetention(get("USAGE_KEYWORD_RETENTION_DAYS")),
 		ConfigPath:           configPath(get("USAGE_CONFIG")),
 	}
 	return cfg, errs
+}
+
+// floatDefault 는 float env 를 읽는다. 비었거나 파싱 실패면 dflt.
+func floatDefault(s string, dflt float64) float64 {
+	if s == "" {
+		return dflt
+	}
+	if v, err := strconv.ParseFloat(s, 64); err == nil {
+		return v
+	}
+	return dflt
 }
 
 // isTruthy 는 불리언 env 를 읽는다("1"·"true"·"yes"·"on"). 그 밖은 전부 false.

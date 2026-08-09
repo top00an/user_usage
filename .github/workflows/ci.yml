@@ -1,0 +1,80 @@
+name: ci
+
+# 게이트: 회귀(go test)·골든 계약(contract:verify)·크로스테넌트 격리(pg RLS).
+# 이 셋이 초록이어야 머지한다. 로컬에서 도는 것과 같은 명령을 CI 가 강제한다.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: go vet + test (백엔드 11 패키지)
+        run: cd go && go vet ./... && go test ./... -count=1
+
+      - name: collector test
+        run: cd collector && go vet ./... && go test ./... -count=1
+
+      - name: web test
+        run: cd web && npm ci && npm test
+
+      - name: build (유일 빌드 경로)
+        run: bash scripts/build.sh
+
+      - name: 임베드 드리프트 없음 (webroot == 빌드 산출물)
+        run: git diff --exit-code -- go/internal/httpapi/webroot
+
+      - name: contract:verify (골든 44)
+        run: |
+          USAGE_ADMIN_TOKEN=contract-admin-token-0123456789 \
+          USAGE_INTAKE_TOKEN=contract-intake-token-9876543210 \
+          USAGE_DATA_DIR=$(mktemp -d) USAGE_HOST=127.0.0.1 USAGE_PORT=8080 \
+          USAGE_KEYWORD_RETENTION_DAYS=off ./go/usage-server &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz && break; sleep 0.5; done
+          npm run contract:verify -- --base http://127.0.0.1:8080
+
+  pg-isolation:
+    # 크로스테넌트 격리 게이트 — pg RLS 는 실제 PostgreSQL 에서만 성립한다.
+    # ⚠ 첫 실행에서 role/grant 셋업을 한 번 검증할 것(로컬에 docker 가 없어 미검증).
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: 앱 롤 + DB 준비 (슈퍼유저가 스키마·권한을 세팅, 앱 롤은 NOBYPASSRLS)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -c "CREATE ROLE usage_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'app'"
+          psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE usage OWNER postgres"
+          for f in $(ls migrations/pg/*.sql | sort); do
+            psql -h 127.0.0.1 -U postgres -d usage -v ON_ERROR_STOP=1 -f "$f"
+          done
+          psql -h 127.0.0.1 -U postgres -d usage -c \
+            "GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO usage_app"
+
+      - name: pg 통합·격리 게이트
+        env:
+          USAGE_TEST_PG_URL: postgres://usage_app:app@127.0.0.1:5432/usage
+        run: cd go && go test ./internal/db/ -run PG -v -count=1
