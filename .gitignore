@@ -42,3 +42,6 @@ Thumbs.db
 # 조용히 커밋 후보가 된다(실측: go/_probe 4.5MB).
 /go/_probe
 /go/*.test
+
+# Claude Code worktrees/session dir — never commit
+.claude/

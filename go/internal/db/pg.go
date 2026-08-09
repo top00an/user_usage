@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 /*
@@ -247,6 +248,22 @@ func (d *pgDB) ExecRaw(ctx context.Context, sqlText string) error {
 	return nil
 }
 
+// pgNumericToScalar 는 pgtype.Numeric 을 공용 Row 접근자가 읽는 십진 문자열로 편다.
+// NULL·NaN 은 nil 로 접는다(빈 집계의 SUM 은 NULL 이고, 그건 0 과 구분되어야 한다 — Row.Int 가 0 으로 읽는다).
+func pgNumericToScalar(n pgtype.Numeric) any {
+	if !n.Valid || n.NaN {
+		return nil
+	}
+	v, err := n.Value() // driver.Value: 유한 numeric 은 십진 문자열
+	if err != nil || v == nil {
+		return nil
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return v
+}
+
 func scanPgRows(rows pgx.Rows) ([]Row, error) {
 	fds := rows.FieldDescriptions()
 	names := make([]string, len(fds))
@@ -264,11 +281,23 @@ func scanPgRows(rows pgx.Rows) ([]Row, error) {
 			if i >= len(vals) {
 				break
 			}
-			if b, ok := vals[i].([]byte); ok {
-				r[name] = string(b)
-				continue
+			switch v := vals[i].(type) {
+			case []byte:
+				r[name] = string(v)
+			case pgtype.Numeric:
+				/*
+				 * pg 는 bigint 컬럼의 SUM/AVG 를 **numeric** 으로 돌려주고, pgx 는 그것을
+				 * pgtype.Numeric 으로 디코드한다. 이걸 그대로 두면 공용 Row.Int/Float 이 타입을
+				 * 못 맞춰 **조용히 0** 이 된다 — 집계 토큰·지연 합계가 통째로 0 으로 떨어진다
+				 * (sqlite 는 SUM 을 int64/float64 로 주므로 이 구멍은 pg 에서만 열린다).
+				 *
+				 * 십진 **문자열**로 편다: Row.Int(ParseInt→ParseFloat 폴백)·Row.Float 이 이미
+				 * 문자열을 읽고, 문자열은 큰 정수 합계의 정밀도를 float64 변환보다 정확히 보존한다.
+				 */
+				r[name] = pgNumericToScalar(v)
+			default:
+				r[name] = vals[i]
 			}
-			r[name] = vals[i]
 		}
 		out = append(out, r)
 	}

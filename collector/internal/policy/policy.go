@@ -132,10 +132,21 @@ func NormKeyOf(kind, raw string) string {
 // ── bash 축 ─────────────────────────────────────────────────────────────────
 
 // 명령을 감싸기만 하는 접두 낱말들. 이것들을 그대로 키로 삼으면 bash 축이 전부
-// `sudo`·`env` 로 덮여 아무 정보도 남지 않는다.
+// `sudo`·`env` 로 덮여 아무 정보도 남지 않는다. 이들은 **바로 다음 낱말이 명령**이다
+// (`sudo systemctl` → systemctl). `cd` 는 인자(디렉터리)를 먹으므로 여기가 아니라
+// BashKey 가 따로 다룬다(디렉터리명이 키로 새지 않게).
 var bashWrappers = map[string]bool{
 	"sudo": true, "env": true, "nohup": true, "exec": true,
-	"time": true, "command": true, "builtin": true, "cd": true,
+	"time": true, "command": true, "builtin": true,
+}
+
+// isBashSep 은 셸 명령 구분자다 — 이 뒤에 새 명령이 온다.
+func isBashSep(w string) bool {
+	switch w {
+	case "&&", "||", ";", "|", "&", "(", "{":
+		return true
+	}
+	return false
 }
 
 // 실행파일명으로 인정하는 모양. 여기 안 맞으면 **버린다** — 인자·경로·URL 조각이
@@ -158,16 +169,25 @@ func BashKey(cmd string) string {
 			continue
 		}
 		// 구분자는 그 자체로 버리고 계속 본다.
-		if w == "&&" || w == "||" || w == ";" || w == "|" || w == "(" || w == "{" {
+		if isBashSep(w) {
 			continue
 		}
-		if i := strings.LastIndexAny(w, `\/`); i >= 0 {
-			w = w[i+1:]
+		if k := strings.LastIndexAny(w, `\/`); k >= 0 {
+			w = w[k+1:]
 		}
 		if !execNameRe.MatchString(w) {
 			return "" // 실행파일명으로 안 보인다 → 버린다
 		}
-		if bashWrappers[strings.ToLower(w)] {
+		lw := strings.ToLower(w)
+		// `cd DIR && cmd` — cd 는 인자로 디렉터리를 먹는다. 그 인자를 명령으로 읽으면 bash 축에
+		// 디렉터리 basename 이 새므로(정책 위반), 다음 구분자까지 통째로 건너뛴 뒤 실제 명령을 본다.
+		if lw == "cd" {
+			for i+1 < len(fields) && !isBashSep(fields[i+1]) {
+				i++
+			}
+			continue
+		}
+		if bashWrappers[lw] {
 			continue // 감싸는 낱말 — 다음 낱말을 본다
 		}
 		return w
@@ -179,7 +199,23 @@ func BashKey(cmd string) string {
 
 // 주입된 블록. 사람이 친 말이 아니라 하네스가 끼워 넣은 텍스트라 어휘 통계에 의미가 없고,
 // 그 안에 경로·환경정보가 통째로 들어 있어 **토큰화 전에 잘라낸다.**
-var injectedBlockRe = regexp.MustCompile(`(?s)<(system-reminder|command-name|command-message|command-args|local-command-stdout|teammate-message|task-notification)>.*?</\1>`)
+//
+// ⚠ Go 의 regexp(RE2)는 역참조(`\1`)를 지원하지 않는다 — 열림 태그 이름을 닫힘에서 다시
+// 참조할 수 없다. 그래서 태그마다 열림/닫힘 쌍을 명시한 교차(alternation)로 만든다.
+var injectedTags = []string{
+	"system-reminder", "command-name", "command-message", "command-args",
+	"local-command-stdout", "teammate-message", "task-notification",
+}
+
+var injectedBlockRe = regexp.MustCompile(buildInjectedRe())
+
+func buildInjectedRe() string {
+	alts := make([]string, len(injectedTags))
+	for i, t := range injectedTags {
+		alts[i] = "<" + t + ">.*?</" + t + ">"
+	}
+	return "(?s)" + strings.Join(alts, "|")
+}
 
 // 이미지·첨부 자리표시자.
 var placeholderRe = regexp.MustCompile(`\[(Image|Attachment|Pasted text)[^\]]*\]`)
@@ -262,4 +298,4 @@ func firstToken(s string) string {
 
 // isSpace 는 JS 정규식의 `\s` 에 대응한다 — Go 의 `\s` 는 ASCII 다섯 개뿐이라
 // 그대로 쓰면 전각 공백이 낀 키가 통째로 남는다.
-func isSpace(r rune) bool { return unicode.IsSpace(r) || r == '﻿' }
+func isSpace(r rune) bool { return unicode.IsSpace(r) || r == '\uFEFF' }

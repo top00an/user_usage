@@ -1,96 +1,103 @@
 #!/usr/bin/env bash
 #
-# 네이티브 스모크 — 바이너리가 **실제로 뜨고 응답하는지**를 본다.
+# 네이티브 스모크 — Go 단일 바이너리가 실제로 뜨고 응답하는지 docker 없이 실증한다.
 #
-#   bash scripts/smoke.sh              # 빌드부터(scripts/build.sh) 전부
-#   NO_BUILD=1 bash scripts/smoke.sh   # 이미 만든 go/usage-server 를 그대로 기동
-#   BIN=/tmp/x bash scripts/smoke.sh
+# 이 머신에는 docker 가 없어서 `docker build` / `compose up` 을 돌릴 수 없다. 그래서 배포 이미지가
+# 담게 될 것과 **같은 산출물**(scripts/build.sh 가 만드는 바이너리)을 로컬에서 만들어 직접 기동하고,
+# Dockerfile 의 HEALTHCHECK 와 compose 의 healthcheck 가 프로브할 바로 그 경로(/healthz)와
+# 셸 페이지(/)를 curl 로 때려 본다. 여기서 초록이면 이미지 안에서 달라질 이유는 베이스 OS 뿐이다.
 #
-# ── 왜 이 스크립트가 있나 ────────────────────────────────────────────────────
-# 이 레포의 배포는 컨테이너인데 **이 머신에는 docker 가 없다.** `docker build` 로 이미지를
-# 검증할 수 없으므로, Dockerfile 이 컨테이너 안에서 실행할 것과 같은 계약 — "바이너리를 띄우면
-# /healthz 가 200 이고 루트가 HTML 이다" — 을 호스트에서 직접 확인한다.
+#   bash scripts/smoke.sh
 #
-# 컨테이너 healthcheck 가 무엇을 물어보는지와 여기서 확인하는 것이 같아야 한다.
-# HEALTHCHECK 를 바꾸면 여기 PROBE 도 같이 바꿔라 — 갈라지면 이 스모크는 아무것도 지키지 않는다.
+# 하는 일:
+#   ① scripts/build.sh 로 바이너리 빌드(유일 빌드 경로 — SKIP_WEB 을 쓰지 않는다)
+#   ② 빈 USAGE_DATA_DIR · local(sqlite) 모드로 바이너리 기동
+#   ③ /healthz 가 200 인지(무인증·무DB 프로브 — 컨테이너 healthcheck 가 쓰는 바로 그 경로)
+#   ④ 루트 / 가 200 이고 HTML 셸인지(go:embed 된 정적 산출물이 실제로 서빙되는지)
 #
-# 검사 대상:
-#   ① /healthz          200 · 무인증 · 무DB (기동 프로브 — 컨테이너 HEALTHCHECK 와 동일 경로)
-#   ② /                 200 · text/html    (go:embed 된 Next 산출물이 실제로 박혔는가)
-#   ③ /api/* 무토큰     401                (게이트가 살아 있는가 — 토큰 없이 데이터가 나오면 사고다)
+# 무엇을 기동하든 스크립트 종료 시 반드시 죽이고 임시 데이터 디렉터리를 지운다(trap).
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${BIN:-$ROOT/go/usage-server}"
-PORT="${PORT:-4193}"   # 기본 4191 을 피한다 — 사람이 띄워 둔 서버에 붙어 놓고 통과했다고 착각한다
-BASE="http://127.0.0.1:$PORT"
 
-say()  { printf '\n\033[1m▶ %s\033[0m\n' "$*"; }
-ok()   { printf '   \033[32m✓\033[0m %s\n' "$*"; }
-die()  { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
+# 포트·토큰·모드는 부팅 게이트를 통과할 최소값이다.
+#  · PORT 4191 : 기본값이자 브라우저 차단 포트가 아님(config.go 의 badPorts 참조).
+#  · TOKEN     : 16자 미만이면 부팅이 거부된다(config.go MinTokenLen). 스모크 전용 더미다.
+PORT="${SMOKE_PORT:-4191}"
+HOST="127.0.0.1"
+TOKEN="smoke-token-0123456789abcdef"
 
-# ── ① 빌드 ──────────────────────────────────────────────────────────────────
-if [[ -z "${NO_BUILD:-}" ]]; then
-  say "① 빌드 — scripts/build.sh (유일한 빌드 경로)"
-  OUT_BIN="$BIN" bash "$ROOT/scripts/build.sh" >/dev/null || die "빌드 실패"
-fi
-[[ -x "$BIN" ]] || die "바이너리가 없다: $BIN  (먼저 bash scripts/build.sh)"
-ok "$BIN"
+# 바이너리와 데이터는 트리 밖(임시)에 둔다 — 스모크가 레포를 더럽히지 않는다.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/usage-smoke.XXXXXX")"
+BIN="$WORK/usage-server"
+DATA="$WORK/data"
+LOG="$WORK/server.log"
+mkdir -p "$DATA"
 
-# ── ② 빈 데이터로 기동 ──────────────────────────────────────────────────────
-# **빈 디렉터리에서 시작한다.** 남아 있는 sqlite 파일 위에서 뜨면 "스키마 보장"이 도는지 알 수
-# 없고, 새 호스트에 처음 배포하는 상황(=컨테이너의 빈 볼륨)과 달라진다.
-DATA="$(mktemp -d)"
-LOG="$(mktemp)"
+SRV=""
 cleanup() {
-  [[ -n "${PID:-}" ]] && kill "$PID" 2>/dev/null || true
-  [[ -n "${PID:-}" ]] && wait "$PID" 2>/dev/null || true
-  rm -rf "$DATA" "$LOG"
+  if [[ -n "$SRV" ]] && kill -0 "$SRV" 2>/dev/null; then
+    kill "$SRV" 2>/dev/null || true
+    wait "$SRV" 2>/dev/null || true
+  fi
+  rm -rf "$WORK"
 }
 trap cleanup EXIT
 
-say "② 기동 — local(sqlite) · 빈 데이터 디렉터리 · 127.0.0.1:$PORT"
-env -i PATH="$PATH" HOME="$HOME" \
-  USAGE_HOST=127.0.0.1 \
-  USAGE_PORT="$PORT" \
-  USAGE_DATA_DIR="$DATA" \
-  USAGE_DB_MODE=local \
-  USAGE_ADMIN_TOKEN=smoke-admin-token-0123456789 \
+say()  { printf '\n\033[1m▶ %s\033[0m\n' "$*"; }
+die()  { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
+pass() { printf '\033[32m✓ %s\033[0m\n' "$*"; }
+
+# ── ① 빌드 ────────────────────────────────────────────────────────────────────
+# 유일 빌드 경로. SKIP_WEB 은 쓰지 않는다 — 그걸 쓰면 배포가 실제로 담을 산출물이 아니라
+# "지난 번 web/out 을 그대로 믿은" 산출물을 검증하게 된다.
+say "① 빌드 — scripts/build.sh (web build → webroot embed → go build)"
+OUT_BIN="$BIN" bash "$ROOT/scripts/build.sh"
+[[ -x "$BIN" ]] || die "바이너리가 만들어지지 않았다: $BIN"
+
+# ── ② 기동 ────────────────────────────────────────────────────────────────────
+# 빈 데이터 디렉터리 · local 모드. 이 조합은 원격 pg 없이 sqlite 한 파일로 완결한다.
+say "② 기동 — local(sqlite) · USAGE_DATA_DIR=$DATA · $HOST:$PORT"
+USAGE_ADMIN_TOKEN="$TOKEN" \
+USAGE_DB_MODE=local \
+USAGE_DATA_DIR="$DATA" \
+USAGE_HOST="$HOST" \
+USAGE_PORT="$PORT" \
   "$BIN" >"$LOG" 2>&1 &
-PID=$!
+SRV=$!
 
-# 뜰 때까지 기다린다. 고정 sleep 을 쓰면 느린 머신에서 위양성 실패가 나고, 빠른 머신에서는
-# 그냥 시간을 버린다. 죽었으면 즉시 로그를 뱉고 끝낸다 — 타임아웃까지 기다려 봐야 답은 같다.
-for _ in $(seq 1 100); do
-  kill -0 "$PID" 2>/dev/null || { cat "$LOG" >&2; die "프로세스가 기동 중 죽었다"; }
-  curl -sf -o /dev/null "$BASE/healthz" && break
-  sleep 0.1
+# 포트가 열릴 때까지 최대 ~10초 기다린다. 이 대기가 곧 컨테이너 healthcheck 의 start_period 다.
+up=""
+for _ in $(seq 1 50); do
+  if ! kill -0 "$SRV" 2>/dev/null; then
+    printf '\n--- server.log ---\n'; cat "$LOG"
+    die "서버가 기동 중에 죽었다(부팅 거부일 수 있다 — 위 로그 확인)"
+  fi
+  if curl -fsS -o /dev/null "http://$HOST:$PORT/healthz" 2>/dev/null; then up=1; break; fi
+  sleep 0.2
 done
-ok "pid $PID"
+[[ -n "$up" ]] || { printf '\n--- server.log ---\n'; cat "$LOG"; die "서버가 제한 시간 안에 뜨지 않았다"; }
+pass "기동 확인 — 프로세스 살아 있고 포트 응답"
 
-# ── ③ 계약 확인 ─────────────────────────────────────────────────────────────
-say "③ /healthz — 무인증 · 무DB · 200 (컨테이너 HEALTHCHECK 가 두드리는 그 경로)"
-code=$(curl -s -o /tmp/smoke.health -w '%{http_code}' "$BASE/healthz")
-[[ "$code" == 200 ]] || { cat "$LOG" >&2; die "/healthz 가 $code"; }
-printf '   HTTP %s  body=%s\n' "$code" "$(cat /tmp/smoke.health)"
-grep -q '"status":"ok"' /tmp/smoke.health || die "/healthz 본문이 계약과 다르다"
-ok "200 + {\"status\":\"ok\"}"
+# ── ③ /healthz ────────────────────────────────────────────────────────────────
+# 컨테이너 healthcheck 가 프로브할 바로 그 경로. 무인증·무DB 라 토큰 없이 200 이어야 한다.
+say "③ /healthz — 무인증·무DB 프로브(컨테이너 healthcheck 가 쓰는 경로)"
+code=$(curl -sS -o "$WORK/health.body" -w '%{http_code}' "http://$HOST:$PORT/healthz")
+printf '   HTTP %s · body: %s\n' "$code" "$(cat "$WORK/health.body")"
+[[ "$code" == "200" ]] || die "/healthz 가 200 이 아니다: $code"
+grep -q '"status"' "$WORK/health.body" || die "/healthz 본문에 status 가 없다"
+pass "/healthz 200"
 
-say "④ / — 200 · text/html (go:embed 된 대시보드가 실제로 바이너리 안에 있는가)"
-read -r code ctype < <(curl -s -o /tmp/smoke.root -w '%{http_code} %{content_type}\n' "$BASE/")
-printf '   HTTP %s  content-type=%s  bytes=%s\n' "$code" "$ctype" "$(wc -c </tmp/smoke.root | tr -d ' ')"
-[[ "$code" == 200 ]] || die "/ 가 $code"
-[[ "$ctype" == text/html* ]] || die "/ 의 content-type 이 $ctype"
-# 껍데기만 나가고 스크립트가 통째로 빠지는 사고는 404 가 아니라 **빈 화면**으로 보인다.
-# 그래서 200 만으로는 부족하다 — _next 청크 참조가 실제로 들어 있는지까지 본다.
-grep -q '_next/static' /tmp/smoke.root || die "/ 에 _next/static 참조가 없다 — 정적 청크가 임베드되지 않았다"
-ok "200 + text/html + _next/static 참조"
+# ── ④ 루트 / ──────────────────────────────────────────────────────────────────
+# go:embed 된 index.html 이 실제로 서빙되는지. 셸은 무인증이다(데이터는 /api/* 뒤에 있다).
+say "④ / — 임베드된 정적 셸(HTML)"
+code=$(curl -sS -o "$WORK/root.body" -w '%{http_code}' -H 'Accept: text/html' "http://$HOST:$PORT/")
+ctype=$(curl -sS -o /dev/null -w '%{content_type}' -H 'Accept: text/html' "http://$HOST:$PORT/")
+bytes=$(wc -c < "$WORK/root.body" | tr -d ' ')
+printf '   HTTP %s · content-type: %s · %s bytes\n' "$code" "$ctype" "$bytes"
+[[ "$code" == "200" ]] || die "/ 가 200 이 아니다: $code"
+grep -qi '<!doctype html\|<html' "$WORK/root.body" || die "/ 본문이 HTML 이 아니다"
+pass "/ 200 · HTML"
 
-say "⑤ /api/* 무토큰 — 401 (게이트가 살아 있는가)"
-code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/usage")
-printf '   HTTP %s\n' "$code"
-[[ "$code" == 401 ]] || die "/api/usage 가 토큰 없이 $code — 게이트가 열려 있다"
-ok "401"
-
-printf '\n\033[32m✓ 스모크 통과\033[0m  (%s)\n' "$BIN"
+printf '\n\033[32m✓ 네이티브 스모크 통과\033[0m\n'

@@ -1,31 +1,11 @@
-# 사용량 대시보드 — Go 단일 바이너리. 서비스 하나, 컨테이너 안에 Node 는 없다.
+# 로컬 기동 — sqlite 한 파일, 서비스 하나. PostgreSQL 은 여기서 띄우지 않는다.
 #
-#   cp .env.example .env && $EDITOR .env      # USAGE_ADMIN_TOKEN 은 비어 있으면 기동을 거부한다
-#   docker compose up -d --build
-#   docker compose ps                          # STATUS 가 (healthy) 가 될 때까지
-#   curl -s http://127.0.0.1:4191/healthz      # {"status":"ok"}
+# 왜 DB 컨테이너가 없나: remote 모드는 **이미 있는 DB 를 읽기 전용으로 보는** 용도이고, 그
+# 접속은 SSH 터널을 통해 온다. compose 가 빈 postgres 를 하나 더 띄우면 "어느 쪽이 진짜 데이터인가"
+# 를 만드는 것뿐이다. 원격을 볼 때는 터널을 띄운 뒤 DATABASE_URL 만 넘긴다.
 #
-# ── 왜 DB 컨테이너가 없나 ────────────────────────────────────────────────────
-# remote 모드는 **이미 있는 DB 를 읽기 전용으로 보는** 용도다. compose 가 빈 postgres 를 하나 더
-# 띄우면 "어느 쪽이 진짜 데이터인가"를 만드는 것뿐이다. 원격을 볼 때는 터널을 띄우고
-# DATABASE_URL 만 넘긴다.
-#
-# ── ⚠ remote 모드: 터널 주소가 로컬 실행과 다르다 ───────────────────────────
-# 호스트에서 직접 돌릴 때는 `127.0.0.1:15432` 가 SSH 터널이다. **컨테이너 안에서 127.0.0.1 은
-# 컨테이너 자신이다** — 그 주소를 그대로 .env 에 넣으면 connection refused 가 나고, 원인이
-# 주소라는 것을 알아채는 데 시간이 걸린다(설정은 "맞아 보인다").
-#
-# 그래서 아래 extra_hosts 로 host.docker.internal 을 뚫어 두고, .env 에는 이렇게 쓴다:
-#
-#   DATABASE_URL=postgres://usage_app:<pw>@host.docker.internal:15432/usage
-#
-# 그리고 터널은 **도커 브리지에서 보이는 주소에 묶어야 한다.** 기본 `ssh -L 15432:...` 는
-# 호스트의 127.0.0.1 에만 붙어서 컨테이너에서 닿지 않는다:
-#
-#   ssh -N -L 172.17.0.1:15432:<db-host>:5432 <user>@<bastion>   # 도커 브리지 게이트웨이에 바인드
-#
-# `-L 0.0.0.0:15432:` 로 열지 마라 — LAN 전체에 DB 터널을 여는 것이고, 이 DB 에는 사람별
-# 사용량과 비용이 들어 있다. 브리지 IP 는 `docker network inspect bridge` 로 확인한다.
+#   ssh -N -L 15432:<db-host>:5432 <user>@<your-host>
+#   USAGE_DB_MODE=remote DATABASE_URL=postgres://usage_app:…@127.0.0.1:15432/usage docker compose up
 
 services:
   usage:
@@ -33,24 +13,14 @@ services:
     image: user-usage:local
     restart: unless-stopped
 
-    # 토큰과 DATABASE_URL 은 파일로 넘긴다. compose 파일에 직접 쓰면 그대로 커밋된다.
-    # (.gitignore 가 .env 를 막고 있지만, 막는 것과 안 쓰는 것은 다른 층위의 방어다.)
+    # 토큰은 파일로 넘긴다. compose 파일에 직접 쓰면 그대로 커밋된다(.env 는 .gitignore 에 있다).
     env_file:
       - .env
 
-    # 여기 값들은 **컨테이너 배선**이라 .env 가 아니라 이미지 옆에 둔다.
-    # env_file 이 먼저 읽히고 environment 가 덮어쓴다 — 즉 .env 에 USAGE_HOST=127.0.0.1 이
-    # 남아 있어도 컨테이너는 정상 기동한다(로컬 실행용 값이 컨테이너를 죽이지 않게).
     environment:
       USAGE_HOST: "0.0.0.0"
       USAGE_PORT: "4191"
       USAGE_DATA_DIR: /data
-
-    # remote 모드에서 호스트의 SSH 터널로 나가는 통로. 위 주석 참조.
-    # local(sqlite) 모드만 쓸 거면 없어도 그만이지만, 있다고 뚫리는 것은 아니라 남겨 둔다
-    # (호스트 쪽에서 듣고 있는 포트에만 닿는다).
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
     # **127.0.0.1 에 묶는다.** `- "4191:4191"` 로 쓰면 도커가 호스트 방화벽을 우회해 LAN 전체에
     # 연다 — 이 화면은 사람별 사용량과 비용을 담고 있어서 그 기본값을 쓰지 않는다.
@@ -58,51 +28,28 @@ services:
     ports:
       - "127.0.0.1:4191:4191"
 
-    # sqlite 파일(local 모드). 이게 없으면 컨테이너를 재생성할 때마다 사용량이 통째로 사라진다.
-    # remote 모드는 여기에 쓰지 않지만, 두 모드를 같은 compose 로 굴리므로 그대로 둔다.
+    # sqlite 파일. 이게 없으면 컨테이너를 재생성할 때마다 사용량이 통째로 사라진다.
     volumes:
       - usage-data:/data
 
-    # /healthz 는 무인증·무DB 프로브다. node 의존을 걷어냈다 — 이미지에 node 가 없다.
-    # 대신 alpine 런타임의 busybox wget 을 쓴다(바이너리에 healthcheck 서브커맨드가 없다.
-    # 이 선택의 대가는 Dockerfile 런타임 스테이지 주석에 적어 뒀다).
-    #
-    # `$$` 는 compose 의 변수 치환을 피해 **컨테이너 안에서** 확장시키기 위한 것이다.
-    # `$` 하나로 쓰면 호스트의 .env 로 치환되어, 포트를 컨테이너에서 바꿔도 프로브는 따라오지 않는다.
-    #
-    # ⚠ Dockerfile 의 HEALTHCHECK 와 같은 프로브다(`docker run` 으로 띄우는 쪽이 그것을 쓴다).
-    #   한쪽을 고치면 다른 쪽도 고쳐라.
+    # /healthz 를 HTTP 로 직접 프로브한다 — 무인증·무DB 경로라 토큰 없이 200 이다.
+    # **Node 의존을 걷어냈다**(이미지에 Node 가 없다). 프로브는 알파인 런타임에 기본 내장된
+    # busybox wget 으로 한다 — 별도 도구도, go 바이너리 서브커맨드도 필요 없다.
+    #   ⚠ 이미지 베이스가 wget 없는 것(scratch·distroless)으로 바뀌면 이 test 는 못 돈다.
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -T 3 -O /dev/null \"http://127.0.0.1:$${USAGE_PORT:-4191}/healthz\" || exit 1"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4191/healthz"]
       interval: 30s
       timeout: 3s
       retries: 3
       start_period: 5s
 
-    # 이 서비스가 파일을 쓰는 곳은 /data 하나뿐이다 — 나머지는 읽기 전용으로 잠근다.
+    # 이 서비스는 파일 쓰기가 /data 하나뿐이다 — 루트 파일시스템은 읽기 전용으로 잠근다.
+    # sqlite 의 WAL/SHM 도 /data 안에 떨어지므로 read_only 와 충돌하지 않는다.
     read_only: true
     tmpfs:
-      # Go 런타임과 라이브러리가 임시 파일을 쓸 자리. read_only 로 잠근 뒤 이걸 빼면
-      # 증상이 기동 실패가 아니라 **특정 요청에서만 나는 에러**로 나타난다.
-      - /tmp:mode=1777,size=64m
+      - /tmp
     security_opt:
       - no-new-privileges:true
-    # 비루트는 이미지에서 이미 정해져 있다(USER 10001). 여기서 다시 못 박는 이유는
-    # compose 파일만 읽는 사람에게도 보이게 하기 위해서다.
-    user: "10001:10001"
-
-    # 커널 능력을 전부 떨군다. 이 프로세스는 1024 미만 포트를 열지 않고(4191), 파일 소유자를
-    # 바꾸지 않으며, 네트워크를 만지지 않는다 — 남겨 둘 이유가 있는 것이 하나도 없다.
-    cap_drop:
-      - ALL
-
-    # 로그 회전. 기본값은 무제한이라 오래 도는 호스트에서 json 로그가 디스크를 먹는다.
-    # 그 증상은 이 서비스가 아니라 **호스트의 다른 무언가**가 먼저 죽는 것으로 나타난다.
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "5"
 
 volumes:
   usage-data:
