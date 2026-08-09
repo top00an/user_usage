@@ -157,6 +157,8 @@ export default function Dashboard() {
               <h1>{active.label}</h1>
               <p className="content-desc">{active.desc}</p>
             </div>
+            {/* 탭별 상단 액션 슬롯 — GrafanaDash 가 포털로 버튼을 얹는다(제목과 같은 줄 우측). */}
+            <div id="head-actions" className="head-actions" />
           </header>
 
           {/*
