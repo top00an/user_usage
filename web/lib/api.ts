@@ -20,10 +20,12 @@ import type {
   ErrorBody,
   Leaderboard,
   Quality,
+  Seats,
   SeriesResponse,
   SessionDetail,
   SessionsResponse,
   Summary,
+  Teams,
 } from './types';
 
 /**
@@ -139,6 +141,10 @@ export const getDistribution = (o?: RequestOptions) => request<Distribution>('/a
 export const getQuality = (o?: RequestOptions) => request<Quality>('/api/usage/quality', o);
 export const getCoverage = (o?: RequestOptions) => request<Coverage>('/api/usage/coverage', o);
 export const getLeaderboard = (o?: RequestOptions) => request<Leaderboard>('/api/usage/leaderboard', o);
+export const getSeats = (days = 30, o?: RequestOptions) =>
+  request<Seats>(`/api/usage/seats?days=${days}`, o);
+export const getTeams = (days = 30, o?: RequestOptions) =>
+  request<Teams>(`/api/usage/teams?days=${days}`, o);
 export const getIdentity = (o?: RequestOptions) => request<unknown>('/api/usage/identity', o);
 
 export const getSessions = (
