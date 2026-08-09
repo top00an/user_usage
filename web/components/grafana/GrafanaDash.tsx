@@ -8,6 +8,7 @@
  * (토큰 I/O·캐시·세션·도구·에이전트·스킬)로 채운다 — 가짜 숫자 금지.
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { getSummary, getSeats, getDev } from '@/lib/api';
 import { softly, useResource } from '@/hooks/useResource';
 import type { Dev, Seats, Summary } from '@/lib/types';
@@ -89,6 +90,9 @@ export default function GrafanaDash() {
   const customPanels: CustomPanel[] = (() => { try { return JSON.parse(panelsSnap); } catch { return []; } })();
   const [builderOpen, setBuilderOpen] = useState(false);
   const [prefill, setPrefill] = useState<Partial<Omit<CustomPanel, 'id'>> | undefined>(undefined);
+  // 상단 액션 버튼은 공용 헤더(content-head)의 우측 슬롯에 포털로 얹는다 — 제목 라인과 같은 줄.
+  const [headSlot, setHeadSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => { setHeadSlot(document.getElementById('head-actions')); }, []);
 
   // 추적/관측 탭의 '그래프로 추가'로 넘어온 프리필이 있으면 빌더를 연다.
   useEffect(() => {
@@ -164,18 +168,18 @@ export default function GrafanaDash() {
   ];
 
   const tools: GridItem[] = [
-    { id: 'tool-usage', node: <Panel title="Tool Usage"><EChart option={donutOption(donutRows(summary.top?.tool))} height={190} /></Panel> },
+    { id: 'tool-usage', node: <Panel title="Tool Usage"><EChart option={donutOption(donutRows(summary.top?.tool).slice(0, 10))} height={190} /></Panel> },
     { id: 'tool-agents', node: <Panel title="Subagents"><EChart option={donutOption(donutRows(summary.top?.agent))} height={190} /></Panel> },
     { id: 'tool-skills', node: <Panel title="Skills"><EChart option={donutOption(donutRows((summary.top?.skill ?? []).map((k) => ({ key: k.key.replace(/^superpowers:/, ''), count: k.count }))))} height={190} /></Panel> },
   ];
 
   const rates: GridItem[] = [
     { id: 'rate-sessions', node: <Panel title="Sessions per Day"><EChart option={areaOption(x, [{ name: 'sessions', color: '#73bf69', data: days.map((d) => d.sessions) }], fmtInt)} height={170} /></Panel> },
-    { id: 'rate-bash', node: <Panel title="Bash Commands"><BarTable rows={(summary.top?.bash ?? []).map((k) => ({ label: k.key, value: k.count }))} unit="Count" fmt={fmtInt} /></Panel> },
-    { id: 'rate-mcp', node: <Panel title="MCP Calls"><BarTable rows={(summary.top?.mcp ?? []).map((k) => ({ label: k.key.replace(/^mcp__/, '').slice(0, 24), value: k.count }))} unit="Count" fmt={fmtInt} /></Panel> },
+    { id: 'rate-bash', node: <Panel title="Bash Commands"><BarTable rows={(summary.top?.bash ?? []).slice(0, 10).map((k) => ({ label: k.key, value: k.count }))} unit="Count" fmt={fmtInt} /></Panel> },
+    { id: 'rate-mcp', node: <Panel title="MCP Calls"><BarTable rows={(summary.top?.mcp ?? []).slice(0, 10).map((k) => ({ label: k.key.replace(/^mcp__/, '').slice(0, 24), value: k.count }))} unit="Count" fmt={fmtInt} /></Panel> },
   ];
 
-  const topTools = (summary.top?.tool ?? []).slice(0, 8).map((k) => ({ name: k.key, value: k.count }));
+  const topTools = (summary.top?.tool ?? []).slice(0, 10).map((k) => ({ name: k.key, value: k.count }));
   const top: GridItem[] = [
     { id: 'top-tools', node: <Panel title="Top Tools (calls)"><EChart option={barOption(topTools, fmtInt)} height={Math.max(120, topTools.length * 30)} /></Panel> },
   ];
@@ -204,11 +208,13 @@ export default function GrafanaDash() {
 
   return (
     <div className="gdash">
-      <div className="gdash-top">
-        <span className="sp" />
-        <button className="primary" type="button" onClick={() => { setPrefill(undefined); setBuilderOpen(true); }}>＋ 그래프 추가</button>
-        <button className="ghost" type="button" onClick={resetLayout}>⤢ 레이아웃 초기화</button>
-      </div>
+      {headSlot && createPortal(
+        <>
+          <button className="primary" type="button" onClick={() => { setPrefill(undefined); setBuilderOpen(true); }}>＋ 그래프 추가</button>
+          <button className="ghost" type="button" onClick={resetLayout}>⤢ 레이아웃 초기화</button>
+        </>,
+        headSlot,
+      )}
 
       {customItems.length > 0 && (
         <Sect title="내 그래프" gid="custom" cls="g2" items={customItems} />

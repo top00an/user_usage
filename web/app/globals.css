@@ -593,6 +593,8 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
 }
 .content-head h1 { font-size: 1.35rem; font-weight: 700; letter-spacing: -.02em; }
 .content-desc { color: var(--fg-faint); font-size: .84rem; margin-top: 3px; }
+/* 헤더 우측 액션 슬롯(대시보드 그래프 추가/초기화) — 제목과 같은 줄, 우측 정렬 */
+.head-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 
 /* ── 반응형: 좁은 화면에서는 사이드바가 상단 가로 바가 된다 ── */
 @media (max-width: 860px) {
@@ -725,10 +727,11 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
 .gpanel-head .grip { color:var(--fg-faint); letter-spacing:-2px; }
 .gpanel-body { padding:8px 10px 10px; }
 /* 스탯 타일 */
-.gstat { min-height:92px; display:flex; flex-direction:column; justify-content:center; gap:2px; color:#fff; border-radius:var(--radius-sm); padding:12px 14px; cursor:grab; }
+.gstat { min-height:92px; container-type:inline-size; display:flex; flex-direction:column; justify-content:center; gap:2px; color:#fff; border-radius:var(--radius-sm); padding:12px 14px; cursor:grab; }
 .gstat-gauge { justify-content:flex-start; padding:8px 8px 4px; }
 .gstat-k { font-size:.8rem; opacity:.95; font-weight:600; }
-.gstat-v { font-size:1.9rem; font-weight:800; letter-spacing:-.02em; line-height:1.05; }
+/* 값 폰트는 타일 폭에 맞춰 축소 — 긴 금액($2,759.00)이 박스를 넘지 않게(cqi = 타일 폭 기준). */
+.gstat-v { font-size:clamp(1.1rem, 16cqi, 1.9rem); font-weight:800; letter-spacing:-.02em; line-height:1.05; white-space:nowrap; }
 .gstat-s { font-size:.72rem; opacity:.85; }
 .t-teal { background:linear-gradient(120deg,#2e9e8f,#1f7a6e); }
 .t-blue { background:linear-gradient(120deg,#3b5bdb,#2f43a8); }
