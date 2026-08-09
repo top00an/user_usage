@@ -32,6 +32,13 @@ const (
 	attrTurns     = "claude.session.turns"
 	attrStartedAt = "claude.session.started_at"
 	attrEndedAt   = "claude.session.ended_at"
+
+	// 카운터 축(tool·bash·slash·skill·agent·mcp·keyword)과 시간버킷(series)은 OTLP 표준
+	// 속성으로 표현하기엔 구조가 깊다(축×키 다대다, 버킷 배열). OTLP/JSON 의 복합 AnyValue
+	// (kvlistValue/arrayValue)는 파이프라인마다 인코딩이 갈려 상호운용이 약하다. 그래서 이
+	// 두 축은 **JSON 문자열 속성**으로 싣는다 — 표준 속성 채널을 그대로 쓰면서 구조를 보존한다.
+	attrCountersJSON = "claude.counters.json" // [{"kind","key","count"}]
+	attrSeriesJSON   = "claude.series.json"   // [{"hour","model","input",...}]
 )
 
 // OTLP/JSON 로그 페이로드의 최소 구조. 우리가 읽는 필드만 정의한다(나머지는 무시).
@@ -95,7 +102,88 @@ func sessionFrom(a map[string]kv) intake.Session {
 	s.Model = strp(a, attrModel)
 	s.StartedAt = strp(a, attrStartedAt)
 	s.EndedAt = strp(a, attrEndedAt)
+
+	// 카운터·series 는 JSON 문자열 속성으로 온다(위 상수 주석). 깨진 JSON 은 조용히 건너뛴다 —
+	// 인제스트는 부분 실패로 전체를 버리지 않는다(세션 합계는 이미 위에서 살렸다).
+	s.Counters = []intake.Counter{}
+	s.Series = []intake.Bucket{}
+	if raw := str(a, attrCountersJSON); raw != "" {
+		var cs []intake.Counter
+		if json.Unmarshal([]byte(raw), &cs) == nil {
+			s.Counters = cs
+		}
+	}
+	if raw := str(a, attrSeriesJSON); raw != "" {
+		var bs []intake.Bucket
+		if json.Unmarshal([]byte(raw), &bs) == nil {
+			s.Series = bs
+		}
+	}
 	return s
+}
+
+// Export 는 세션들을 OTLP/HTTP(JSON) 로그 페이로드로 만든다(우리 → 표준 파이프라인). 고객이
+// 자기 관측 백엔드로도 사용량을 받게 하는 경로다. Parse 의 역이며, 왕복이 보존된다(otlp_test).
+func Export(sessions []intake.Session) ([]byte, error) {
+	records := make([]map[string]any, 0, len(sessions))
+	for _, s := range sessions {
+		attrs := []kv{
+			strKV(attrSessionID, s.SessionID),
+			intKV(attrInput, s.Input),
+			intKV(attrOutput, s.Output),
+			intKV(attrCacheRead, s.CacheRead),
+			intKV(attrCacheCrt, s.CacheCreate),
+			intKV(attrWebSearch, s.WebSearch),
+			intKV(attrWebFetch, s.WebFetch),
+			intKV(attrTurns, s.Turns),
+		}
+		attrs = appendStrp(attrs, attrModel, s.Model)
+		attrs = appendStrp(attrs, attrProject, s.Project)
+		attrs = appendStrp(attrs, attrUser, s.Username)
+		attrs = appendStrp(attrs, attrMachine, s.Machine)
+		attrs = appendStrp(attrs, attrStartedAt, s.StartedAt)
+		attrs = appendStrp(attrs, attrEndedAt, s.EndedAt)
+		if len(s.Counters) > 0 {
+			if b, err := json.Marshal(s.Counters); err == nil {
+				attrs = append(attrs, strKV(attrCountersJSON, string(b)))
+			}
+		}
+		if len(s.Series) > 0 {
+			if b, err := json.Marshal(s.Series); err == nil {
+				attrs = append(attrs, strKV(attrSeriesJSON, string(b)))
+			}
+		}
+		records = append(records, map[string]any{"attributes": attrs})
+	}
+	payload := map[string]any{
+		"resourceLogs": []map[string]any{{
+			"resource":  map[string]any{"attributes": []kv{}},
+			"scopeLogs": []map[string]any{{"logRecords": records}},
+		}},
+	}
+	return json.Marshal(payload)
+}
+
+func strKV(key, val string) kv {
+	var k kv
+	k.Key = key
+	k.Value.StringValue = &val
+	return k
+}
+
+func intKV(key string, val int64) kv {
+	var k kv
+	k.Key = key
+	s := fmt.Sprintf("%d", val) // OTLP/JSON int64 는 문자열
+	k.Value.IntValue = &s
+	return k
+}
+
+func appendStrp(attrs []kv, key string, p *string) []kv {
+	if p != nil && *p != "" {
+		attrs = append(attrs, strKV(key, *p))
+	}
+	return attrs
 }
 
 func index(attrs []kv) map[string]kv {

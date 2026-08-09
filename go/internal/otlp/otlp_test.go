@@ -1,6 +1,10 @@
 package otlp
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/tscorp/user-usage/internal/intake"
+)
 
 func TestParseLogs(t *testing.T) {
 	body := []byte(`{"resourceLogs":[{"resource":{"attributes":[
@@ -60,5 +64,56 @@ func TestParseEmpty(t *testing.T) {
 func TestParseBadJSON(t *testing.T) {
 	if _, err := Parse([]byte(`{bad`)); err == nil {
 		t.Fatal("깨진 JSON 은 err 를 내야 한다")
+	}
+}
+
+// 카운터·series 는 JSON 문자열 속성으로 실린다.
+func TestParseCountersAndSeries(t *testing.T) {
+	body := []byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"attributes":[
+	  {"key":"claude.session.id","value":{"stringValue":"s"}},
+	  {"key":"claude.counters.json","value":{"stringValue":"[{\"kind\":\"tool\",\"key\":\"Read\",\"count\":5}]"}},
+	  {"key":"claude.series.json","value":{"stringValue":"[{\"hour\":\"2026-08-09T10\",\"model\":\"claude-opus-4\",\"input\":100}]"}}
+	]}]}]}]}`)
+	p, err := Parse(body)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	s := p.Sessions[0]
+	if len(s.Counters) != 1 || s.Counters[0].Kind != "tool" || s.Counters[0].Key != "Read" || s.Counters[0].Count != 5 {
+		t.Fatalf("counters 매핑 불일치: %+v", s.Counters)
+	}
+	if len(s.Series) != 1 || s.Series[0].Model != "claude-opus-4" || s.Series[0].Input != 100 {
+		t.Fatalf("series 매핑 불일치: %+v", s.Series)
+	}
+}
+
+// Export → Parse 왕복이 세션 값을 보존한다(우리 → OTLP → 우리).
+func TestExportParseRoundtrip(t *testing.T) {
+	in := intake.Session{
+		SessionID: "rt-1", Input: 100, Output: 50, CacheRead: 2000, CacheCreate: 300,
+		WebSearch: 2, WebFetch: 1, Turns: 7,
+		Counters: []intake.Counter{{Kind: "tool", Key: "Read", Count: 5}},
+		Series:   []intake.Bucket{{Hour: "2026-08-09T10", Model: "claude-opus-4", Input: 100, Output: 50}},
+	}
+	body, err := Export([]intake.Session{in})
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	p, err := Parse(body)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(p.Sessions) != 1 {
+		t.Fatalf("왕복 세션 수 = %d", len(p.Sessions))
+	}
+	got := p.Sessions[0]
+	if got.SessionID != in.SessionID || got.Input != in.Input || got.CacheRead != in.CacheRead || got.Turns != in.Turns {
+		t.Fatalf("왕복 스칼라 불일치: %+v", got)
+	}
+	if len(got.Counters) != 1 || got.Counters[0].Count != 5 {
+		t.Fatalf("왕복 counters 불일치: %+v", got.Counters)
+	}
+	if len(got.Series) != 1 || got.Series[0].Model != "claude-opus-4" {
+		t.Fatalf("왕복 series 불일치: %+v", got.Series)
 	}
 }

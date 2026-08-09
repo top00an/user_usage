@@ -69,9 +69,10 @@ func New(cfg config.Config) http.Handler {
 		s.limiter = newRateLimiter(cfg.IntakeRate, cfg.IntakeBurst)
 	}
 	if cfg.ReadOnly {
-		s.routes = []route{s.routeAnalytics, s.readOnlyAdmin}
+		// export 는 조회이므로 readOnly 에서도 유효하다(analytics 앞에 둬 admin 이 삼키기 전에 잡는다).
+		s.routes = []route{s.routeOTLPExport, s.routeAnalytics, s.readOnlyAdmin}
 	} else {
-		s.routes = []route{s.routeIntake, s.routeOTLP, s.routeAnalytics, s.routeAdmin}
+		s.routes = []route{s.routeIntake, s.routeOTLP, s.routeOTLPExport, s.routeAnalytics, s.routeAdmin}
 	}
 	return s
 }

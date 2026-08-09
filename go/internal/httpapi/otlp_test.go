@@ -46,4 +46,17 @@ func TestOTLPLogsIngest(t *testing.T) {
 	if rec := do(t, h, http.MethodPost, "/v1/logs", "{bad", withIntake); rec.Code != http.StatusBadRequest {
 		t.Fatalf("깨진 OTLP: %d (기대 400)", rec.Code)
 	}
+
+	// export: admin 이 세션을 OTLP 로 받는다 — 방금 넣은 세션이 다시 나온다(왕복).
+	rec = do(t, h, http.MethodGet, "/api/usage/export/otlp", "", withAdmin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export: %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "otlp-sess-1") || !strings.Contains(rec.Body.String(), "resourceLogs") {
+		t.Fatalf("export 본문에 세션/OTLP 구조가 없다: %s", rec.Body.String())
+	}
+	// intake 스코프로는 export 조회 불가(403).
+	if rec := do(t, h, http.MethodGet, "/api/usage/export/otlp", "", withIntake); rec.Code != http.StatusForbidden {
+		t.Fatalf("intake 로 export: %d (기대 403)", rec.Code)
+	}
 }

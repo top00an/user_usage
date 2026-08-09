@@ -4,7 +4,9 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/tscorp/user-usage/internal/intake"
 	"github.com/tscorp/user-usage/internal/otlp"
+	"github.com/tscorp/user-usage/internal/store"
 )
 
 /*
@@ -38,4 +40,52 @@ func (s *server) routeOTLP(w http.ResponseWriter, r *http.Request, c *rctx) (boo
 	// OTLP 성공 응답은 ExportLogsServiceResponse — 빈 객체가 "전부 수용"이다.
 	writeJSON(w, http.StatusOK, map[string]any{}, nil)
 	return true, nil
+}
+
+/*
+ * routeOTLPExport — 우리 → OTLP. 조회한 세션을 OTLP/JSON 로그로 내보낸다. 고객이 자기 관측
+ * 백엔드로도 사용량을 받게 하는 경로다(판매 포인트). admin(열람) 스코프만 — 데이터를 읽어 내보낸다.
+ *
+ *   GET /api/usage/export/otlp?days=30[&user=&model=&limit=]
+ */
+func (s *server) routeOTLPExport(w http.ResponseWriter, r *http.Request, c *rctx) (bool, error) {
+	if r.Method != http.MethodGet || c.path != "/api/usage/export/otlp" {
+		return false, nil
+	}
+	rows, err := store.SessionRows(r.Context(), store.Filter{
+		Username: c.query.Get("user"),
+		Model:    c.query.Get("model"),
+		Limit:    store.SessionRowsMax,
+	})
+	if err != nil {
+		return true, err
+	}
+	sessions := make([]intake.Session, 0, len(rows))
+	for _, row := range rows {
+		sessions = append(sessions, intake.Session{
+			SessionID: row.SessionID,
+			Username:  nilIfEmpty(row.Username), Machine: nilIfEmpty(row.Machine),
+			Project: nilIfEmpty(row.Project), Model: nilIfEmpty(row.Model),
+			StartedAt: row.StartedAt, EndedAt: row.EndedAt,
+			Input: row.Input, Output: row.Output,
+			CacheRead: row.CacheRead, CacheCreate: row.CacheCreate,
+			WebSearch: row.WebSearch, WebFetch: row.WebFetch, Turns: row.Turns,
+		})
+	}
+	body, err := otlp.Export(sessions)
+	if err != nil {
+		return true, err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+	return true, nil
+}
+
+// nilIfEmpty 는 빈 문자열을 nil 로 접는다("" 와 NULL 을 가르는 세션 필드 규율).
+func nilIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

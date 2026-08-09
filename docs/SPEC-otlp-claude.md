@@ -49,11 +49,34 @@ cacheCreate·cc1h)과 7개 카운터 축(tool·bash·slash·skill·agent·mcp·k
 퍼스트파티(`/api/usage`)나 이 확장을 이해하는 클라이언트가 필요하다 — **퍼스트파티가 항상 1급이고,
 OTLP 는 표준 파이프라인 호환을 위한 부분집합**이다.
 
-## 현재 범위(Phase 2 S1)와 다음
+## 카운터 축·시간버킷 (S2)
 
-- **지금**: 세션 집계(토큰·모델·귀속·턴). 로그 레코드 → 세션 저장.
-- **다음(S2)**: 카운터 축(tool·bash·… )과 시간 버킷(series)을 OTLP 속성/메트릭으로 확장, 그리고
-  (선택) 우리 → OTLP export 로 고객이 자기 백엔드로도 받게.
+카운터 축(tool·bash·slash·skill·agent·mcp·keyword)과 시간버킷(series)은 구조가 깊어(축×키 다대다,
+버킷 배열) OTLP 표준 속성으로 표현하기 어렵다. OTLP/JSON 의 복합 AnyValue 는 파이프라인마다 인코딩이
+갈려 상호운용이 약하다. 그래서 이 둘은 **JSON 문자열 속성**으로 싣는다 — 표준 속성 채널을 그대로
+쓰면서 구조를 보존한다.
+
+| 속성 키 | 값 | → |
+|---|---|---|
+| `claude.counters.json` | `[{"kind","key","count"}]` (JSON 문자열) | usage_counters |
+| `claude.series.json` | `[{"hour","model","input",...}]` (JSON 문자열) | usage_series |
+
+## Export — 우리 → OTLP (S2)
+
+고객이 자기 관측 백엔드로도 사용량을 받게 하는 경로(판매 포인트). admin(열람) 스코프.
+
+```
+GET /api/usage/export/otlp[?user=&model=]
+Authorization: Bearer <USAGE_ADMIN_TOKEN 또는 org 열람 토큰>
+```
+
+조회한 세션을 OTLP/HTTP(JSON) 로그 페이로드로 돌려준다. `Parse` 의 역이며 **왕복이 보존**된다
+(우리 → OTLP → 우리에서 스칼라·카운터·series 가 동일). remote(읽기전용) 모드에서도 유효하다.
+
+## 다음
+
+- (선택) OTLP metrics 채널로 토큰을 별도 전송, gen_ai semantic conventions 정합성 강화.
+- Phase 3: 셀프서브 온보딩·미터링/청구·SSO.
 
 ## 예시 (curl)
 
