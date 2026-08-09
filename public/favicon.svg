@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="사용량 대시보드">
-  <rect width="32" height="32" rx="7" fill="#1f2937"/>
-  <rect x="7"  y="17" width="4" height="9"  rx="1.5" fill="#7dd3fc"/>
-  <rect x="14" y="11" width="4" height="15" rx="1.5" fill="#38bdf8"/>
-  <rect x="21" y="6"  width="4" height="20" rx="1.5" fill="#0ea5e9"/>
-</svg>

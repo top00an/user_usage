@@ -2,24 +2,15 @@
   "name": "user-usage",
   "version": "0.1.0",
   "private": true,
-  "description": "Claude Code 사용량 관측 대시보드 — 팀원 PC 의 토큰·도구 사용량을 모아 비용과 분포로 보여준다.",
+  "description": "Claude Code 사용량 관측 대시보드 — Go 백엔드 + Next.js 프런트. 팀원 PC 의 토큰·도구 사용량을 모아 비용과 분포로 보여준다.",
   "license": "UNLICENSED",
   "type": "commonjs",
-  "main": "index.js",
   "engines": {
     "node": ">=22.5"
   },
+  "//": "이 레포의 서버·프런트는 Go(go/) + Next.js(web/) 다. 이 루트 package.json 은 계약 검증 하네스만 남긴다 — Node 서버(server.js)는 2026-08-09 컷오버로 제거됐고, 그래서 골든을 재캡처하는 contract/contract:selfcheck 는 함께 사라졌다(golden 은 그 시점에 동결). contract:verify 는 이미 떠 있는 Go 서버(--base)를 골든과 대조하므로 계속 유효하다.",
   "scripts": {
-    "start": "node server.js",
-    "test": "node --import ./test/sqlite-setup.mjs --test --test-timeout=300000 --test-reporter=spec $(ls test/*.test.js | grep -v usage-standalone)",
-    "test:standalone": "node --import ./test/sqlite-setup.mjs --test --test-timeout=300000 --test-reporter=spec --test-concurrency=1 test/usage-standalone.test.js",
-    "test:all": "npm test && npm run test:standalone",
-    "contract": "node contract/run.mjs capture",
-    "contract:selfcheck": "node contract/run.mjs selfcheck",
     "contract:verify": "node contract/run.mjs verify",
     "verify:embed": "bash scripts/build.sh && git diff --exit-code -- go/internal/httpapi/webroot"
-  },
-  "dependencies": {
-    "pg": "^8.22.0"
   }
 }

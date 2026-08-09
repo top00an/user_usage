@@ -1,21 +1,23 @@
 # user-usage — Claude Code 사용량 관측 대시보드
 
 팀원 PC 에서 올라온 Claude Code 세션 텔레메트리를 모아 **누가 · 무엇을 · 얼마나 썼고 얼마어치인가**를
-보여주는 조회 도구입니다. 의존성은 `pg` 하나(원격 PostgreSQL 모드에서만 실제로 로드됩니다).
-프런트엔드는 빌드 단계가 없습니다 — 바닐라 ESM 과 CSS 파일 하나입니다.
+보여주는 조회 도구입니다. **백엔드는 Go(`go/`), 프런트는 Next.js(`web/`)** 이고, `scripts/build.sh` 가
+프런트 산출물을 Go 바이너리에 `go:embed` 로 넣어 **배포는 단일 실행 파일 하나**가 됩니다.
 
 ```
-USAGE_ADMIN_TOKEN=$(openssl rand -hex 24) npm start
-# → http://127.0.0.1:4191
+bash scripts/build.sh                                   # web 빌드 → webroot 임베드 → go build
+USAGE_ADMIN_TOKEN=$(openssl rand -hex 24) \
+  USAGE_DATA_DIR=./data ./go/usage-server              # local(sqlite) 기동
+# → http://127.0.0.1:4191   ·   컨테이너 기동은 docker-compose.yml / Dockerfile
 ```
 
-> ⚠ **이 문서는 Node 구현을 설명합니다.** 2026-08-07 에 **Go 백엔드 + Next.js 프런트** 포팅이
-> 착지해 지금 두 구현이 공존합니다(`go/` · `web/`). Node 를 남긴 이유는 그것이 포팅 합격 판정의
-> 근거(골든 44개)이기 때문입니다 — 무엇이 아직 검증되지 않았는지와 언제 Node 를 지울 수 있는지는
-> [`PORT-STATUS.md`](PORT-STATUS.md) 를 보십시오.
+> ✅ **2026-08-09 컷오버 완료 — Node 구현(`server.js`·`lib/`·`routes/`·`public/`)은 제거됐습니다.**
+> 계약 게이트(`contract:verify` 골든 44/44 × 3회)와 PostgreSQL(remote) 실측 검증을 통과한 뒤
+> 단일 Go + Next.js 스택으로 전환했습니다. 경위·잔여 리스크는 [`PORT-STATUS.md`](PORT-STATUS.md).
+> 데이터를 올리는 **수집기는 `collector/`** 에 있습니다(`POST /api/usage`).
 >
-> **도구의 성격과 데이터 정책(무엇을 저장하지 않는가 · 무엇이 언제까지 남는가)은 이 문서가 계속
-> 단일 출처입니다.** 그 결정들은 구현과 무관하고, 두 구현 모두 그것을 따릅니다.
+> **도구의 성격과 데이터 정책(무엇을 저장하지 않는가 · 무엇이 언제까지 남는가)은 이 문서가
+> 단일 출처입니다.**
 
 ---
 

@@ -1,5 +1,30 @@
 # 포팅 현황 — Node → Go + Next.js
 
+> ## ✅ 2026-08-09 — 컷오버 완료 (CLOSED)
+>
+> **Node 구현은 제거됐습니다**(`server.js`·`index.js`·`lib/`·`routes/`·`public/`·Node `test/`).
+> 이제 백엔드 Go(`go/`) · 프런트 Next.js(`web/`) 단일 스택입니다. 게이트 통과 근거:
+>
+> - `contract:verify` 골든 **44/44 × 3회**(새 포트·새 빈 DB) — sqlite local 실측.
+> - **PostgreSQL(remote) 실측 검증**(아래 리스크 1 해소): 앱 롤(NOSUPERUSER·NOBYPASSRLS)로
+>   마이그레이션·RLS 테넌트 격리·`?→$n`·수제 커넥션 풀 PASS. **pg 전용 버그 1건 수정** —
+>   `SUM/AVG(bigint)`→`numeric` 을 조용히 0 으로 떨구던 스캔 결함(`db/pg.go`).
+> - **수집기 추가**(아래 리스크 7 해소): `collector/` — jsonl→`POST /api/usage`, 멱등·증분·정책필터.
+> - 부동소수 파리티 잔여 2건 해소: 분위수 `idx` 도 값 배리어로 반올림(FMA 융합 차단),
+>   결정적 정렬 타이브레이크 2곳(`store.UsageModelAxis`·`identity.Unmapped`).
+>
+> 골든(`contract/golden/`)은 제거 시점에 **동결**됐습니다 — 캡처는 Node 가 하던 것이라
+> 더는 재생성하지 않고, 회귀 대조(`contract:verify`, Go 서버 대상)만 유효합니다.
+>
+> **잔여(후속):** 런타임 Docker 이미지가 `migrations/` 를 담지 않음 — remote(pg) 모드에서
+> 마이그레이션 러너가 파일을 찾게 하려면 COPY 추가 필요(remote 는 사전 마이그레이션 전제라
+> 조회만 하면 무해할 수 있음, 확인 요). docker 이미지 빌드 자체는 이 환경(docker 미설치)에서
+> 미검증 — 네이티브 스모크만 통과.
+>
+> 아래는 컷오버 이전(2026-08-07)의 기록입니다 — 경위 참고용으로 보존합니다.
+
+---
+
 2026-08-07. **백엔드 Go · 프런트 Next.js(React) 전환이 착지했고, 현행 Node 서버는 그대로 살아
 있습니다.** 둘이 공존하는 이유와 무엇이 아직 검증되지 않았는지를 여기 적습니다.
 
