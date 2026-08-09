@@ -61,11 +61,12 @@ USAGE_ADMIN_TOKEN=$(openssl rand -hex 24) \
 ### 로컬 (기본, sqlite)
 
 ```bash
-export USAGE_ADMIN_TOKEN=$(openssl rand -hex 24)
-npm start
+bash scripts/build.sh                         # web 빌드 → webroot 임베드 → go build (유일 빌드 경로)
+USAGE_ADMIN_TOKEN=$(openssl rand -hex 24) \
+  USAGE_DATA_DIR=./data ./go/usage-server
 ```
 
-브라우저로 열고 그 토큰을 넣으면 두 탭이 뜹니다. 데이터는 `data/usage.db` 에 쌓입니다.
+브라우저로 열고 그 토큰을 넣으면 두 탭이 뜹니다. 데이터는 `./data/usage.db` 에 쌓입니다.
 
 **토큰이 없으면 부팅을 거부합니다.** 옵션으로 두면 누군가는 반드시 토큰 없이 띄우고, 그때 아무
 에러도 나지 않습니다 — 사람별 사용량과 비용이 담긴 화면이라 그 경로를 남기지 않았습니다.
@@ -80,7 +81,7 @@ ssh -N -L 15432:<db-host>:5432 <user>@<your-host>
 USAGE_ADMIN_TOKEN=… \
 USAGE_DB_MODE=remote \
 DATABASE_URL=postgres://usage_app:<password>@127.0.0.1:15432/usage \
-npm start
+./go/usage-server
 ```
 
 이 모드는 **읽기 전용입니다.** 인테이크(`POST /api/usage`)도, 귀속 교정 쓰기도, 보존 정리기도
@@ -92,7 +93,7 @@ npm start
 > `CREATE ROLE … NOSUPERUSER NOBYPASSRLS` 로 만든 롤을 쓰세요.
 >
 > 이건 경고문으로만 남겨 두지 않았습니다. **서버가 부팅에서 롤을 직접 확인하고 위반이면
-> 거부합니다**(`lib/db/rlsguard.js` 의 판정을 `server.js` 가 부팅 경로에서 부릅니다). 터널이
+> 거부합니다**(`go/internal/db/rlsguard.go` 의 판정을 `cmd/usage-server/main.go` 가 부팅 경로에서 부릅니다). 터널이
 > 아직 안 붙어 확인이 불가능한 경우는 거부하지 않되 stderr 로 크게 남깁니다 — 검사가 돌지
 > 않았다는 사실 자체가 기록돼야 하기 때문입니다.
 
@@ -242,7 +243,7 @@ for (const route of routes) if (await route(req, res, ctx)) return;
 | 대상 | 보존 | 왜 |
 |---|---|---|
 | `usage_counters` 의 `keyword` | **90일** | 유일하게 사람이 입력한 말에서 나온다 |
-| `usage_series` | 무기한 | `pruneSeries` 가 있으나 **일부러 호출하지 않습니다.** 모델별 값의 소급 교정이 이 표가 온전하다는 데 기댑니다(`lib/store.js` 의 주석이 단일 출처) |
+| `usage_series` | 무기한 | 시리즈 프루닝을 **일부러 하지 않습니다.** 모델별 값의 소급 교정이 이 표가 온전하다는 데 기댑니다(`go/internal/store` 의 주석이 단일 출처) |
 | `usage_sessions` · `usage_counters`(그 외 축) | 무기한 | 계정명·머신명·프로젝트명이 여기 있고, 그게 이 도구의 목적 자체(누가 얼마나 썼나)라 지우면 도구가 없어집니다 |
 | `usage_audit` | 무기한 | "어제 보던 이름이 왜 오늘 다른가"에 답하는 표입니다. 기한을 두면 그 답이 먼저 사라집니다 |
 
@@ -252,7 +253,7 @@ for (const route of routes) if (await route(req, res, ctx)) return;
 직접 지우는 쪽이 맞습니다 — 이 축들은 "오래되면 값어치가 준다"가 아니라 "있거나 없거나"입니다.
 
 sqlite 는 로드 시점에 DDL 을 직접 겁니다(멱등). PostgreSQL 은 `migrations/pg/*.sql` 이 스키마를
-소유하며, 러너는 `lib/db/migrate.js` 입니다 — **자동 실행 경로에 올리지 않았습니다.** 되돌리기
+소유하며, 러너는 `go/internal/db/migrate.go` 입니다 — **자동 실행 경로에 올리지 않았습니다.** 되돌리기
 어려운 작업은 사람이 명시적으로 돌립니다.
 
 > 마이그레이션 번호에 공백이 있습니다(0014·0015·0017·0026). 의도된 것입니다 — 기존 DB 의
