@@ -171,6 +171,14 @@ var sqliteDDL = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_usage_reco_at ON usage_recommendations(at)`,
 	`CREATE INDEX IF NOT EXISTS idx_usage_reco_score ON usage_recommendations(score)`,
+
+	// 팀 멤버십(사용자→팀) — 팀별 롤업의 매핑. sqlite 는 단일 테넌트라 tenant_id 컬럼이 없다
+	// (usage_sessions 와 같은 규율). pg 는 migrations/pg/0031 이 tenant_id + RLS 로 소유한다.
+	`CREATE TABLE IF NOT EXISTS team_members (
+		username TEXT PRIMARY KEY,
+		team TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_team_members_team ON team_members(team)`,
 }
 
 // Init 은 저장소를 이 DB 에 건다. sqlite 는 DDL 을 직접 걸어 **멱등하게** 초기화하고,

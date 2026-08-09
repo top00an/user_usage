@@ -153,6 +153,102 @@ func (s *server) routeSeats(w http.ResponseWriter, r *http.Request, c *rctx) (bo
 	return true, nil
 }
 
+// ── 팀 롤업 ─────────────────────────────────────────────────────────────────
+
+type teamRowDTO struct {
+	Team         string   `json:"team"`
+	Members      int      `json:"members"`
+	Sessions     int      `json:"sessions"`
+	Turns        int64    `json:"turns"`
+	Tokens       int64    `json:"tokens"`
+	USD          float64  `json:"usd"`
+	UsdPerMember float64  `json:"usdPerMember"`
+	Usernames    []string `json:"usernames"`
+}
+
+type teamsResponse struct {
+	Days     int          `json:"days"`
+	From     string       `json:"from"`
+	To       string       `json:"to"`
+	Teams    []teamRowDTO `json:"teams"`
+	PricedAt string       `json:"pricedAt"`
+	Unpriced []string     `json:"unpriced"`
+}
+
+// routeTeams 는 사용자별 집계를 team_members 매핑으로 팀에 롤업한다. 팀 미배정 사용자는
+// "미배정" 그룹으로 모은다(숨기면 총합이 팀 합과 안 맞아 사람이 혼란한다).
+func (s *server) routeTeams(w http.ResponseWriter, r *http.Request, c *rctx) (bool, error) {
+	ctx := r.Context()
+	days := clampInt(int(numOr(c.query.Get("days"), 30)), 1, 3650)
+	today := tz.LocalDay(time.Now().UTC().Format(time.RFC3339), tz.OffsetMin())
+	from := shiftDayLocal(today, -(days - 1))
+	to := today
+
+	rows, costs, err := seatWindow(ctx, from, to)
+	if err != nil {
+		return true, err
+	}
+	teamOf, err := store.TeamOf(ctx)
+	if err != nil {
+		return true, err
+	}
+	perUser := aggregateSeats(rows, costs)
+
+	type tacc struct {
+		members            map[string]bool
+		sessions           int
+		turns, tokens      int64
+		usd                float64
+	}
+	const unassigned = "미배정"
+	by := map[string]*tacc{}
+	for user, a := range perUser {
+		team := teamOf[user]
+		if team == "" {
+			team = unassigned
+		}
+		e := by[team]
+		if e == nil {
+			e = &tacc{members: map[string]bool{}}
+			by[team] = e
+		}
+		e.members[user] = true
+		e.sessions += a.sessions
+		e.turns += a.turns
+		e.tokens += a.tokens
+		e.usd += a.usd
+	}
+
+	teams := make([]teamRowDTO, 0, len(by))
+	for team, e := range by {
+		names := make([]string, 0, len(e.members))
+		for u := range e.members {
+			names = append(names, u)
+		}
+		sort.Strings(names)
+		row := teamRowDTO{
+			Team: team, Members: len(e.members), Sessions: e.sessions,
+			Turns: e.turns, Tokens: e.tokens, USD: e.usd, Usernames: names,
+		}
+		if len(e.members) > 0 {
+			row.UsdPerMember = e.usd / float64(len(e.members))
+		}
+		teams = append(teams, row)
+	}
+	sort.SliceStable(teams, func(i, j int) bool {
+		if teams[i].USD != teams[j].USD {
+			return teams[i].USD > teams[j].USD
+		}
+		return teams[i].Team < teams[j].Team
+	})
+
+	writeJSON(w, http.StatusOK, teamsResponse{
+		Days: days, From: from, To: to, Teams: teams,
+		PricedAt: cost.PricedAt(), Unpriced: unpricedModels(costs),
+	}, nil)
+	return true, nil
+}
+
 // seatWindow 는 한 기간의 세션 rows 와 그 비용을 돌려준다(leaderboard 와 같은 계산).
 func seatWindow(ctx context.Context, from, to string) ([]store.Session, []cost.Result, error) {
 	rows, err := store.SessionRows(ctx, store.Filter{From: from, To: to, Limit: store.SessionRowsMax})
