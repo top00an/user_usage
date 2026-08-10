@@ -8,7 +8,8 @@
 #   1) OS/arch 감지 → 수집기 바이너리 다운로드(Authorization: Bearer)
 #   2) 설정 저장(~/.config/claude-usage/config.env, perms 600)
 #   3) Claude Code SessionEnd 훅 등록(~/.claude/settings.json, 비파괴·멱등)
-#   4) 초기 백필 1회 실행 + 결과 보고
+#   4) Antigravity CLI 가 있으면 statusLine(캡처) + Stop 훅(플러시) 등록 — 없으면 조용히 스킵
+#   5) 초기 백필 1회 실행 + 결과 보고
 #
 # ── 왜 POSIX sh 인가 ─────────────────────────────────────────────────────────
 # 원라인이 `| sh` 로 넘긴다. bash 가 아니라 dash/ash 에서도 그대로 돌아야 하므로
@@ -116,6 +117,68 @@ if ! "$BIN" -h >/dev/null 2>&1; then
 fi
 info "설치: $BIN"
 
+# ── Antigravity 감지 ─────────────────────────────────────────────────────────
+# Antigravity(`agy`)는 다른 셋과 다르게 **디스크에 토큰을 남기지 않는다.** 토큰이 보이는
+# 자리는 statusLine 하나뿐이라, 그 자리를 우리가 받아 스풀에 적고(캡처) Stop 훅에서
+# 서버로 밀어야 한다(플러시). 그 두 등록이 ⑤ 에서 일어난다.
+#
+# 감지 실패는 **완전히 조용하다.** 안 쓰는 사람에게 "Antigravity 없음" 같은 줄을 보이면
+# 설치 로그가 남의 도구 목록이 된다 — 기존 원천(claude·codex·gemini)의 스킵 규율과 같다.
+AGY_HOME="$HOME/.gemini/antigravity-cli"
+AGY_SETTINGS="$AGY_HOME/settings.json"
+AGY_HOOKS="$HOME/.gemini/config/hooks.json"
+# 우리 것을 담는 네임스페이스 키. hooks.json 은 `orca-status` 같은 **형제 키들의 맵**이라
+# 이 키 하나만 통째로 갈아끼우면 남의 키는 한 글자도 건드리지 않는다(그리고 그게 멱등이다).
+AGY_NS="claude-usage"
+# 멱등 키이자 자기참조 판정 키. 수집기의 antigravity.StatusLineFlag 와 **같은 문자열**이어야
+# 한다 — 설치기와 수집기가 같은 근거로 "이미 우리 것인가"를 판정한다.
+AGY_MARKER="-antigravity-statusline"
+
+AGY=0
+if [ -x "$HOME/.local/bin/agy" ] || [ -d "$AGY_HOME" ]; then
+  AGY=1
+fi
+
+# agy_read_statusline — settings.json 의 현재 statusLine.command 를 출력한다(없으면 빈 문자열).
+#
+# 이 값이 이 작업의 전부다. 여기 남의 명령이 있는데 그냥 덮으면 사용자는 매 순간 보던
+# 화면을 잃는다. 그래서 읽어서 config.env 로 옮기고(AGY_PREV_STATUSLINE) 수집기가 체인한다.
+# 손상 JSON 이면 읽기 단계에서 멈춘다 — 못 읽는 파일은 병합해서도 안 된다.
+#
+# **객체와 문자열 두 모양을 모두 읽는다.** 실측된 모양은 `{"type":"command","command":"..."}`
+# 이지만, 축약형 `"statusLine": "..."` 을 못 읽으면 그 사용자의 상태줄만 조용히 사라진다.
+# 못 읽는 쪽으로 틀리는 비용이 너무 크므로 넓게 읽는다.
+agy_read_statusline() {
+  [ -f "$AGY_SETTINGS" ] || return 0
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '(if (.statusLine|type)=="object" then .statusLine.command
+            elif (.statusLine|type)=="string" then .statusLine
+            else null end)
+           | if type=="string" then . else "" end' "$AGY_SETTINGS"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$AGY_SETTINGS" <<'PY'
+import json, sys
+txt = open(sys.argv[1]).read().strip()
+data = json.loads(txt) if txt else {}
+sl = data.get("statusLine") if isinstance(data, dict) else None
+if isinstance(sl, dict):
+    sl = sl.get("command")
+sys.stdout.write(sl if isinstance(sl, str) else "")
+PY
+  elif command -v node >/dev/null 2>&1; then
+    node -e '
+      const fs=require("fs");
+      const t=fs.readFileSync(process.argv[1],"utf8").trim();
+      const d=t?JSON.parse(t):{};
+      let sl=(d&&typeof d==="object"&&!Array.isArray(d))?d.statusLine:null;
+      if(sl&&typeof sl==="object"&&!Array.isArray(sl)) sl=sl.command;
+      process.stdout.write(typeof sl==="string"?sl:"");
+    ' "$AGY_SETTINGS"
+  else
+    die "jq/python3/node 중 하나가 필요하다 — 기존 statusLine 을 안전하게 읽을 수 없어 멈춘다: $AGY_SETTINGS"
+  fi
+}
+
 # ── ③ 설정 저장 ──────────────────────────────────────────────────────────────
 # config.env 는 이제 유일한 비밀 보관처다. SERVER·KEY 에 더해 COLLECTOR_BIN 을 담아
 # 훅이 이 파일만 sourcing 해서 실행에 필요한 모든 값을 얻는다(settings.json 엔 비밀 없음).
@@ -127,11 +190,48 @@ cfg="$cfg_dir/config.env"
 mkdir -p "$cfg_dir"
 # 값을 작은따옴표로 감싸고 내부 작은따옴표는 '\'' 로 이스케이프한다(POSIX 안전 인용).
 shquote() { printf "'"; printf '%s' "$1" | sed "s/'/'\\\\''/g"; printf "'"; }
+
+# jsonquote — JSON 문자열 **본문**으로 안전하게 만든다(감싸는 따옴표는 호출부가 붙인다).
+#
+# 왜 필요한가: JSON 도구가 하나도 없을 때 우리는 설정 파일을 `printf` 로 직접 만든다.
+# 그런데 훅 명령에는 `"$HOME/..."` 처럼 **큰따옴표가 들어 있다.** 그대로 박으면 문자열이
+# 거기서 끊겨 파일 전체가 깨진 JSON 이 되고, 도구가 없으니 재검증도 못 해 그대로 저장된다.
+# 결과는 "설치는 성공했다고 나오는데 설정 파일이 죽어 있는" 최악의 조용한 실패다.
+# 우리 명령에는 제어문자·개행이 없으므로 백슬래시와 큰따옴표 둘만 이스케이프하면 충분하다.
+jsonquote() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+# ── 기존 statusLine 보존 결정 (Antigravity 가 있을 때만) ─────────────────────
+# 이 파일은 아래에서 **통째로 다시 쓰인다.** 그래서 재실행 때 AGY_PREV_STATUSLINE 을
+# 먼저 건져내지 않으면, 2회차 실행이 사용자의 원래 상태줄을 영구히 지운다
+# (그 시점엔 settings.json 에 우리 명령이 박혀 있어 원본을 되찾을 곳이 없다).
+AGY_PREV=""
+if [ "$AGY" = "1" ]; then
+  agy_saved=""
+  if [ -f "$cfg" ]; then
+    # 우리가 쓴 600 파일이다. 셸 인용을 되돌리는 가장 정확한 방법이 sourcing 이라
+    # **서브셸에서** 읽어 값만 꺼낸다(이 셸의 변수는 오염되지 않는다).
+    agy_saved=$( . "$cfg" >/dev/null 2>&1 || true; printf '%s' "${AGY_PREV_STATUSLINE:-}" )
+  fi
+  agy_cur=$(agy_read_statusline) \
+    || die "Antigravity settings.json 을 읽지 못했다(손상 JSON 이거나 jq/python3/node 가 없다) — 아무것도 건드리지 않았다: $AGY_SETTINGS"
+  case "$agy_cur" in
+    "")            AGY_PREV="$agy_saved" ;;   # 상태줄이 원래 없었다 → 보관값 그대로
+    *"$AGY_MARKER"*) AGY_PREV="$agy_saved" ;; # 이미 우리 것 → 보관값을 덮지 않는다(재실행)
+    *)             AGY_PREV="$agy_cur" ;;     # 남의 상태줄 → 지금 보관한다
+  esac
+fi
+
 umask_old=$(umask); umask 077
 {
   printf 'SERVER=%s\n'        "$(shquote "$SERVER")"
   printf 'KEY=%s\n'           "$(shquote "$KEY")"
   printf 'COLLECTOR_BIN=%s\n' "$(shquote "$BIN")"
+  # 있을 때만 적는다. 빈 값을 적어 두면 수집기가 "체인이 있다"고 착각할 여지를 남긴다.
+  # `[ ] && printf` 로 쓰지 않는다 — 조건이 거짓이면 그룹의 종료코드가 1 이 되어
+  # `set -e` 가 설치를 통째로 죽인다(조용히 죽어서 원인 찾기가 최악이다).
+  if [ -n "$AGY_PREV" ]; then
+    printf 'AGY_PREV_STATUSLINE=%s\n' "$(shquote "$AGY_PREV")"
+  fi
 } > "$cfg"
 umask "$umask_old"
 chmod 600 "$cfg"
@@ -243,13 +343,15 @@ else
     die "jq/python3/node 중 하나가 필요하다 — 기존 settings.json 을 안전하게 병합할 수 없어 멈춘다"
   fi
   # 파일이 없을 때만: JSON 도구 없이도 안전하게 새로 만든다.
+  # 명령에 `"$HOME/..."` 같은 큰따옴표가 들어 있으므로 반드시 jsonquote 를 거친다
+  # (여기서는 재검증할 도구조차 없어서, 깨뜨리면 아무도 못 잡는다).
   cat > "$tmpout" <<EOF
 {
   "hooks": {
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "$HOOK_CMD" }
+          { "type": "command", "command": "$(jsonquote "$HOOK_CMD")" }
         ]
       }
     ]
@@ -280,8 +382,160 @@ trap - EXIT INT TERM
 info "훅 등록: $settings"
 info "명령: $HOOK_CMD"
 
-# ── ⑤ 초기 백필 + 검증 ───────────────────────────────────────────────────────
-say "⑤ 초기 백필"
+# ── ⑤ Antigravity 연동 (statusLine 캡처 + Stop 훅 플러시) ────────────────────
+#
+# 왜 Claude 훅만으로는 안 되나: Claude 의 SessionEnd 훅이 수집기를 돌리면 **파일 기반**
+# 원천(claude·codex·gemini)이 한 번에 훑인다. Antigravity 는 파일에 토큰이 없어서 그 스캔에
+# 걸릴 것이 없다 — 누군가 statusLine 에서 값을 붙잡아 스풀에 적어 두어야 비로소 훑을 것이 생긴다.
+# 그래서 등록이 둘이다: 값을 **만드는** statusLine, 그걸 **보내는** Stop 훅.
+if [ "$AGY" = "1" ]; then
+say "⑤ Antigravity CLI 연동"
+
+# 두 명령 모두 비밀을 담지 않는다. config.env(600)를 sourcing 해 필요한 값을 얻는다 —
+# settings.json·hooks.json 은 공유·백업·스크린샷으로 새어나가기 쉬운 파일이라 토큰을 넣지 않는다.
+#
+# statusLine: AGY_PREV_STATUSLINE 을 **export** 해야 수집기(자식 프로세스)가 본다.
+# `.` sourcing 은 셸 변수를 만들 뿐 환경변수로 올려주지 않는다.
+AGY_STATUSLINE_CMD='sh -c '\''. "$HOME/.config/claude-usage/config.env" >/dev/null 2>&1 || exit 0; export AGY_PREV_STATUSLINE; exec "$COLLECTOR_BIN" '"$AGY_MARKER"''\'''
+# Stop 훅: 스풀을 서버로 민다. **원천을 좁히지 않는다** — Claude 를 전혀 안 쓰고
+# Antigravity+Codex 만 쓰는 사용자는 Claude SessionEnd 훅이 없어서, 여기서 좁히면
+# codex·gemini 가 영영 안 올라간다(복구 불가). 전량을 훑어도 체크포인트가 있어
+# 바뀐 파일이 없으면 stat 만 하고 지나간다(실측: 2회차 "바뀐 세션 0").
+# 무슨 일이 있어도 0 으로 끝낸다(`; exit 0`) — 우리 실패가 남의 CLI 에 에러로 뜨면 안 된다.
+AGY_HOOK_CMD='sh -c '\''. "$HOME/.config/claude-usage/config.env" >/dev/null 2>&1 || exit 0; USAGE_INTAKE_TOKEN="$KEY" "$COLLECTOR_BIN" -server "$SERVER" >/dev/null 2>&1; exit 0'\'''
+
+# agy_merge FILE OP ARG — JSON-aware 병합 → 검증 → .bak 백업 → 원자적 교체.
+#
+#   OP=statusline  ARG=우리 statusLine 명령  (statusLine 키만 교체, 형제 키 보존)
+#   OP=hooks       ARG=우리 Stop 훅 명령      ($AGY_NS 키만 교체, 형제 키 보존)
+#
+# 규율은 ④ 와 같다: jq → python3 → node, 셋 다 없는데 파일이 이미 있으면 **덮지 말고 중단**,
+# 손상 JSON 이면 중단하고 원본은 한 바이트도 건드리지 않는다.
+agy_merge() {
+  am_file="$1"; am_op="$2"; am_arg="$3"
+  am_tmp=$(mktemp "${TMPDIR:-/tmp}/agy-merge.XXXXXX") || die "임시 파일 생성 실패"
+  am_ok=0
+  am_tool=""
+
+  if command -v jq >/dev/null 2>&1; then
+    if [ -f "$am_file" ]; then am_in="$am_file"; else printf '{}' > "$am_tmp.in"; am_in="$am_tmp.in"; fi
+    case "$am_op" in
+      statusline)
+        # 기존 statusLine 객체의 다른 키(패딩·색 등)는 살린다 — 우리가 아는 두 키만 덮는다.
+        am_prog='(if type=="object" then . else error("최상위가 객체가 아니다") end)
+                 | .statusLine = ((if (.statusLine|type)=="object" then .statusLine else {} end)
+                                  + {"type":"command","command":$cmd})' ;;
+      hooks)
+        am_prog='(if type=="object" then . else error("최상위가 객체가 아니다") end)
+                 | .[$ns] = {"Stop":[{"type":"command","command":$cmd,"timeout":30}]}' ;;
+      *) rm -f "$am_tmp" "$am_tmp.in"; die "agy_merge: 알 수 없는 op($am_op)" ;;
+    esac
+    if jq --arg cmd "$am_arg" --arg ns "$AGY_NS" "$am_prog" "$am_in" > "$am_tmp"; then
+      am_ok=1; am_tool=jq
+    fi
+    rm -f "$am_tmp.in"
+    [ "$am_ok" = "1" ] || { rm -f "$am_tmp"; die "jq 병합 실패(손상 JSON 가능) — $am_file 을 건드리지 않았다"; }
+
+  elif command -v python3 >/dev/null 2>&1; then
+    if python3 - "$am_file" "$am_op" "$am_arg" "$AGY_NS" > "$am_tmp" <<'PY'
+import json, os, sys
+path, op, cmd, ns = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+data = {}
+if os.path.exists(path):
+    with open(path) as f:
+        txt = f.read().strip()
+    if txt:
+        data = json.loads(txt)   # 손상 JSON 이면 여기서 예외 → 종료(원본 보존)
+if not isinstance(data, dict):
+    raise SystemExit("최상위가 객체가 아니다")
+if op == "statusline":
+    sl = data.get("statusLine")
+    if not isinstance(sl, dict):
+        sl = {}
+    sl["type"] = "command"
+    sl["command"] = cmd
+    data["statusLine"] = sl
+elif op == "hooks":
+    data[ns] = {"Stop": [{"type": "command", "command": cmd, "timeout": 30}]}
+else:
+    raise SystemExit("알 수 없는 op")
+json.dump(data, sys.stdout, indent=2, ensure_ascii=False)
+PY
+    then
+      am_ok=1; am_tool=python3
+    else
+      rm -f "$am_tmp"; die "python3 병합 실패(손상 JSON 가능) — $am_file 을 건드리지 않았다"
+    fi
+
+  elif command -v node >/dev/null 2>&1; then
+    if node -e '
+        const fs=require("fs");
+        const [path,op,cmd,ns]=process.argv.slice(1);
+        let data={};
+        if(fs.existsSync(path)){const t=fs.readFileSync(path,"utf8").trim(); if(t) data=JSON.parse(t);}
+        if(typeof data!=="object"||Array.isArray(data)||data===null) throw new Error("최상위가 객체가 아니다");
+        if(op==="statusline"){
+          let sl=(data.statusLine&&typeof data.statusLine==="object"&&!Array.isArray(data.statusLine))?data.statusLine:{};
+          sl.type="command"; sl.command=cmd; data.statusLine=sl;
+        } else if(op==="hooks"){
+          data[ns]={Stop:[{type:"command",command:cmd,timeout:30}]};
+        } else throw new Error("알 수 없는 op");
+        process.stdout.write(JSON.stringify(data,null,2));
+      ' "$am_file" "$am_op" "$am_arg" "$AGY_NS" > "$am_tmp"; then
+      am_ok=1; am_tool=node
+    else
+      rm -f "$am_tmp"; die "node 병합 실패(손상 JSON 가능) — $am_file 을 건드리지 않았다"
+    fi
+
+  else
+    if [ -f "$am_file" ]; then
+      rm -f "$am_tmp"
+      die "jq/python3/node 중 하나가 필요하다 — 기존 $am_file 을 안전하게 병합할 수 없어 멈춘다"
+    fi
+    # 파일이 없을 때만: 도구 없이도 안전하게 새로 만든다(병합할 남의 값이 애초에 없다).
+    # 명령에 큰따옴표가 들어 있으므로 jsonquote 필수 — 이 경로엔 재검증 도구가 없다.
+    am_jarg=$(jsonquote "$am_arg")
+    case "$am_op" in
+      statusline) printf '{\n  "statusLine": {\n    "type": "command",\n    "command": "%s"\n  }\n}\n' "$am_jarg" > "$am_tmp" ;;
+      hooks)      printf '{\n  "%s": {\n    "Stop": [\n      { "type": "command", "command": "%s", "timeout": 30 }\n    ]\n  }\n}\n' "$AGY_NS" "$am_jarg" > "$am_tmp" ;;
+    esac
+    am_ok=1; am_tool="없음 → 새로 생성"
+  fi
+
+  [ -s "$am_tmp" ] || { rm -f "$am_tmp"; die "병합 결과가 비어 있다 — $am_file 을 건드리지 않았다"; }
+
+  # 유효 JSON 재검증. 여기를 통과하기 전에는 원본에 손대지 않는다.
+  if command -v jq >/dev/null 2>&1; then
+    jq -e . "$am_tmp" >/dev/null 2>&1 || { rm -f "$am_tmp"; die "병합 결과가 유효 JSON 이 아니다 — $am_file 을 건드리지 않았다"; }
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$am_tmp" >/dev/null 2>&1 \
+      || { rm -f "$am_tmp"; die "병합 결과가 유효 JSON 이 아니다 — $am_file 을 건드리지 않았다"; }
+  fi
+
+  mkdir -p "$(dirname "$am_file")"
+  if [ -f "$am_file" ]; then
+    cp -f "$am_file" "$am_file.bak"
+    info "백업: $am_file.bak"
+  fi
+  mv -f "$am_tmp" "$am_file"
+  info "병합 도구: $am_tool → $am_file"
+}
+
+# statusLine — 캡처 자리. 여기가 Antigravity 토큰을 볼 수 있는 **유일한** 지점이다.
+agy_merge "$AGY_SETTINGS" statusline "$AGY_STATUSLINE_CMD"
+if [ -n "$AGY_PREV" ]; then
+  info "기존 상태줄 보관: AGY_PREV_STATUSLINE (config.env) — 수집기가 그대로 통과시킨다"
+else
+  info "기존 상태줄 없음 — 수집기 요약을 표시한다"
+fi
+
+# Stop 훅 — 플러시 자리. hooks.json 은 네임스페이스 맵이라 우리 키만 갈아끼운다.
+agy_merge "$AGY_HOOKS" hooks "$AGY_HOOK_CMD"
+info "훅 등록: $AGY_HOOKS [$AGY_NS.Stop]"
+fi
+
+# ── ⑥ 초기 백필 + 검증 ───────────────────────────────────────────────────────
+say "⑥ 초기 백필"
 set +e
 # 토큰은 argv 가 아니라 USAGE_INTAKE_TOKEN env 로 넘긴다(ps aux 노출 차단).
 backfill_out=$(USAGE_INTAKE_TOKEN="$KEY" "$BIN" -all -server "$SERVER" 2>&1)
