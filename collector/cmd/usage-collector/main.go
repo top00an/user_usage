@@ -1,9 +1,10 @@
 // usage-collector — 팀원 PC 의 코딩 에이전트 트랜스크립트를 훑어 사용량을 서버로 보고한다.
 //
-// 원천은 둘이다:
+// 원천은 셋이다:
 //
 //	claude  ~/.claude/projects/<슬러그>/<sessionId>.jsonl
 //	codex   ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
+//	gemini  ~/.gemini/tmp/<슬러그>/chats/session-<ts>-<id8>.jsonl
 //
 // 흐름은 넷이다: 원천마다 세션 파일을 찾고 → 증분(바뀐 세션만) 골라 파싱·매핑하고 →
 // `POST /api/usage` 로 절대값을 보내고 → 보낸 세션의 지문을 체크포인트에 남긴다.
@@ -34,6 +35,7 @@ import (
 	"syscall"
 
 	"github.com/tscorp/user-usage/collector/internal/codex"
+	"github.com/tscorp/user-usage/collector/internal/gemini"
 	"github.com/tscorp/user-usage/collector/internal/payload"
 	"github.com/tscorp/user-usage/collector/internal/sender"
 	"github.com/tscorp/user-usage/collector/internal/state"
@@ -43,35 +45,51 @@ import (
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 type options struct {
-	dir      string
-	codexDir string
-	platform string
-	server   string
-	token    string
-	state    string
-	user     string
-	machine  string
-	limit    int
-	dryRun   bool
-	all      bool
+	dir       string
+	codexDir  string
+	geminiDir string
+	platform  string
+	server    string
+	token     string
+	state     string
+	user      string
+	machine   string
+	limit     int
+	dryRun    bool
+	all       bool
 }
 
-// aggregator 는 원천별 파서의 공통 모양이다. transcript(Claude)·codex 둘 다 이걸 만족하고,
-// 이 파일은 어느 쪽인지 몰라도 된다.
+// aggregator 는 원천별 파서의 공통 모양이다. transcript(Claude)·codex·gemini 셋 다 이걸
+// 만족하고, 이 파일은 어느 쪽인지 몰라도 된다.
 type aggregator interface {
 	AddFile(fallbackID string, r io.Reader) error
 	Sessions() []payload.Session
+}
+
+// pathAggregator 는 파일 **경로**까지 필요한 파서를 위한 선택적 확장이다.
+//
+// Gemini 만 이걸 만족한다: 프로젝트 이름이 파일 안이 아니라 경로의 슬러그 디렉터리에 있다
+// (`<geminiDir>/tmp/<슬러그>/chats/...`). Claude·Codex 는 줄 안의 cwd 로 알 수 있어 이 확장을
+// 구현하지 않고, 따라서 두 원천의 동작은 이 변경으로 한 글자도 바뀌지 않는다.
+type pathAggregator interface {
+	AddFileAt(path, fallbackID string, r io.Reader) error
 }
 
 // source 는 훑을 원천 하나다.
 type source struct {
 	platform string
 	dir      string
+	// match 는 스캔할 파일인지 판정한다. 기본은 `*.jsonl` 이고, Gemini 만 다르다
+	// (레거시 `.json` 을 같이 받고, `.unreadable-*`·`.tmp-*` 곁가지를 반드시 제외한다).
+	match func(path string) bool
 	// key 는 파일 경로 → 세션 그룹 키. Claude 는 파일명 stem 이 곧 sessionId 이고,
-	// Codex 는 롤아웃 파일명 꼬리의 uuid 다.
+	// Codex 는 롤아웃 파일명 꼬리의 uuid, Gemini 는 파일명 stem(서브에이전트는 부모 세션 id)이다.
 	key    func(path string) string
 	newAgg func() aggregator
 }
+
+// matchJSONL 은 Claude·Codex 가 쓰는 기본 규칙이다(기존 동작 그대로).
+func matchJSONL(path string) bool { return strings.HasSuffix(path, ".jsonl") }
 
 // sourcesOf 는 옵션에서 실제로 훑을 원천을 고른다. 디렉터리가 비어 있으면(플래그로 ""를 주면)
 // 그 원천은 아예 빠진다 — 개별 비활성화가 그 방식이다.
@@ -81,6 +99,7 @@ func sourcesOf(opt options) []source {
 		out = append(out, source{
 			platform: "claude",
 			dir:      opt.dir,
+			match:    matchJSONL,
 			key:      func(p string) string { return strings.TrimSuffix(filepath.Base(p), ".jsonl") },
 			newAgg:   func() aggregator { return transcript.New() },
 		})
@@ -89,8 +108,20 @@ func sourcesOf(opt options) []source {
 		out = append(out, source{
 			platform: codex.Platform,
 			dir:      opt.codexDir,
+			match:    matchJSONL,
 			key:      codex.SessionIDFromPath,
 			newAgg:   func() aggregator { return codex.New() },
+		})
+	}
+	if wants(opt.platform, gemini.Platform) && opt.geminiDir != "" {
+		// 세션은 `<geminiDir>/tmp/` 아래에만 있다. 스캔 뿌리를 거기로 좁혀야
+		// settings.json·oauth 토큰 같은 `~/.gemini` 직속 파일을 아예 열지 않는다.
+		out = append(out, source{
+			platform: gemini.Platform,
+			dir:      filepath.Join(opt.geminiDir, "tmp"),
+			match:    gemini.Match,
+			key:      gemini.SessionKeyFromPath,
+			newAgg:   func() aggregator { return gemini.New() },
 		})
 	}
 	return out
@@ -130,7 +161,7 @@ func run(args []string, stdout, stderr *os.File) int {
 
 		// 세션 파일 그룹: 세션키 → 파일 목록. 대개 세션당 파일 하나지만, 재개된 세션은
 		// 여럿일 수 있어 그룹으로 든다.
-		groups, err := discover(src.dir, src.key, stderr)
+		groups, err := discover(src.dir, src.match, src.key, stderr)
 		if err != nil {
 			fmt.Fprintf(stderr, "[%s] 디렉터리를 훑지 못했다(%s): %v\n", src.platform, src.dir, err)
 			continue
@@ -164,8 +195,15 @@ func run(args []string, stdout, stderr *os.File) int {
 					fmt.Fprintf(stderr, "  ⚠ 열지 못함(%s): %v\n", f.path, err)
 					continue
 				}
-				if err := agg.AddFile(stem, fh); err != nil {
-					fmt.Fprintf(stderr, "  ⚠ 읽기 중단(%s): %v\n", f.path, err)
+				// 경로가 필요한 파서(Gemini)에게는 경로째 준다 — 프로젝트 이름이 경로에 있다.
+				var addErr error
+				if pa, ok := agg.(pathAggregator); ok {
+					addErr = pa.AddFileAt(f.path, stem, fh)
+				} else {
+					addErr = agg.AddFile(stem, fh)
+				}
+				if addErr != nil {
+					fmt.Fprintf(stderr, "  ⚠ 읽기 중단(%s): %v\n", f.path, addErr)
 				}
 				fh.Close()
 				pending = append(pending, f)
@@ -236,7 +274,8 @@ func parseFlags(args []string, stderr *os.File) (options, error) {
 	opt := options{}
 	fs.StringVar(&opt.dir, "dir", defaultDir(), "Claude 트랜스크립트 디렉터리(기본 ~/.claude/projects). \"\"면 Claude 원천 비활성")
 	fs.StringVar(&opt.codexDir, "codex-dir", defaultCodexDir(), "Codex 롤아웃 디렉터리(기본 ~/.codex/sessions). \"\"면 Codex 원천 비활성")
-	fs.StringVar(&opt.platform, "platform", "all", "훑을 원천: all|claude|codex")
+	fs.StringVar(&opt.geminiDir, "gemini-dir", defaultGeminiDir(), "Gemini 홈 디렉터리(기본 ~/.gemini — 세션은 그 아래 tmp/*/chats). \"\"면 Gemini 원천 비활성")
+	fs.StringVar(&opt.platform, "platform", "all", "훑을 원천: all|claude|codex|gemini")
 	fs.StringVar(&opt.server, "server", envOr("USAGE_SERVER_URL", "http://127.0.0.1:4191"), "서버 주소")
 	fs.StringVar(&opt.token, "token", intakeToken(), "인테이크 토큰(기본 USAGE_INTAKE_TOKEN→USAGE_ADMIN_TOKEN)")
 	fs.StringVar(&opt.state, "state", defaultState(), "체크포인트 파일 경로")
@@ -250,12 +289,12 @@ func parseFlags(args []string, stderr *os.File) (options, error) {
 		return options{}, err
 	}
 	switch opt.platform {
-	case "all", "claude", codex.Platform:
+	case "all", "claude", codex.Platform, gemini.Platform:
 	default:
-		return options{}, fmt.Errorf("-platform 은 all|claude|codex 중 하나다(받은 값: %q)", opt.platform)
+		return options{}, fmt.Errorf("-platform 은 all|claude|codex|gemini 중 하나다(받은 값: %q)", opt.platform)
 	}
 	if len(sourcesOf(opt)) == 0 {
-		return options{}, fmt.Errorf("훑을 원천이 없다 — -dir 또는 -codex-dir 을 정하라(-platform=%s)", opt.platform)
+		return options{}, fmt.Errorf("훑을 원천이 없다 — -dir·-codex-dir·-gemini-dir 중 하나를 정하라(-platform=%s)", opt.platform)
 	}
 	return opt, nil
 }
@@ -271,7 +310,7 @@ type fileRef struct {
 // `.zst` 는 **조용히 건너뛰지 않고 경고를 남긴다.** Codex 는 mtime 이 7일 지난 롤아웃을
 // 압축할 수 있는데, 그때 그 세션이 소리 없이 사라지면 "왜 지난주 사용량이 줄었지?"를
 // 아무도 추적할 수 없다. 압축 해제는 후속 과제이고, 지금은 침묵만 없앤다.
-func discover(dir string, key func(path string) string, stderr *os.File) (map[string][]fileRef, error) {
+func discover(dir string, match func(path string) bool, key func(path string) string, stderr *os.File) (map[string][]fileRef, error) {
 	groups := map[string][]fileRef{}
 	compressed := 0
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -285,7 +324,7 @@ func discover(dir string, key func(path string) string, stderr *os.File) (map[st
 			compressed++
 			return nil
 		}
-		if !strings.HasSuffix(path, ".jsonl") {
+		if !match(path) {
 			return nil
 		}
 		info, err := d.Info()
@@ -381,6 +420,18 @@ func defaultCodexDir() string {
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		return filepath.Join(home, ".codex", "sessions")
+	}
+	return ""
+}
+
+// defaultGeminiDir 는 Gemini **홈**이다(세션 디렉터리가 아니다 — 그건 그 아래 `tmp/`).
+// 환경변수 이름은 Gemini CLI 자신이 쓰는 것과 같다(storage.ts 의 GEMINI_DIR 해석과 동일한 뿌리).
+func defaultGeminiDir() string {
+	if v := strings.TrimSpace(os.Getenv("GEMINI_HOME_DIR")); v != "" {
+		return v
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".gemini")
 	}
 	return ""
 }
