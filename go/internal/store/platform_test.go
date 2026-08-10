@@ -40,10 +40,24 @@ func TestNormalizePlatform(t *testing.T) {
 		"gemini":   "gemini",
 		"  Codex ": "codex",
 		"GEMINI":   "gemini",
+		/*
+		 * antigravity 는 gemini 와 **다른 값이다.**
+		 *
+		 * 사용자가 "Gemini CLI" 라 부르는 것이 실제로는 Google Antigravity CLI(agy) 인데,
+		 * 둘은 수집 가능 범위가 다르다 — 오픈소스 gemini-cli 는 세션 파일에서 도구·MCP·LOC 까지
+		 * 나오지만 antigravity 는 statusLine 의 토큰·모델·세션·프로젝트가 전부다.
+		 * 한 값으로 접으면 화면의 "미수집/해당없음" 지원표가 통째로 거짓이 된다.
+		 */
+		"antigravity":   "antigravity",
+		"  Antigravity": "antigravity",
+		"ANTIGRAVITY":   "antigravity",
 		// 허용목록 밖은 **거부하지도 claude 로 접지도 않는다** — 조용한 오분류를 만들지 않는다.
-		"grok":  PlatformOther,
-		"other": PlatformOther,
-		"클로드":   PlatformOther,
+		"grok":         PlatformOther,
+		"other":        PlatformOther,
+		"클로드":          PlatformOther,
+		"antigrav":     PlatformOther, // 오타는 antigravity 로 붙지 않는다(접두 매칭 없음)
+		"gravity":      PlatformOther,
+		"antigra vity": PlatformOther,
 	}
 	for in, want := range cases {
 		if got := NormalizePlatform(in); got != want {
@@ -72,16 +86,17 @@ func TestSessionRowsPlatformFilter(t *testing.T) {
 	mustSession(t, ctx, SessionInput{SessionID: "c1", Platform: "claude", StartedAt: "2026-08-03T09:00:00.000Z", Output: 1})
 	mustSession(t, ctx, SessionInput{SessionID: "x1", Platform: "codex", StartedAt: "2026-08-03T10:00:00.000Z", Output: 2})
 	mustSession(t, ctx, SessionInput{SessionID: "g1", Platform: "gemini", StartedAt: "2026-08-03T11:00:00.000Z", Output: 4})
+	mustSession(t, ctx, SessionInput{SessionID: "a1", Platform: "antigravity", StartedAt: "2026-08-03T12:00:00.000Z", Output: 8})
 
 	all, err := SessionRows(ctx, Filter{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 3 {
+	if len(all) != 4 {
 		t.Fatalf("미지정 필터가 전체를 안 준다: %d", len(all))
 	}
 
-	for _, want := range []string{"claude", "codex", "gemini"} {
+	for _, want := range []string{"claude", "codex", "gemini", "antigravity"} {
 		got, err := SessionRows(ctx, Filter{Platform: want})
 		if err != nil {
 			t.Fatal(err)
@@ -197,6 +212,85 @@ func TestPlatformRollup(t *testing.T) {
 	}
 	if len(win) != 1 || win[0].Platform != "codex" {
 		t.Fatalf("롤업 날짜 필터: %+v", win)
+	}
+}
+
+/*
+ * 필터 허용값은 허용목록에서 **파생된다** — 목록에 값을 더하면 필터도 같이 따라와야 한다.
+ * 두 벌로 적히면 저장은 되는데 조회는 400 인 값이 생기고, 그 데이터는 화면에서 영원히 안 보인다.
+ */
+func TestIsPlatformFilterCoversAllowlistPlusOther(t *testing.T) {
+	for _, v := range append(append([]string{}, Platforms...), PlatformOther) {
+		if !IsPlatformFilter(v) {
+			t.Fatalf("허용목록의 %q 가 필터값이 아니다", v)
+		}
+	}
+	if !IsPlatformFilter("antigravity") {
+		t.Fatal("antigravity 를 필터로 못 보낸다 — 저장은 되는데 조회가 400 이 된다")
+	}
+	// 오타는 그대로 거절한다(호출부가 400 을 낸다). other 로 접으면 요청과 다른 집합이 돌아온다.
+	for _, v := range []string{"antigrav", "Antigravity", "ANTIGRAVITY", "gemini-cli", ""} {
+		if IsPlatformFilter(v) {
+			t.Fatalf("%q 가 필터값으로 통과했다", v)
+		}
+	}
+}
+
+/*
+ * antigravity 와 gemini 는 **집계에서 갈린다.**
+ *
+ * 같은 Google 모델을 쓰므로 model 로는 구분되지 않는다. 여기서 합쳐지면 화면은 "gemini 는
+ * 도구를 안 쓴다"(실은 antigravity 라 못 잰다)는 없는 결론을 만든다.
+ */
+func TestPlatformRollupSeparatesAntigravityFromGemini(t *testing.T) {
+	ctx := fresh(t)
+	mustSession(t, ctx, SessionInput{
+		SessionID: "g1", Platform: "gemini", Model: "gemini-3-pro",
+		Input: 1000, Output: 2000, CacheRead: 3000, StartedAt: "2026-08-03T09:00:00.000Z",
+	})
+	mustSession(t, ctx, SessionInput{
+		SessionID: "a1", Platform: "antigravity", Model: "gemini-3-pro",
+		Input: 10, Output: 20, CacheRead: 30, StartedAt: "2026-08-04T09:00:00.000Z",
+	})
+	mustSession(t, ctx, SessionInput{
+		SessionID: "a2", Platform: "antigravity", Model: "gemini-3-pro",
+		Input: 1, Output: 2, CacheRead: 3, StartedAt: "2026-08-05T09:00:00.000Z",
+	})
+
+	rows, err := PlatformRollup(ctx, Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("플랫폼 행 수 = %d (%+v) — 같은 모델이라고 접히면 안 된다", len(rows), rows)
+	}
+	by := map[string]PlatformRow{}
+	for _, r := range rows {
+		by[r.Platform] = r
+	}
+	// 자릿수를 갈라 뒀다 — 합만 보면 두 몫이 뒤바뀌어도 통과한다.
+	if g := by["gemini"]; g.Sessions != 1 || g.Input != 1000 || g.Output != 2000 || g.CacheRead != 3000 {
+		t.Fatalf("gemini 롤업: %+v", g)
+	}
+	a := by["antigravity"]
+	if a.Sessions != 2 || a.Input != 11 || a.Output != 22 || a.CacheRead != 33 {
+		t.Fatalf("antigravity 롤업: %+v", a)
+	}
+	if a.FirstSeen != "2026-08-04T09:00:00.000Z" || a.LastSeen != "2026-08-05T09:00:00.000Z" {
+		t.Fatalf("antigravity 관측 경계: %q ~ %q", a.FirstSeen, a.LastSeen)
+	}
+	// 정렬은 결정론 — 세션 수 내림차순이라 antigravity(2)가 gemini(1)보다 앞이다.
+	if rows[0].Platform != "antigravity" {
+		t.Fatalf("정렬이 흔들린다: %+v", rows)
+	}
+
+	// 배타 — 한쪽 필터에 다른 쪽 값이 한 톨도 안 섞인다.
+	only, err := PlatformRollup(ctx, Filter{Platform: "antigravity"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(only) != 1 || only[0].Platform != "antigravity" || only[0].Input != 11 {
+		t.Fatalf("롤업 antigravity 필터: %+v", only)
 	}
 }
 

@@ -33,7 +33,9 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/tscorp/user-usage/collector/internal/antigravity"
 	"github.com/tscorp/user-usage/collector/internal/codex"
 	"github.com/tscorp/user-usage/collector/internal/gemini"
 	"github.com/tscorp/user-usage/collector/internal/payload"
@@ -48,6 +50,8 @@ type options struct {
 	dir       string
 	codexDir  string
 	geminiDir string
+	agyDir    string
+	agyHome   string
 	platform  string
 	server    string
 	token     string
@@ -57,6 +61,8 @@ type options struct {
 	limit     int
 	dryRun    bool
 	all       bool
+	// statusLine 은 수집이 아니라 **기록** 모드다(§ runStatusLine).
+	statusLine bool
 }
 
 // aggregator 는 원천별 파서의 공통 모양이다. transcript(Claude)·codex·gemini 셋 다 이걸
@@ -124,6 +130,32 @@ func sourcesOf(opt options) []source {
 			newAgg:   func() aggregator { return gemini.New() },
 		})
 	}
+	if wants(opt.platform, antigravity.Platform) && opt.agyDir != "" {
+		// Antigravity 는 디스크에 토큰이 없다(훅·transcript·대화 DB 전부 확인됨).
+		// 그래서 훑는 대상이 CLI 의 홈이 아니라 **우리 스풀**이다 — statusLine 이 적어 둔 것.
+		historyPath := ""
+		if opt.agyHome != "" {
+			historyPath = filepath.Join(opt.agyHome, "history.jsonl")
+		}
+		out = append(out, source{
+			platform: antigravity.Platform,
+			dir:      opt.agyDir,
+			match:    antigravity.Match,
+			key:      antigravity.SessionKeyFromPath,
+			newAgg: func() aggregator {
+				a := antigravity.New()
+				// history.jsonl 은 slash·keyword·project 축의 유일한 출처다. 없으면
+				// 그 축들만 조용히 빠진다(사용량 자체는 스풀만으로 온전하다).
+				if historyPath != "" {
+					if fh, err := os.Open(historyPath); err == nil {
+						_ = a.AddHistory(fh)
+						fh.Close()
+					}
+				}
+				return a
+			},
+		})
+	}
 	return out
 }
 
@@ -137,6 +169,10 @@ func run(args []string, stdout, stderr *os.File) int {
 		}
 		fmt.Fprintf(stderr, "설정 오류: %v\n", err)
 		return 2
+	}
+
+	if opt.statusLine {
+		return runStatusLine(opt, stdinReader, stdout, stderr)
 	}
 
 	st, err := state.Load(opt.state)
@@ -275,7 +311,11 @@ func parseFlags(args []string, stderr *os.File) (options, error) {
 	fs.StringVar(&opt.dir, "dir", defaultDir(), "Claude 트랜스크립트 디렉터리(기본 ~/.claude/projects). \"\"면 Claude 원천 비활성")
 	fs.StringVar(&opt.codexDir, "codex-dir", defaultCodexDir(), "Codex 롤아웃 디렉터리(기본 ~/.codex/sessions). \"\"면 Codex 원천 비활성")
 	fs.StringVar(&opt.geminiDir, "gemini-dir", defaultGeminiDir(), "Gemini 홈 디렉터리(기본 ~/.gemini — 세션은 그 아래 tmp/*/chats). \"\"면 Gemini 원천 비활성")
-	fs.StringVar(&opt.platform, "platform", "all", "훑을 원천: all|claude|codex|gemini")
+	fs.StringVar(&opt.agyDir, "antigravity-dir", defaultAntigravityDir(), "Antigravity 스풀 디렉터리(기본 ~/.config/claude-usage/antigravity). \"\"면 Antigravity 원천 비활성")
+	fs.StringVar(&opt.agyHome, "antigravity-home", defaultAntigravityHome(), "Antigravity CLI 홈(기본 ~/.gemini/antigravity-cli — history.jsonl 로 slash·keyword 축을 채운다). \"\"면 그 축만 비활성")
+	fs.BoolVar(&opt.statusLine, "antigravity-statusline", false,
+		"statusLine 기록 모드: stdin 의 StatusLineData 를 스풀에 적고 상태줄 한 줄을 출력한다(수집하지 않는다)")
+	fs.StringVar(&opt.platform, "platform", "all", "훑을 원천: all|claude|codex|gemini|antigravity")
 	fs.StringVar(&opt.server, "server", envOr("USAGE_SERVER_URL", "http://127.0.0.1:4191"), "서버 주소")
 	fs.StringVar(&opt.token, "token", intakeToken(), "인테이크 토큰(기본 USAGE_INTAKE_TOKEN→USAGE_ADMIN_TOKEN)")
 	fs.StringVar(&opt.state, "state", defaultState(), "체크포인트 파일 경로")
@@ -289,14 +329,91 @@ func parseFlags(args []string, stderr *os.File) (options, error) {
 		return options{}, err
 	}
 	switch opt.platform {
-	case "all", "claude", codex.Platform, gemini.Platform:
+	case "all", "claude", codex.Platform, gemini.Platform, antigravity.Platform:
 	default:
-		return options{}, fmt.Errorf("-platform 은 all|claude|codex|gemini 중 하나다(받은 값: %q)", opt.platform)
+		return options{}, fmt.Errorf("-platform 은 all|claude|codex|gemini|antigravity 중 하나다(받은 값: %q)", opt.platform)
 	}
-	if len(sourcesOf(opt)) == 0 {
-		return options{}, fmt.Errorf("훑을 원천이 없다 — -dir·-codex-dir·-gemini-dir 중 하나를 정하라(-platform=%s)", opt.platform)
+	// 기록 모드는 원천을 훑지 않는다 — 원천이 하나도 없어도 정상이다.
+	if !opt.statusLine && len(sourcesOf(opt)) == 0 {
+		return options{}, fmt.Errorf("훑을 원천이 없다 — -dir·-codex-dir·-gemini-dir·-antigravity-dir 중 하나를 정하라(-platform=%s)", opt.platform)
 	}
 	return opt, nil
+}
+
+// stdinReader 는 표준 입력이다. 테스트가 갈아 끼울 수 있도록 변수로 둔다
+// (기본값은 진짜 os.Stdin 이라 호출부는 아무것도 몰라도 된다).
+var stdinReader io.Reader = os.Stdin
+
+// runStatusLine 은 Antigravity 의 statusLine 핸들러다.
+//
+// # 왜 이게 수집기 안에 있나
+//
+// Antigravity 는 토큰을 **statusLine 에만** 준다(훅에는 없다 — hooks.proto 로 확인됨).
+// statusLine 은 렌더될 때 stdin 으로 JSON 을 받는 외부 명령이라, 누군가는 그 값을
+// 붙잡아 디스크에 적어야 한다. 그 "누군가"를 셸 스크립트로 두면 jq 의존이 생기고
+// 테스트할 수 없어서, 이미 배포되는 이 바이너리의 서브모드로 만들었다.
+//
+// # 규율: 절대 실패하지 않는다
+//
+// 이 코드는 **사용자의 상태줄 안에서** 돈다. 사용량 한 건을 놓치는 것보다 상태줄이
+// 깨지거나 멈추는 게 훨씬 나쁘다. 그래서 무슨 일이 있어도 0 으로 끝내고, 에러는
+// stderr 로만 흘린다(상태줄에는 stdout 만 나간다).
+//
+// 설치(사용자가 직접 한다 — 이 수집기는 남의 설정 파일을 건드리지 않는다):
+//
+//	~/.gemini/antigravity-cli/settings.json
+//	{ "statusLine": { "type": "command", "command": "/path/to/usage-collector -antigravity-statusline" } }
+func runStatusLine(opt options, in io.Reader, stdout, stderr *os.File) int {
+	if opt.agyDir == "" {
+		fmt.Fprintln(stdout, "")
+		return 0
+	}
+	s, changed, err := antigravity.RecordStatusLine(opt.agyDir, in, time.Now())
+	if err != nil {
+		// 상태줄은 살려 둔다 — 빈 줄이라도 내보내고 정상 종료한다.
+		fmt.Fprintf(stderr, "antigravity 스풀 기록 실패(무시하고 계속): %v\n", err)
+		fmt.Fprintln(stdout, "")
+		return 0
+	}
+	_ = changed
+	fmt.Fprintln(stdout, statusLineText(s))
+	return 0
+}
+
+// statusLineText 는 사용자가 실제로 보게 되는 한 줄이다.
+//
+// 이 모드를 켜면 원래 쓰던 상태줄을 잃는다. 그래서 최소한 "지금 이 대화가 얼마나
+// 썼는지"는 보여준다 — 그게 이 수집기가 관측하는 값 그 자체이기도 하다.
+func statusLineText(s antigravity.Spool) string {
+	if s.ConversationID == "" {
+		return ""
+	}
+	in, out, cache := s.Totals()
+	model := s.Model
+	if model == "" {
+		model = "?"
+	}
+	return fmt.Sprintf("%s · %s in / %s out%s · %d턴",
+		model, humanTokens(in), humanTokens(out), cacheNote(cache), s.Invocations)
+}
+
+func cacheNote(cache int64) string {
+	if cache <= 0 {
+		return ""
+	}
+	return " / " + humanTokens(cache) + " cache"
+}
+
+// humanTokens 는 17283 → "17.3k" 처럼 줄인다(상태줄은 폭이 좁다).
+func humanTokens(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 // fileRef 는 파일 경로와 그 stat 이다(증분 판정·지문 기록에 쓴다).
@@ -432,6 +549,33 @@ func defaultGeminiDir() string {
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		return filepath.Join(home, ".gemini")
+	}
+	return ""
+}
+
+// defaultAntigravityDir 는 **스풀** 디렉터리다(Antigravity 의 홈이 아니다).
+//
+// 왜 ~/.gemini 아래가 아닌가: 이건 우리가 만든 파일이지 Antigravity 의 것이 아니다.
+// 남의 CLI 홈에 우리 상태를 섞어 두면 그쪽이 정리할 때 같이 지워지고, 무엇보다
+// 이 수집기는 ~/.gemini 에 **쓰지 않는다**는 규율이 있다.
+func defaultAntigravityDir() string {
+	if v := strings.TrimSpace(os.Getenv("ANTIGRAVITY_SPOOL_DIR")); v != "" {
+		return v
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".config", "claude-usage", "antigravity")
+	}
+	return ""
+}
+
+// defaultAntigravityHome 은 Antigravity CLI 의 홈이다. **읽기 전용으로만** 쓴다
+// (history.jsonl 하나를 읽어 slash·keyword·project 축을 채운다).
+func defaultAntigravityHome() string {
+	if v := strings.TrimSpace(os.Getenv("ANTIGRAVITY_HOME_DIR")); v != "" {
+		return v
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".gemini", "antigravity-cli")
 	}
 	return ""
 }

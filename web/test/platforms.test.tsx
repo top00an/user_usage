@@ -76,10 +76,47 @@ describe('lib/platforms — 0 과 "모른다"를 가르는 사실표', () => {
   });
 
   it('질의로 보낼 수 있는 값은 서버 허용목록과 같다 (그 밖은 400 이므로 보내지 않는다)', () => {
-    expect([...PLATFORM_FILTER_VALUES]).toEqual(['claude', 'codex', 'gemini', 'other']);
+    // store/platform.go 의 PlatformFilterValues() = Platforms + other. 순서까지 같게 둔다.
+    expect([...PLATFORM_FILTER_VALUES]).toEqual(['claude', 'codex', 'gemini', 'antigravity', 'other']);
     expect(isPlatformId('claud')).toBe(false);
     expect(isPlatformId('CLAUDE')).toBe(false); // 서버는 정규화하지 않는다 — 대문자도 오타다
     expect(isPlatformId('codex')).toBe(true);
+    expect(isPlatformId('antigravity')).toBe(true);
+    expect(isPlatformId('antigrav')).toBe(false);
+  });
+
+  /*
+   * antigravity — "Gemini CLI" 라 불리는 두 도구 중 하나다(다른 하나가 gemini).
+   * 모델이 같아 model 로는 안 갈리지만 **기록하는 축이 다르다.** 그래서 지원표가 갈라져야 한다.
+   */
+  it('antigravity 의 행동 축(도구·bash·MCP·스킬·서브에이전트·슬래시·LOC·편집)은 미수집이다', () => {
+    for (const m of ['tool', 'bash', 'mcp', 'keyword', 'slash', 'skill', 'agent', 'loc', 'edits'] as const) {
+      const s = supportOf('antigravity', m);
+      expect(s.state).toBe('unmeasured');
+      expect(s.why).toMatch(/Antigravity/);
+    }
+  });
+
+  it('antigravity 의 캐시생성은 해당 없음이다 — 암시적 캐싱에는 쓰기 과금 개념이 없다', () => {
+    const s = supportOf('antigravity', 'cacheCreate');
+    expect(s.state).toBe('na');
+    expect(s.why).not.toBe('');
+    // 캐시읽기는 반대로 수집된다 — 둘을 뭉치면 캐시 사용이 통째로 사라진다(codex 와 같은 규율).
+    expect(supportOf('antigravity', 'cacheRead').state).toBe('yes');
+  });
+
+  it('antigravity 의 값 축(세션·토큰·비용·모델)은 수집된다 — 미수집으로 덮지 않는다', () => {
+    for (const m of ['sessions', 'input', 'output', 'cacheRead', 'cost'] as const) {
+      expect(supportOf('antigravity', m).state).toBe('yes');
+    }
+  });
+
+  it('antigravity 는 gemini 와 다른 표시명·계열색을 갖는다 (한 도구로 보이면 안 된다)', () => {
+    expect(platformMeta('antigravity').label).toBe('Antigravity');
+    expect(platformMeta('antigravity').color).not.toBe(platformMeta('gemini').color);
+    // 기존 플랫폼의 지원표는 이 작업으로 바뀌지 않는다.
+    expect(supportOf('gemini', 'tool').state).toBe('planned');
+    expect(supportOf('claude', 'loc').state).toBe('yes');
   });
 
   it('모르는 플랫폼도 화면에서 사라지지 않는다 (이름 그대로 그린다)', () => {
@@ -207,6 +244,91 @@ describe('플랫폼 요약 — 실제 0 · 미수집 · 해당 없음을 갈라 
     const sect = (await screen.findByRole('heading', { name: '플랫폼별 사용량' })).closest('section')!;
     expect(within(sect).getByRole('columnheader', { name: '캐시읽기' })).toBeInTheDocument();
     expect(within(sect).queryByRole('columnheader', { name: '토큰' })).not.toBeInTheDocument();
+  });
+});
+
+/* ── ③ antigravity 가 화면에서 1급으로 그려지는가 ───────────────────── */
+
+/*
+ * antigravity 롤업 응답. 값 축은 실제로 오고(세션·토큰·비용), 행동 축은 응답에 아예 없다.
+ * 화면은 이 둘을 갈라 그려야 한다 — 값은 숫자로, 행동은 '미수집' 배지로.
+ */
+const AG_ROW = {
+  platform: 'antigravity', sessions: 7, input: 54321, output: 9876,
+  cacheRead: 123456, cacheCreate: 0, costUsd: 1.2345,
+  firstSeen: '2026-08-06T00:00:00.000Z', lastSeen: '2026-08-10T01:00:00.000Z',
+};
+
+function withAntigravity(): [string, Parameters<typeof mockFetch>[0][number][1]][] {
+  return [['/api/usage/platforms', { body: { platforms: [...PLATFORMS_FIXTURE.platforms, AG_ROW] } }]];
+}
+
+/** 지원표에서 (지표 행 × 플랫폼 열) 한 칸의 글자를 읽는다. */
+function supportCellText(metricLabel: string, platformLabel: string): string {
+  // 지원표만 행 머리(rowheader)를 갖는다 — 공통 코어 표는 tbody 가 전부 td 다.
+  const row = screen.getByRole('rowheader', { name: metricLabel }).closest('tr')!;
+  const headers = within(row.closest('table')!).getAllByRole('columnheader').map((h) => h.textContent);
+  const col = headers.indexOf(platformLabel);
+  expect(col).toBeGreaterThan(0); // 0번은 '지표' 열이다
+  return within(row).getAllByRole('cell')[col - 1]!.textContent ?? '';
+}
+
+describe('antigravity — 응답에 뜨면 코드 변경 없이 1급으로 붙는다', () => {
+  beforeEach(() => {
+    location.hash = '#/overview';
+    mockFetch(allRoutes(withAntigravity()));
+  });
+
+  it('카드가 그려지고 값 축(세션·토큰·비용)은 숫자로 나온다', async () => {
+    render(<Dashboard />);
+    const sect = (await screen.findByRole('heading', { name: '플랫폼별 사용량' })).closest('section')!;
+    const card = within(sect).getAllByText('Antigravity')[0]!.closest('.pf-card') as HTMLElement;
+    expect(card.textContent).toMatch(/7\s*세션/);
+    // 비용·토큰이 배지로 대체되지 않았다 — 서버가 집계한 관측이다.
+    expect(within(card).queryByText('미수집')).not.toBeInTheDocument();
+    expect(card.textContent).toMatch(/\$/);
+  });
+
+  it('캐시생성 0 은 숫자가 아니라 "해당 없음" 배지다', async () => {
+    render(<Dashboard />);
+    const sect = (await screen.findByRole('heading', { name: '플랫폼별 사용량' })).closest('section')!;
+    const card = within(sect).getAllByText('Antigravity')[0]!.closest('.pf-card') as HTMLElement;
+    const row = within(card).getByText('캐시생성').closest('.pf-kv-row') as HTMLElement;
+    expect(within(row).getByText('해당 없음')).toBeInTheDocument();
+    expect(row.textContent).not.toMatch(/(^|\D)0(\D|$)/);
+  });
+
+  it('지원표에서 도구·LOC·MCP 는 미수집, 세션·캐시읽기는 수집됨으로 갈린다', async () => {
+    render(<Dashboard />);
+    await screen.findByRole('heading', { name: '플랫폼별 사용량' });
+    for (const m of ['내장 도구', 'MCP 도구', 'LOC(추가·삭제)', '스킬', '서브에이전트', '슬래시 명령']) {
+      expect(supportCellText(m, 'Antigravity')).toBe('미수집');
+    }
+    expect(supportCellText('캐시생성', 'Antigravity')).toBe('해당 없음');
+    expect(supportCellText('세션', 'Antigravity')).toBe('수집됨');
+    expect(supportCellText('캐시읽기', 'Antigravity')).toBe('수집됨');
+    // 옆 열(기존 플랫폼)은 이 작업으로 바뀌지 않았다.
+    expect(supportCellText('내장 도구', 'Claude')).toBe('수집됨');
+    expect(supportCellText('슬래시 명령', 'Codex')).toBe('미수집');
+  });
+
+  it('플랫폼 필터에 코드 변경 없이 선택지로 붙고, 고르면 질의로 나간다', async () => {
+    location.hash = '#/usageobs';
+    const { fn } = mockFetch(allRoutes(withAntigravity()));
+    const user = userEvent.setup();
+    render(<Dashboard />);
+    await screen.findByRole('heading', { name: 'API 환산 비용' });
+
+    const select = await screen.findByLabelText('플랫폼');
+    const values = within(select).getAllByRole('option').map((o) => (o as HTMLOptionElement).value);
+    expect(values).toEqual(['', 'claude', 'codex', 'antigravity']);
+
+    await user.selectOptions(select, 'antigravity');
+    await waitFor(() => {
+      const urls = fn.mock.calls.map(([u]) => String(u));
+      expect(urls.some((u) => u === '/api/usage/distribution?platform=antigravity')).toBe(true);
+      expect(urls.some((u) => u.startsWith('/api/usage/sessions?') && u.includes('platform=antigravity'))).toBe(true);
+    });
   });
 });
 

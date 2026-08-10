@@ -94,7 +94,11 @@ func TestE2ECollectToDashboard(t *testing.T) {
 	// -codex-dir "" 로 Codex 원천도 끈다: 이 테스트가 도는 머신에 실제 ~/.codex/sessions 가
 	// 있으면 그 세션들이 함께 올라와 세션 수 단정이 머신마다 달라진다.
 	run := func(extra ...string) string {
-		args := append([]string{"-server", base, "-state", state, "-dir", projects, "-codex-dir", ""}, extra...)
+		// -codex-dir·-antigravity-dir 를 "" 로 끄는 이유는 같다: 이 테스트가 도는 머신에
+		// 실제 사용 데이터가 있으면 그 세션들이 함께 올라와 세션 수 단정이 머신마다 달라진다.
+		// Antigravity 는 특히 위험한데, 스풀이 ~/.config 아래라 CI 에도 남아 있을 수 있다.
+		args := append([]string{"-server", base, "-state", state, "-dir", projects,
+			"-codex-dir", "", "-antigravity-dir", ""}, extra...)
 		c := exec.Command(collectorBin, args...)
 		c.Env = append(os.Environ(), "USAGE_INTAKE_TOKEN="+intake)
 		out, err := c.CombinedOutput()
