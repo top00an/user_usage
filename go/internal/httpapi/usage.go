@@ -58,6 +58,18 @@ func (s *server) routeIntake(w http.ResponseWriter, r *http.Request, c *rctx) (b
 	// 수집기는 best-effort 경로라 여기서 400 을 내면 그 사람 사용량이 통째로 사라진다.
 	payload, _ := intake.NormPayload(raw)
 
+	/*
+	 * 계단 분리분의 불변식(0 <= long <= 총량) 위반은 **조용히 넘기지 않는다.**
+	 *
+	 * 인테이크가 이미 접어서 저장은 안전하지만, 접었다는 사실이 어디에도 안 남으면 수집기의
+	 * 계산 버그가 서버에서 정상값으로 둔갑한다 — 그 뒤로는 비용이 틀렸다는 것을 아무도 모른다.
+	 * 400 을 내지는 않는다(인테이크는 best-effort 경로다). 로그가 그 사실의 유일한 흔적이다.
+	 */
+	if payload.LongClamped > 0 {
+		logf("인테이크 롱컨텍스트 불변식 위반 %d건 — 총량을 넘거나 음수인 분리분을 접었다(세션 %d건)",
+			payload.LongClamped, len(payload.Sessions))
+	}
+
 	resp := s.storeSessions(r.Context(), payload.Sessions)
 	writeJSON(w, http.StatusOK, resp, nil)
 	return true, nil
@@ -93,7 +105,10 @@ func (s *server) storeSessions(ctx context.Context, sessions []intake.Session) i
 			Platform: deref(sess.Platform),
 			Input:    sess.Input, Output: sess.Output,
 			CacheRead: sess.CacheRead, CacheCreate: sess.CacheCreate,
-			WebSearch: sess.WebSearch, WebFetch: sess.WebFetch, Turns: sess.Turns,
+			// 계단 분리분 — 없으면 0 이고 그것이 현행 동작이다(전부 표준 구간).
+			InputLong: sess.InputLong, OutputLong: sess.OutputLong,
+			CacheReadLong: sess.CacheReadLong,
+			WebSearch:     sess.WebSearch, WebFetch: sess.WebFetch, Turns: sess.Turns,
 			StartedAt: deref(sess.StartedAt), EndedAt: deref(sess.EndedAt),
 			NoTsTurns:     sess.NoTsTurns,
 			LinesAdded:    sess.LinesAdded,
@@ -167,7 +182,9 @@ func toSeriesRows(bs []intake.Bucket) []store.SeriesRow {
 			Hour: b.Hour, Model: b.Model,
 			Input: b.Input, Output: b.Output,
 			CacheRead: b.CacheRead, CacheCreate: b.CacheCreate,
-			CC5m: b.CC5m, CC1h: b.CC1h, Turns: b.Turns,
+			InputLong: b.InputLong, OutputLong: b.OutputLong,
+			CacheReadLong: b.CacheReadLong,
+			CC5m:          b.CC5m, CC1h: b.CC1h, Turns: b.Turns,
 			ToolErrors: b.ToolErrors, StopMaxTokens: b.StopMaxTokens, StopRefusal: b.StopRefusal,
 			LatencyMsSum: b.LatencyMsSum, LatencyMsMax: b.LatencyMsMax, LatencyTurns: b.LatencyTurns,
 		})

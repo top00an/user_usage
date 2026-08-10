@@ -19,6 +19,20 @@ package cost
  * OpenAI 는 자동 캐싱이라 대부분 쓰기 비용이 없다(cacheWriteMult 0 = 무과금).
  * 예외는 GPT-5.6 계열로, 명시적 캐시 쓰기에 입력가의 1.25배를 매긴다.
  *
+ * ── 계단 요금(≤272K / >272K) ────────────────────────────────────────────────
+ * gpt-5.5 와 gpt-5.6 계열은 **요청의 입력이 272K 토큰을 넘으면** 그 요청 전체에 할증이 붙는다:
+ * 입력 2배 · 출력 1.5배. (Google 과 임계값도 배수도 다르다 — 공급사별로 따로 적는 이유다.)
+ *
+ * priceLong 값은 지어낸 것이 아니라 **위 price 에 공식 배수를 적용한 것**이다.
+ * 예: gpt-5.5 $5/$30 → $10/$45. 파생값이지만 표에 박아 둔다 — 배수를 코드로 두면
+ * "어느 모델에 계단이 있는가"가 로직이 되고, 그 로직이 틀리면 조용히 전 모델에 번진다.
+ * (longcontext_test.go 가 배수 2/1.5 를 다시 대조한다.)
+ *
+ * ⚠ **계열 이름만 보고 넓히지 않았다.** gpt-5.5-pro·gpt-5.5-cyber·gpt-5.4* 는 공식 가격표에
+ *   롱 컨텍스트 항목이 따로 없다. 이름이 비슷하다고 배수를 빌려 오면 그건 추측이고, 화면에는
+ *   추측이라는 표시가 남지 않는다. 미등록으로 두면 계산은 표준가로 가고 Result.LongPricing 이
+ *   flat(우리 표 기준 계단 없음)으로 나간다. 공식 표에 항목이 생기면 그때 여기에 적는다.
+ *
  * ── 단가 미공개 모델은 **등록하지 않는다** ──────────────────────────────────
  * gpt-5.4-cyber · codex-auto-review · gpt-5-codex · gpt-5.1-codex* 는 공식 가격표에 항목이
  * 없다. 비슷한 이름의 단가를 빌려 오면 화면에는 그럴듯한 숫자가 뜨지만 그게 맞는지 아무도
@@ -37,7 +51,8 @@ const (
 
 var openaiSeed = map[string]seedEntry{
 	// ── GPT-5.x 본선 (캐시 히트 0.1배) ──
-	"gpt-5.5":       {provider: ProviderOpenAI, price: Price{5, 30}, cacheReadMult: oaiCacheRead},
+	// 계단 요금 — 입력 >272K 이면 요청 전체가 입력 2배 · 출력 1.5배.
+	"gpt-5.5":       {provider: ProviderOpenAI, price: Price{5, 30}, priceLong: Price{10, 45}, cacheReadMult: oaiCacheRead},
 	"gpt-5.4-mini":  {provider: ProviderOpenAI, price: Price{0.75, 4.5}, cacheReadMult: oaiCacheRead},
 	"gpt-5.4":       {provider: ProviderOpenAI, price: Price{2.5, 15}, cacheReadMult: oaiCacheRead},
 	"gpt-5.4-nano":  {provider: ProviderOpenAI, price: Price{0.2, 1.25}, cacheReadMult: oaiCacheRead},
@@ -49,10 +64,10 @@ var openaiSeed = map[string]seedEntry{
 	"gpt-5.3-codex": {provider: ProviderOpenAI, price: Price{1.75, 14}, cacheReadMult: oaiCacheRead},
 	"gpt-5.5-cyber": {provider: ProviderOpenAI, price: Price{12.5, 75}, cacheReadMult: oaiCacheRead},
 
-	// ── GPT-5.6 계열 — 유일하게 캐시 **생성**에 과금한다(1.25배) ──
-	"gpt-5.6-sol":   {provider: ProviderOpenAI, price: Price{5, 30}, cacheReadMult: oaiCacheRead, cacheWriteMult: oaiCacheWrite56},
-	"gpt-5.6-terra": {provider: ProviderOpenAI, price: Price{2, 12}, cacheReadMult: oaiCacheRead, cacheWriteMult: oaiCacheWrite56},
-	"gpt-5.6-luna":  {provider: ProviderOpenAI, price: Price{0.2, 1.2}, cacheReadMult: oaiCacheRead, cacheWriteMult: oaiCacheWrite56},
+	// ── GPT-5.6 계열 — 유일하게 캐시 **생성**에 과금한다(1.25배). 계단도 있다(2배/1.5배) ──
+	"gpt-5.6-sol":   {provider: ProviderOpenAI, price: Price{5, 30}, priceLong: Price{10, 45}, cacheReadMult: oaiCacheRead, cacheWriteMult: oaiCacheWrite56},
+	"gpt-5.6-terra": {provider: ProviderOpenAI, price: Price{2, 12}, priceLong: Price{4, 18}, cacheReadMult: oaiCacheRead, cacheWriteMult: oaiCacheWrite56},
+	"gpt-5.6-luna":  {provider: ProviderOpenAI, price: Price{0.2, 1.2}, priceLong: Price{0.4, 1.8}, cacheReadMult: oaiCacheRead, cacheWriteMult: oaiCacheWrite56},
 
 	// ── *-pro — 캐시 할인 없음(1.0배). 배수를 0 으로 두면 전역 0.1 로 떨어져 10배 과소가 된다. ──
 	"gpt-5.5-pro": {provider: ProviderOpenAI, price: Price{30, 180}, cacheReadMult: oaiCacheReadNone},

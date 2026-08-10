@@ -690,9 +690,9 @@ func applyPatch(ax *axes, changes map[string]patchChange, success *bool, status 
 			ax.linesAdded += add
 			ax.linesRemoved += del
 		case ch.Type == "delete":
-			ax.linesRemoved += lineCount(ch.Content)
+			ax.linesRemoved += policy.LineCount(ch.Content)
 		default:
-			ax.linesAdded += lineCount(ch.Content)
+			ax.linesAdded += policy.LineCount(ch.Content)
 		}
 	}
 	// 수락/거부는 **판정할 수 있을 때만** 센다. 판정 불가인데 0 을 보내면 서버는 그것을
@@ -724,13 +724,6 @@ func diffLines(d string) (added, removed int64) {
 		}
 	}
 	return added, removed
-}
-
-func lineCount(s string) int64 {
-	if s == "" {
-		return 0
-	}
-	return int64(strings.Count(strings.TrimSuffix(s, "\n"), "\n") + 1)
 }
 
 // keywordsInto 는 사람이 친 텍스트에서만 낱말을 뽑는다. `<` 로 시작하면 하네스가 끼워 넣은

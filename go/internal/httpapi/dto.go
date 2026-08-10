@@ -404,6 +404,11 @@ func sessionUsage(s store.Session) cost.Usage {
 		Output:      float64(s.Output),
 		CacheRead:   float64(s.CacheRead),
 		CacheCreate: float64(s.CacheCreate),
+		// 계단(롱컨텍스트) 분리분. **세 변환 함수 전부**가 이걸 올려야 한다 — 하나라도 빠지면
+		// 그 화면만 계단을 안 타고, 같은 데이터의 비용이 화면마다 달라진다(dto_longcontext_test.go).
+		InputLong:     float64(s.InputLong),
+		OutputLong:    float64(s.OutputLong),
+		CacheReadLong: float64(s.CacheReadLong),
 	}
 }
 
@@ -437,11 +442,14 @@ type platformsResponse struct {
 // 여기서 0 이 아닌 값을 지어내면 그 가정이 사실로 둔갑한다.
 func platformModelUsage(m store.PlatformModelRow) cost.Usage {
 	return cost.Usage{
-		Model:       m.Model,
-		Input:       float64(m.Input),
-		Output:      float64(m.Output),
-		CacheRead:   float64(m.CacheRead),
-		CacheCreate: float64(m.CacheCreate),
+		Model:         m.Model,
+		Input:         float64(m.Input),
+		Output:        float64(m.Output),
+		CacheRead:     float64(m.CacheRead),
+		CacheCreate:   float64(m.CacheCreate),
+		InputLong:     float64(m.InputLong),
+		OutputLong:    float64(m.OutputLong),
+		CacheReadLong: float64(m.CacheReadLong),
 	}
 }
 
@@ -454,5 +462,8 @@ func bucketUsage(b store.Bucket) cost.Usage {
 		CacheCreate:   float64(b.CacheCreate),
 		CacheCreate5m: float64(b.CacheCreate5m),
 		CacheCreate1h: float64(b.CacheCreate1h),
+		InputLong:     float64(b.InputLong),
+		OutputLong:    float64(b.OutputLong),
+		CacheReadLong: float64(b.CacheReadLong),
 	}
 }

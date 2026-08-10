@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -152,8 +153,14 @@ func TestPGMigrateRunnerAppliesAll(t *testing.T) {
 	if res.Dialect != DialectPostgres {
 		t.Fatalf("dialect: %v", res.Dialect)
 	}
-	// migrations/pg 에는 0014·0015·0017·0026 네 파일이 있다.
-	wantVersions := []int64{14, 15, 17, 26, 30, 31, 32, 33} // …·0032_member_tokens·0033_dev_metrics
+	/*
+	 * 기대 버전 목록은 **디렉터리에서 파생한다.** 손으로 적으면 마이그레이션을 추가할 때마다
+	 * 이 게이트가 빨개지고, 그때 하는 일은 숫자를 하나 올리는 것뿐이라 검증이 아니라 잡일이 된다.
+	 *
+	 * 이 테스트가 실제로 재는 것은 파일 목록이 아니다 — **러너가 디렉터리의 모든 파일을 버전 순으로,
+	 * 멱등하게 적용하는가**다. 파일 목록은 검증 대상이 아니라 입력이다.
+	 */
+	wantVersions := migrationVersionsIn(t, dir)
 	if res.Total != len(wantVersions) {
 		t.Fatalf("파일 수: want %d, got %d", len(wantVersions), res.Total)
 	}
@@ -166,13 +173,19 @@ func TestPGMigrateRunnerAppliesAll(t *testing.T) {
 		}
 	}
 
-	// schema_migrations 에 네 버전이 기록됐는가.
+	// schema_migrations 에 전 버전이 기록됐는가 — 값까지 대조한다. 개수만 보면 엉뚱한 버전이
+	// 같은 개수로 들어와도 통과한다.
 	rows, err := pg.Query(ctx, "SELECT version FROM schema_migrations ORDER BY version")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(rows) != len(wantVersions) {
 		t.Fatalf("schema_migrations 행 수: want %d, got %d", len(wantVersions), len(rows))
+	}
+	for i, r := range rows {
+		if got := r.Int("version"); got != wantVersions[i] {
+			t.Fatalf("schema_migrations[%d] = %d, want %d (전체 %v)", i, got, wantVersions[i], wantVersions)
+		}
 	}
 
 	// 실제 테이블이 섰는가(RLS 대상 5종).
@@ -578,4 +591,45 @@ func TestPGBadConnDiscarded(t *testing.T) {
 		t.Fatalf("세마포어 누수 %d", leaked)
 	}
 	t.Logf("고장 커넥션 폐기 확인: 죽은PID=%d → 새PID=%d, 세마포어누수=%d", deadPID, got, len(pg.sem))
+}
+
+/*
+ * migrationVersionsIn 은 마이그레이션 디렉터리에서 버전 번호를 뽑아 오름차순으로 돌려준다.
+ *
+ * 러너와 **같은 규칙**으로 판정한다: `^\d+.*\.sql$` 인 파일만 세고, 선행 숫자를 버전으로 읽는다.
+ * (러너의 migrationFileRe 를 그대로 쓴다 — 판정 규칙이 두 벌이 되면 테스트가 러너와 다른
+ *  집합을 기대하게 되고, 그때 어느 쪽이 맞는지 알 수 없다.)
+ *
+ * 파일이 0개면 통과시키지 않는다. 그건 "적용할 게 없다"가 아니라 경로를 잘못 짚은 것이고,
+ * 빈 목록으로 통과하면 이 게이트가 아무것도 검증하지 않는 채로 초록이 된다.
+ */
+func migrationVersionsIn(t *testing.T, dir string) []int64 {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("마이그레이션 디렉터리를 못 읽었다(%s): %v", dir, err)
+	}
+	var out []int64
+	for _, e := range entries {
+		if e.IsDir() || !migrationFileRe.MatchString(e.Name()) {
+			continue
+		}
+		digits := e.Name()
+		for i, c := range digits {
+			if c < '0' || c > '9' {
+				digits = digits[:i]
+				break
+			}
+		}
+		v, err := strconv.ParseInt(digits, 10, 64)
+		if err != nil {
+			t.Fatalf("버전 번호를 못 읽었다(%s): %v", e.Name(), err)
+		}
+		out = append(out, v)
+	}
+	if len(out) == 0 {
+		t.Fatalf("%s 에 마이그레이션 파일이 하나도 없다 — 경로가 틀렸다", dir)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }

@@ -96,7 +96,45 @@ type Usage struct {
 	CacheCreate   float64
 	CacheCreate5m float64
 	CacheCreate1h float64
+
+	// ── 계단(롱컨텍스트) 분리분 ────────────────────────────────────────────
+	//
+	// **총량 중 롱 구간 요청에서 발생한 몫**이다. 위의 Input/Output/CacheRead 는 의미가
+	// 바뀌지 않는다 — 여전히 전체 합계이고, 표준 구간 몫은 `총량 − Long` 으로 나온다.
+	//
+	// 왜 몫으로 받나: 이 패키지는 **집계된 행**을 받으므로 "이 요청이 임계값을 넘었는가"를
+	// 판정할 수 없다(하루치 합계가 200K 를 넘는 것과 한 요청이 200K 를 넘는 것은 다른
+	// 얘기다). 판정은 요청 원문을 보는 수집기만 할 수 있고, 그 결과가 이 세 필드다.
+	//
+	// **0/부재가 기존 동작이다.** 전부 표준 구간으로 계산되며 결과는 개편 전과 비트 동일하다
+	// (regression_test.go · longcontext_test.go 가 못박는다).
+	//
+	// 캐시 **생성**에는 분리분이 없다. 계단 요금을 적용하는 두 공급사(Google·OpenAI)가
+	// 캐시 생성에 별도 롱 단가를 두지 않기 때문이다 — 없는 축을 만들지 않는다.
+	InputLong     float64
+	OutputLong    float64
+	CacheReadLong float64
 }
+
+// LongPricing 은 롱 몫에 **무슨 단가를 적용했는지**다.
+//
+// flat 과 unknown 을 뭉치면 안 된다. 둘 다 표준가로 계산하지만 뜻이 정반대다 — 하나는
+// "계단이 없으므로 이 값이 정확하다"이고, 다른 하나는 "계단이 있는지조차 모르므로 과소일 수
+// 있다"이다. 뭉치면 화면이 후자를 전자로 위장한다.
+type LongPricing string
+
+const (
+	// LongPricingNone 은 롱 몫이 없다는 뜻이다(분리분 0 또는 부재 = 기존 동작).
+	LongPricingNone LongPricing = ""
+	// LongPricingApplied 는 롱 몫을 롱 단가로 계산했다는 뜻이다.
+	LongPricingApplied LongPricing = "applied"
+	// LongPricingFlat 은 시드에 있는 모델인데 롱 단가 항목이 없다는 뜻이다
+	// = **우리 표 기준 계단 없음**. 표준가로 계산했고 그 값이 정확하다.
+	LongPricingFlat LongPricing = "flat"
+	// LongPricingUnknown 은 시드 밖 모델(config 로 단가만 꽂힌 사내 게이트웨이 등)이라
+	// 계단 여부 자체를 모른다는 뜻이다. 표준가로 계산했으므로 **과소일 수 있다.**
+	LongPricingUnknown LongPricing = "unknown"
+)
 
 // Result 는 CostOf 와 Summarize 가 함께 쓰는 반환형이다(계약서가 둘 다 Result 로 적었다).
 //
@@ -123,6 +161,20 @@ type Result struct {
 	// 남아 있는 한 이 값은 0 이 아니다.
 	TTLUnknownRows int
 	PricedAt       string
+
+	// ── 계단(롱컨텍스트) ──────────────────────────────────────────────────
+	//
+	// LongTokens 는 롱 구간으로 분리된 토큰 수다(입력 + 출력 + 캐시읽기). CostOf 는 그 행의
+	// 값을, Summarize 는 합계를 담는다. 0 이면 계단이 개입하지 않았다는 뜻이다.
+	LongTokens float64
+	// LongPricing 은 CostOf 만 채운다 — 한 행에 적용된 단가의 종류다.
+	LongPricing LongPricing
+	// LongUnknownRows 는 Summarize 만 채운다. **롱 몫이 있는데 롱 단가를 몰라 표준가로
+	// 계산한 행 수**다(LongPricingUnknown). 0 이 아니면 그만큼 과소 추정일 수 있다 —
+	// TTLUnknownRows 와 같은 규율로, 모르는 것을 모른다고 내보낸다.
+	//
+	// flat(계단 없는 모델)은 여기 세지 않는다. 그건 모르는 게 아니라 아는 사실이다.
+	LongUnknownRows int
 }
 
 /*
@@ -158,12 +210,15 @@ type seedEntry struct {
 	// 단일 배수로 표현되지 않고, 기존 전역 상수 경로를 그대로 타야 무회귀이기 때문이다.
 	cacheWriteMult float64
 
-	// priceLong 은 컨텍스트 200K 초과 구간의 단가다(계단 요금). 제로값이면 계단 없음.
+	// priceLong 은 임계값 초과 구간의 단가다(계단 요금). 제로값이면 **우리 표 기준 계단 없음**.
 	//
-	// ⚠ **지금은 계산에 쓰지 않는다.** 우리가 가진 행은 이미 집계된 값이라 "이 요청이 200K 를
-	// 넘었는가"를 판정할 수 없다 — 하루치 합계가 200K 를 넘는 것과 한 요청이 200K 를 넘는 것은
-	// 전혀 다른 얘기다. 집계 후 계산이라 계단 판정 불가 — 요청단위 분리 필요(후속).
-	// 그때까지는 기본 구간 단가만 적용하고, 계단이 있다는 사실만 LongContextPrice 로 노출한다.
+	// 임계값은 공급사마다 다르다(Google 200K · OpenAI 272K). 그 판정은 여기서 하지 않는다 —
+	// 이 패키지는 집계된 행을 받으므로 "이 요청이 임계값을 넘었는가"를 알 수 없다. 판정은 요청
+	// 원문을 보는 **수집기**가 하고, 그 결과가 Usage 의 InputLong/OutputLong/CacheReadLong 이다.
+	// 여기서는 그 몫에 이 단가를 곱하기만 한다(CostOf 참조).
+	//
+	// 분리분이 0/부재면 이 필드는 계산에 관여하지 않는다 — 기존 데이터·구버전 수집기의 결과가
+	// 개편 전과 비트 동일한 근거다.
 	priceLong Price
 }
 
@@ -248,11 +303,11 @@ func ProviderOf(model string) (string, bool) {
 	return e.provider, true
 }
 
-// LongContextPrice 는 200K 초과 구간 단가와 "이 모델이 계단 요금인가"를 돌려준다.
+// LongContextPrice 는 계단 초과 구간 단가와 "이 모델이 계단 요금인가"를 돌려준다.
 //
-// ⚠ 이 값은 **아직 비용 계산에 반영되지 않는다.** 집계된 행으로는 요청별 컨텍스트 길이를 알 수
-// 없어 계단 판정이 불가능하다(후속: 요청단위 분리). 지금은 화면이 "이 모델은 긴 컨텍스트에서
-// 단가가 오른다"고 경고할 수 있게 노출만 한다.
+// CostOf 가 롱 분리분(Usage.InputLong 등)에 이 단가를 적용한다. false 는 **우리 표 기준
+// 계단 없음**이라는 뜻이고, 시드에 아예 없는 모델도 false 다 — 그 둘의 구분은 Result 의
+// LongPricing(flat vs unknown)이 한다.
 func LongContextPrice(model string) (Price, bool) {
 	e, ok := seed[NormalizeModel(model)]
 	if !ok || e.priceLong == (Price{}) {
@@ -511,9 +566,28 @@ func CostOf(row Usage, table Table, mult Mult) Result {
 	cc1h := tok(row.CacheCreate1h)
 	ttlKnown := cc5+cc1h > 0
 
+	/*
+	 * 계단(롱컨텍스트) 분리 — 총량에서 롱 몫을 떼어 낸다.
+	 *
+	 * 접는 이유(longShare): 롱 몫이 총량을 넘으면 표준 몫이 **음수**가 되고, 음수 토큰은 비용을
+	 * 깎아 합계를 조용히 줄인다. 인테이크가 이미 접고 위반을 세지만(그쪽이 신뢰 경계다), 이미
+	 * 저장된 옛 행이 그럴 수 있으므로 계산부에서도 구조적으로 막는다.
+	 */
+	inLong := longShare(row.InputLong, row.Input)
+	outLong := longShare(row.OutputLong, row.Output)
+	crLong := longShare(row.CacheReadLong, row.CacheRead)
+	longTokens := inLong + outLong + crLong
+
 	if !priced {
-		return Result{Priced: false, TTLKnown: ttlKnown, Model: model}
+		return Result{
+			Priced: false, TTLKnown: ttlKnown, Model: model,
+			LongTokens: longTokens,
+		}
 	}
+
+	// 롱 몫이 0 이면 pLong 은 p 와 같고, 아래 식의 롱 항은 0 곱셈이라 결과에 관여하지 않는다
+	// (부동소수 비트까지 개편 전과 같다 — `x + 0*y` 는 `x` 다).
+	pLong, longPricing := longPriceOf(model, p, longTokens)
 
 	var cacheCreateUSD float64
 	if ttlKnown {
@@ -523,17 +597,66 @@ func CostOf(row Usage, table Table, mult Mult) Result {
 	}
 
 	byAxis := Axis{
-		Input:       (tok(row.Input) * p.Input) / mtok,
-		Output:      (tok(row.Output) * p.Output) / mtok,
-		CacheRead:   (tok(row.CacheRead) * p.Input * mult.CacheRead) / mtok,
+		Input:  ((tok(row.Input)-inLong)*p.Input + inLong*pLong.Input) / mtok,
+		Output: ((tok(row.Output)-outLong)*p.Output + outLong*pLong.Output) / mtok,
+		/*
+		 * 캐시 읽기의 롱 단가는 **롱 입력가 × cacheReadMult** 다. 공식 표가 그렇게 되어 있다:
+		 * gemini-2.5-pro 의 캐시 히트가 0.125 → 0.25 로 오르는 것은 입력가 1.25 → 2.50 과
+		 * 같은 0.1 배수다. 별도의 롱 캐시 단가를 표에 또 두면 두 값이 갈라질 자리가 생긴다.
+		 *
+		 * 곱셈 순서를 바꾸지 않는다 — `((x*p.Input) * mult.CacheRead) / mtok` 그대로여야
+		 * 롱 몫이 0 일 때 개편 전과 비트가 같다.
+		 */
+		CacheRead:   (((tok(row.CacheRead)-crLong)*p.Input + crLong*pLong.Input) * mult.CacheRead) / mtok,
 		CacheCreate: cacheCreateUSD,
 	}
 	return Result{
-		USD:      byAxis.Input + byAxis.Output + byAxis.CacheRead + byAxis.CacheCreate,
-		ByAxis:   byAxis,
-		Priced:   true,
-		TTLKnown: ttlKnown,
-		Model:    model,
+		USD:         byAxis.Input + byAxis.Output + byAxis.CacheRead + byAxis.CacheCreate,
+		ByAxis:      byAxis,
+		Priced:      true,
+		TTLKnown:    ttlKnown,
+		Model:       model,
+		LongTokens:  longTokens,
+		LongPricing: longPricing,
+	}
+}
+
+// longShare 는 롱 몫을 [0, 총량] 으로 접는다. 음수·NaN 은 0 이다(tok 과 같은 규율).
+func longShare(long, total float64) float64 {
+	l, t := tok(long), tok(total)
+	if l > t {
+		return t
+	}
+	return l
+}
+
+/*
+ * longPriceOf 는 롱 몫에 쓸 단가와 "무슨 근거로 그 단가인지"를 함께 돌려준다.
+ *
+ * 근거를 함께 내보내는 것이 이 함수의 요점이다. 롱 단가가 없을 때 표준가로 계산하는 것은
+ * 같지만, 그 이유가 "계단이 없는 모델"인지 "우리가 단가를 모르는 모델"인지는 전혀 다른
+ * 사실이다 — 뭉치면 후자가 정확한 값으로 위장된다.
+ *
+ * ⚠ 롱 단가는 **시드에서만** 온다. config 의 `usage.pricing` 오버라이드는 표준 단가만 바꾸므로,
+ *   오버라이드된 모델의 롱 단가는 시드 값 그대로 남는다(그 모델이 시드에 있는 경우). 롱 단가
+ *   오버라이드가 필요해지면 그때 config 스키마에 칸을 판다 — 지금 없는 요구에 스키마를 늘리면
+ *   양쪽이 갈라질 자리만 만든다.
+ */
+func longPriceOf(model string, p Price, longTokens float64) (Price, LongPricing) {
+	if longTokens <= 0 {
+		return p, LongPricingNone
+	}
+	e, inSeed := seed[model]
+	switch {
+	case inSeed && e.priceLong != (Price{}):
+		return e.priceLong, LongPricingApplied
+	case inSeed:
+		// 시드에 있고 롱 단가 항목이 없다 = 계단 없는 모델. 표준가가 맞는 값이다.
+		return p, LongPricingFlat
+	default:
+		// 시드 밖 모델(config 로 단가만 꽂힌 사내 게이트웨이 등) — 계단 여부를 모른다.
+		// 표준가로 계산하되 그 사실을 결과에 남긴다(과소 추정일 수 있다).
+		return p, LongPricingUnknown
 	}
 }
 
@@ -545,7 +668,9 @@ func Summarize(rows []Usage) Result {
 
 	var byAxis Axis
 	var usd float64
+	var longTokens float64
 	ttlUnknownRows := 0
+	longUnknownRows := 0
 	unpricedSet := map[string]struct{}{}
 
 	for _, r := range rows {
@@ -559,6 +684,12 @@ func Summarize(rows []Usage) Result {
 		if !c.TTLKnown && tok(r.CacheCreate) > 0 {
 			ttlUnknownRows++
 		}
+		// 롱 몫이 있는데 롱 단가를 몰라 표준가로 계산한 행. flat(계단 없는 모델)은 세지 않는다
+		// — 그건 모르는 게 아니라 아는 사실이고, 세면 경고가 무뎌진다.
+		if c.LongPricing == LongPricingUnknown {
+			longUnknownRows++
+		}
+		longTokens += c.LongTokens
 		usd += c.USD
 		byAxis.Input += c.ByAxis.Input
 		byAxis.Output += c.ByAxis.Output
@@ -574,11 +705,13 @@ func Summarize(rows []Usage) Result {
 	sort.Strings(unpriced)
 
 	return Result{
-		USD:            usd,
-		ByAxis:         byAxis,
-		Unpriced:       unpriced,
-		TTLUnknownRows: ttlUnknownRows,
-		PricedAt:       PricedAt(),
+		USD:             usd,
+		ByAxis:          byAxis,
+		Unpriced:        unpriced,
+		TTLUnknownRows:  ttlUnknownRows,
+		PricedAt:        PricedAt(),
+		LongTokens:      longTokens,
+		LongUnknownRows: longUnknownRows,
 	}
 }
 

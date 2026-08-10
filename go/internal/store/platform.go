@@ -96,8 +96,14 @@ func PlatformRollup(ctx context.Context, f Filter) ([]PlatformRow, error) {
 	}
 
 	where, args := sessionWhere(f)
+	/*
+	 * 계단 분리분도 함께 합산한다. 총량과 분리분이 **같은 GROUP BY 에서** 나와야 둘의 관계
+	 * (표준 = 총량 − long)가 모델 단위로 유지된다 — 여기서 빠뜨리면 플랫폼 화면만 전부 표준
+	 * 구간으로 계산돼, 같은 데이터의 비용이 좌석·시계열 화면과 달라진다.
+	 */
 	sql := "SELECT platform p, COALESCE(NULLIF(model,''),'" + UnknownModel + "') m, COUNT(*) n," +
 		" SUM(input) i, SUM(output) o, SUM(cache_read) cr, SUM(cache_create) cc," +
+		" SUM(input_long) il, SUM(output_long) ol, SUM(cache_read_long) crl," +
 		" MIN(started_at) first_at, MAX(started_at) last_at" +
 		" FROM usage_sessions"
 	if len(where) > 0 {
@@ -138,12 +144,15 @@ func PlatformRollup(ctx context.Context, f Filter) ([]PlatformRow, error) {
 			row.LastSeen = v
 		}
 		row.Models = append(row.Models, PlatformModelRow{
-			Model:       r.Str("m"),
-			Input:       r.Int("i"),
-			Output:      r.Int("o"),
-			CacheRead:   r.Int("cr"),
-			CacheCreate: r.Int("cc"),
-			Sessions:    int(r.Int("n")),
+			Model:         r.Str("m"),
+			Input:         r.Int("i"),
+			Output:        r.Int("o"),
+			CacheRead:     r.Int("cr"),
+			CacheCreate:   r.Int("cc"),
+			InputLong:     r.Int("il"),
+			OutputLong:    r.Int("ol"),
+			CacheReadLong: r.Int("crl"),
+			Sessions:      int(r.Int("n")),
 		})
 	}
 

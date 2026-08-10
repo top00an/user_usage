@@ -32,6 +32,18 @@ type SessionInput struct {
 	WebFetch    int64
 	Turns       int64
 
+	/*
+	 * 계단(롱컨텍스트) 분리분 — 위 총량 **중** 롱 구간 요청에서 발생한 몫이다.
+	 * 총량 필드의 의미는 바뀌지 않는다(여전히 전체 합계). 표준 구간 몫은 `총량 − Long` 이다.
+	 *
+	 * 0 이 기본이고 그것이 현행 동작이다 — 구버전 수집기는 이 값을 보내지 않는다.
+	 * 불변식(0 <= long <= 총량)의 검증·계수는 인테이크가 한다(신뢰 경계는 거기다).
+	 * 여기서는 음수만 접는다(nonNeg).
+	 */
+	InputLong     int64
+	OutputLong    int64
+	CacheReadLong int64
+
 	StartedAt string
 	EndedAt   string // 구버전 수집기는 안 보낸다 → 빈 값이면 NULL 로 남아 "모른다"가 보인다
 
@@ -58,6 +70,11 @@ type SeriesRow struct {
 	CC5m        int64
 	CC1h        int64
 	Turns       int64
+
+	// 계단(롱컨텍스트) 분리분 — SessionInput 과 같은 계약이다(총량의 부분집합).
+	InputLong     int64
+	OutputLong    int64
+	CacheReadLong int64
 
 	ToolErrors    int64
 	StopMaxTokens int64
@@ -259,12 +276,16 @@ type Session struct {
 	Output      int64
 	CacheRead   int64
 	CacheCreate int64
-	WebSearch   int64
-	WebFetch    int64
-	Turns       int64
-	StartedAt   *string
-	EndedAt     *string
-	ReportedAt  *string
+	// 계단(롱컨텍스트) 분리분 — 총량의 부분집합. 비용 계산이 이 값을 상위 단가로 매긴다.
+	InputLong     int64
+	OutputLong    int64
+	CacheReadLong int64
+	WebSearch     int64
+	WebFetch      int64
+	Turns         int64
+	StartedAt     *string
+	EndedAt       *string
+	ReportedAt    *string
 }
 
 // PlatformModelRow 는 한 플랫폼 안의 모델별 토큰이다 — **비용 계산의 근거**다.
@@ -275,7 +296,12 @@ type PlatformModelRow struct {
 	Output      int64
 	CacheRead   int64
 	CacheCreate int64
-	Sessions    int
+	// 계단 분리분의 합. 이게 없으면 플랫폼 화면만 계단을 안 타서 같은 데이터의 비용이
+	// 좌석 화면과 달라진다 — 두 화면이 다른 값을 말하는 것이 이 축에서 가장 나쁜 실패다.
+	InputLong     int64
+	OutputLong    int64
+	CacheReadLong int64
+	Sessions      int
 }
 
 // PlatformRow 는 플랫폼 하나의 요약이다.
@@ -306,6 +332,10 @@ type Bucket struct {
 	// TTL 분해. 배수가 1.25배(5분) vs 2배(1시간)로 1.6배 차이 나므로 뭉뚱그리면 비용이 그만큼 틀린다.
 	CacheCreate5m int64
 	CacheCreate1h int64
+	// 계단(롱컨텍스트) 분리분 — 총량의 부분집합. 시간 뷰의 비용이 이 값을 상위 단가로 매긴다.
+	InputLong     int64
+	OutputLong    int64
+	CacheReadLong int64
 	Turns         int64
 	ToolErrors    int64
 	StopMaxTokens int64

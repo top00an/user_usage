@@ -136,14 +136,6 @@ func newSessionAgg(id string) *sessionAgg {
 	}
 }
 
-// lineCount 는 문자열의 줄 수를 센다(빈 문자열은 0). LOC 델타 계산용.
-func lineCount(s string) int64 {
-	if s == "" {
-		return 0
-	}
-	return int64(strings.Count(s, "\n") + 1)
-}
-
 // Aggregator 는 여러 파일의 줄을 sessionId 로 묶어 누적한다.
 type Aggregator struct {
 	sessions map[string]*sessionAgg
@@ -368,14 +360,14 @@ func (sa *sessionAgg) editUse(b rawBlock) {
 	if json.Unmarshal(b.Input, &in) == nil {
 		switch b.Name {
 		case "Write":
-			sa.linesAdded += lineCount(in.Content)
+			sa.linesAdded += policy.LineCount(in.Content)
 		case "Edit":
-			sa.linesAdded += lineCount(in.NewString)
-			sa.linesRemoved += lineCount(in.OldString)
+			sa.linesAdded += policy.LineCount(in.NewString)
+			sa.linesRemoved += policy.LineCount(in.OldString)
 		case "MultiEdit":
 			for _, e := range in.Edits {
-				sa.linesAdded += lineCount(e.NewString)
-				sa.linesRemoved += lineCount(e.OldString)
+				sa.linesAdded += policy.LineCount(e.NewString)
+				sa.linesRemoved += policy.LineCount(e.OldString)
 			}
 		}
 	}

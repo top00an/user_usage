@@ -112,6 +112,14 @@ var sqliteDDL = []string{
 		output INTEGER NOT NULL DEFAULT 0,
 		cache_read INTEGER NOT NULL DEFAULT 0,
 		cache_create INTEGER NOT NULL DEFAULT 0,
+		-- 계단(롱컨텍스트) 분리분 — 위 총량 **중** 롱 구간 요청에서 발생한 몫이다.
+		-- 총량 컬럼의 의미는 바뀌지 않는다(여전히 전체 합계). 표준 몫 = 총량 − long.
+		-- DEFAULT 0 이 하위호환의 전부다 — 구버전 수집기는 이 값을 안 보내고, 0 이면
+		-- 전부 표준 구간이라 비용이 종전과 비트 동일하다.
+		-- pg 는 migrations/pg/0036_long_context.sql 이 같은 컬럼을 소유한다(양 방언 동기).
+		input_long INTEGER NOT NULL DEFAULT 0,
+		output_long INTEGER NOT NULL DEFAULT 0,
+		cache_read_long INTEGER NOT NULL DEFAULT 0,
 		web_search INTEGER NOT NULL DEFAULT 0,
 		web_fetch INTEGER NOT NULL DEFAULT 0,
 		turns INTEGER NOT NULL DEFAULT 0,
@@ -134,6 +142,10 @@ var sqliteDDL = []string{
 		cache_create INTEGER NOT NULL DEFAULT 0,
 		cc_5m INTEGER NOT NULL DEFAULT 0,
 		cc_1h INTEGER NOT NULL DEFAULT 0,
+		-- 계단(롱컨텍스트) 분리분 — usage_sessions 와 같은 계약이다(총량의 부분집합).
+		input_long INTEGER NOT NULL DEFAULT 0,
+		output_long INTEGER NOT NULL DEFAULT 0,
+		cache_read_long INTEGER NOT NULL DEFAULT 0,
 		turns INTEGER NOT NULL DEFAULT 0,
 		tool_errors INTEGER NOT NULL DEFAULT 0,
 		stop_max_tokens INTEGER NOT NULL DEFAULT 0,
@@ -264,6 +276,23 @@ func Init(ctx context.Context, d db.DB) error {
 	if err := d.Exec(ctx,
 		"CREATE INDEX IF NOT EXISTS idx_usage_sessions_platform ON usage_sessions(platform)"); err != nil {
 		return fmt.Errorf("store: platform 인덱스 생성 실패: %w", err)
+	}
+	/*
+	 * 계단(롱컨텍스트) 분리분. pg 는 migrations/pg/0036_long_context.sql 이 소유한다.
+	 *
+	 * **두 표 모두**에 넣는다. 한쪽만 넣으면 그 표를 근거로 삼는 화면만 계단을 안 타고, 같은
+	 * 데이터의 비용이 화면마다 달라진다(세션 뷰 ↔ 시간 뷰).
+	 *
+	 * NOT NULL DEFAULT 0 으로 추가하므로 기존 행은 전부 "전부 표준 구간"이 된다 — 그것이 맞는
+	 * 사실이다. 지금까지의 보고에는 롱 분리분이 아예 없었고, 여기서 NULL 을 허용하면
+	 * "모른다"가 생겨 총량과 분리분의 관계(표준 = 총량 − long)가 깨진다.
+	 */
+	for _, table := range []string{"usage_sessions", "usage_series"} {
+		for _, col := range []string{"input_long", "output_long", "cache_read_long"} {
+			if err := ensureColumn(ctx, d, table, col, "INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
