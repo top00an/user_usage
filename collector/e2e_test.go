@@ -14,8 +14,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strings"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -91,8 +91,10 @@ func TestE2ECollectToDashboard(t *testing.T) {
 	}
 
 	// 수집 — -dir 로 합성 픽스처만 읽게 고정한다(실제 ~/.claude/projects 를 읽지 않도록).
+	// -codex-dir "" 로 Codex 원천도 끈다: 이 테스트가 도는 머신에 실제 ~/.codex/sessions 가
+	// 있으면 그 세션들이 함께 올라와 세션 수 단정이 머신마다 달라진다.
 	run := func(extra ...string) string {
-		args := append([]string{"-server", base, "-state", state, "-dir", projects}, extra...)
+		args := append([]string{"-server", base, "-state", state, "-dir", projects, "-codex-dir", ""}, extra...)
 		c := exec.Command(collectorBin, args...)
 		c.Env = append(os.Environ(), "USAGE_INTAKE_TOKEN="+intake)
 		out, err := c.CombinedOutput()

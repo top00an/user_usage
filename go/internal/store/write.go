@@ -21,7 +21,7 @@ import (
 var ErrEmptySessionID = errors.New("store: sessionId 가 비었다")
 
 var sessionCols = []string{
-	"machine", "username", "project", "model",
+	"machine", "username", "project", "model", "platform",
 	"input", "output", "cache_read", "cache_create",
 	"web_search", "web_fetch", "turns",
 	"started_at", "ended_at", "no_ts_turns",
@@ -52,6 +52,9 @@ func SessionUpsert(ctx context.Context, s SessionInput) error {
 		nullStr(clip(s.Username, 200)),
 		nullStr(clip(s.Project, 200)),
 		nullStr(clip(s.Model, 120)),
+		// platform 은 nullStr 로 감싸지 않는다 — 컬럼이 NOT NULL 이고, 무엇보다 "안 보냈다"의
+		// 뜻이 여기서는 NULL 이 아니라 claude 다(NormalizePlatform 이 그 규칙의 단일 출처).
+		NormalizePlatform(s.Platform),
 		nonNeg(s.Input), nonNeg(s.Output), nonNeg(s.CacheRead), nonNeg(s.CacheCreate),
 		nonNeg(s.WebSearch), nonNeg(s.WebFetch), nonNeg(s.Turns),
 		nullStr(clip(s.StartedAt, 40)),

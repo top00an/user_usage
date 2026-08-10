@@ -27,6 +27,15 @@ type Report struct {
 type Session struct {
 	ID string `json:"id"`
 
+	// Platform 은 이 세션이 어느 CLI 에서 나왔는지다(`claude` | `codex`).
+	//
+	// 왜 Report 가 아니라 세션에 붙나: 한 번의 보고에 두 플랫폼의 세션이 섞여 실린다.
+	// 보고 수준에 두면 그 값이 어느 세션을 가리키는지 말할 수 없다.
+	//
+	// 서버는 이 필드를 **선택적으로** 받는다 — 없으면 `claude` 로 본다(구버전 수집기 호환).
+	// 그래서 omitempty 여도 안전하지만, 이 수집기는 항상 명시해 서버의 기본값에 기대지 않는다.
+	Platform string `json:"platform,omitempty"`
+
 	Username  string `json:"username,omitempty"`
 	Machine   string `json:"machine,omitempty"`
 	StartedAt string `json:"startedAt,omitempty"`

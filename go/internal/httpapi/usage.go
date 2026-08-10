@@ -88,7 +88,10 @@ func (s *server) storeSessions(ctx context.Context, sessions []intake.Session) i
 			Username:  username,
 			Project:   deref(sess.Project),
 			Model:     deref(sess.Model),
-			Input:     sess.Input, Output: sess.Output,
+			// 선택적 필드다 — 안 보내면 빈 값이고, 저장 계층이 claude 로 채운다
+			// (허용목록 밖은 other). 그 규칙의 단일 출처는 store.NormalizePlatform 이다.
+			Platform: deref(sess.Platform),
+			Input:    sess.Input, Output: sess.Output,
 			CacheRead: sess.CacheRead, CacheCreate: sess.CacheCreate,
 			WebSearch: sess.WebSearch, WebFetch: sess.WebFetch, Turns: sess.Turns,
 			StartedAt: deref(sess.StartedAt), EndedAt: deref(sess.EndedAt),

@@ -204,6 +204,7 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 		"/api/usage/coverage": true, "/api/usage/leaderboard": true,
 		"/api/usage/dispatch": true, "/api/usage/seats": true,
 		"/api/usage/teams": true, "/api/usage/dev": true,
+		"/api/usage/platforms": true,
 	}
 	if p == "/api/usage/seats" {
 		return s.routeSeats(w, r, c)
@@ -327,8 +328,56 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 
 	username := c.query.Get("user")
 	model := c.query.Get("model")
+	/*
+	 * platform 필터 — **미지정이면 전체다**(현행과 완전히 같은 동작). 그것이 기존 계약이
+	 * 그대로 사는 근거이고, 이 기본값이 바뀌면 골든 44개가 통째로 깨진다.
+	 *
+	 * 오타는 400 이다. 저장 쪽처럼 other 로 접으면 요청한 것과 다른 모집단이 요청한 이름으로
+	 * 조용히 돌아온다 — 조회에서 그건 오분류보다 나쁘다.
+	 */
+	platform := c.query.Get("platform")
+	if platform != "" && !store.IsPlatformFilter(platform) {
+		sendError(w, http.StatusBadRequest,
+			"platform 은 "+strings.Join(store.PlatformFilterValues(), "|")+" 중 하나입니다")
+		return true, nil
+	}
+
+	// ── 플랫폼별 요약(신규) ───────────────────────────────────────────────
+	//
+	// 원행이 아니라 SQL 집계를 쓴다 — 아래 rows 는 limit 로 잘리므로 그것으로 접으면 큰
+	// 데이터에서 조용한 과소 보고가 된다. 그래서 rows 조회 **앞**에서 끊는다.
+	if p == "/api/usage/platforms" {
+		rollup, err := store.PlatformRollup(ctx, store.Filter{
+			From: from, To: to, Username: username, Model: model, Platform: platform,
+		})
+		if err != nil {
+			return true, err
+		}
+		table := cost.Pricing(time.Now())
+		mult := cost.Multipliers()
+		out := make([]platformDTO, 0, len(rollup))
+		for _, row := range rollup {
+			// 비용은 **모델별로** 매겨 더한다 — 단가가 모델별이라 플랫폼 합계 토큰에는
+			// 매길 단가가 없다. 단가 미등록 모델은 더하지 않는다(0 원으로 위장하지 않는다).
+			usd := 0.0
+			for _, m := range row.Models {
+				if cr := cost.CostOf(platformModelUsage(m), table, mult); cr.Priced {
+					usd += cr.USD
+				}
+			}
+			out = append(out, platformDTO{
+				Platform: row.Platform, Sessions: row.Sessions,
+				Input: row.Input, Output: row.Output,
+				CacheRead: row.CacheRead, CacheCreate: row.CacheCreate,
+				CostUsd: usd, FirstSeen: row.FirstSeen, LastSeen: row.LastSeen,
+			})
+		}
+		writeJSON(w, http.StatusOK, platformsResponse{Platforms: out}, nil)
+		return true, nil
+	}
+
 	rows, err := store.SessionRows(ctx, store.Filter{
-		From: from, To: to, Username: username, Model: model, Limit: limit,
+		From: from, To: to, Username: username, Model: model, Platform: platform, Limit: limit,
 	})
 	if err != nil {
 		return true, err
@@ -466,7 +515,9 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 
 	// ── 품질축 ────────────────────────────────────────────────────────────
 	if p == "/api/usage/quality" {
-		qt, err := store.SeriesQualityTotals(ctx, store.Filter{From: from, To: to, Username: username})
+		qt, err := store.SeriesQualityTotals(ctx, store.Filter{
+			From: from, To: to, Username: username, Platform: platform,
+		})
 		if err != nil {
 			return true, err
 		}
@@ -616,7 +667,7 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 	if byHour {
 		srcLimit = store.SeriesRowsDefault
 		buckets, err := store.SeriesRows(ctx, store.Filter{
-			From: wFrom, To: wTo, Username: username, Model: model, Limit: srcLimit,
+			From: wFrom, To: wTo, Username: username, Model: model, Platform: platform, Limit: srcLimit,
 		})
 		if err != nil {
 			return true, err
@@ -632,7 +683,7 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 		}
 	} else {
 		sessions, err := store.SessionRows(ctx, store.Filter{
-			From: wFrom, To: wTo, Username: username, Model: model, Limit: srcLimit,
+			From: wFrom, To: wTo, Username: username, Model: model, Platform: platform, Limit: srcLimit,
 		})
 		if err != nil {
 			return true, err

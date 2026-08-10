@@ -20,6 +20,26 @@
 //   - 비밀 없음(순수 정책값).
 //   - 모르는 모델은 priced=false 로 두고 이름을 남긴다. **조용히 $0 으로 처리하지 않는다** —
 //     그러면 합계가 틀렸다는 사실이 화면에서 사라진다.
+//   - 캐시 배수는 **모델별**이다. 전역 상수 하나로 두면 Anthropic 기준이 OpenAI·Google 에
+//     그대로 적용돼 비용이 조용히 틀린다(예: o3 의 캐시읽기는 0.1배가 아니라 0.25배다).
+//
+// ── 이 패키지가 받는 토큰은 **이미 정규화된 값**이다 (중요) ──────────────────
+//
+// 공급사마다 usage 필드의 의미가 다르다. 그 차이를 흡수하는 것은 **수집기(리더)의 책임**이고,
+// cost 는 정규화가 끝난 값을 받는다고 가정한다. 이 전제가 깨지면 비용이 조용히 부풀어 오른다.
+//
+//	① input 과 캐시의 관계 — 축이 서로소인가?
+//	   Anthropic  input 이 캐시를 **제외**한다(input · cacheRead · cacheCreate 가 서로소).
+//	   OpenAI     input(prompt_tokens)이 캐시를 **포함**한다. (실측 3,336행 대조로 확인)
+//	   Google     input(promptTokenCount)이 캐시를 **포함**한다. (공식 문서의 정의)
+//	   → 리더가 저장 전에 `input = max(0, input − cached)` 로 정규화해야 한다.
+//	     안 하면 캐시된 입력이 입력가로 한 번·캐시읽기가로 또 한 번 청구되어 **최대 1.8배**
+//	     부푼다. cost 는 집계된 행만 보므로 이 중복을 **탐지할 수 없다**.
+//
+//	② reasoning / thinking 토큰 — output 에 들어 있는가?
+//	   OpenAI  reasoning_tokens 는 output(completion_tokens)에 **이미 포함**이다 → 더하면 이중 계상.
+//	   Google  thoughtsTokenCount 는 output(candidatesTokenCount)에 **미포함**이다 → 더해야 한다.
+//	   → 이것도 리더의 책임이다. cost 는 row.Output 을 "청구 대상 출력 토큰 전부"로 읽는다.
 //
 // 표준 라이브러리 말고 아무것도 import 하지 않는다.
 package cost
@@ -117,28 +137,129 @@ type Result struct {
  *   기간이 끝나면 intro 를 지우기만 하면 된다(지우지 않아도 만료일이 지나면 정가를 쓴다).
  */
 type seedEntry struct {
+	provider   string
 	price      Price
 	introUntil string // "" 이면 도입가 없음
 	intro      Price
+
+	// cacheReadMult 는 **입력가 대비** 캐시 히트 배수다. 0 이면 전역 CacheReadMult(0.1) 를
+	// 쓴다 — Anthropic 항목들이 이 경로로 기존 동작을 그대로 유지한다.
+	//
+	// 이 필드가 없으면 안 되는 이유: 배수는 공급사가 아니라 **모델**마다 다르다. 같은 OpenAI
+	// 안에서도 gpt-5.x 는 0.1배, o3·gpt-4.1 은 0.25배, gpt-4o·o1 은 0.5배, *-pro 는 할인
+	// 자체가 없다(1.0). 하나로 뭉치면 pro 모델 캐시읽기가 실제의 1/10 로 잡힌다.
+	cacheReadMult float64
+
+	// cacheWriteMult 는 캐시 **생성** 배수다. provider 가 anthropic 이 아닐 때만 본다.
+	//   0  → 캐시 생성 무과금(OpenAI 대부분·Google 전부. 자동 캐싱이라 쓰기 비용이 없다)
+	//   >0 → 그 배수로 과금(OpenAI GPT-5.6 계열의 1.25)
+	//
+	// Anthropic 은 이 필드를 쓰지 않는다. TTL(5분 1.25배 / 1시간 2배)로 갈리는 축이라
+	// 단일 배수로 표현되지 않고, 기존 전역 상수 경로를 그대로 타야 무회귀이기 때문이다.
+	cacheWriteMult float64
+
+	// priceLong 은 컨텍스트 200K 초과 구간의 단가다(계단 요금). 제로값이면 계단 없음.
+	//
+	// ⚠ **지금은 계산에 쓰지 않는다.** 우리가 가진 행은 이미 집계된 값이라 "이 요청이 200K 를
+	// 넘었는가"를 판정할 수 없다 — 하루치 합계가 200K 를 넘는 것과 한 요청이 200K 를 넘는 것은
+	// 전혀 다른 얘기다. 집계 후 계산이라 계단 판정 불가 — 요청단위 분리 필요(후속).
+	// 그때까지는 기본 구간 단가만 적용하고, 계단이 있다는 사실만 LongContextPrice 로 노출한다.
+	priceLong Price
 }
 
-var seed = map[string]seedEntry{
-	"claude-opus-5":   {price: Price{5, 25}},
-	"claude-opus-4-8": {price: Price{5, 25}},
-	"claude-opus-4-7": {price: Price{5, 25}},
-	"claude-opus-4-6": {price: Price{5, 25}},
-	"claude-opus-4-5": {price: Price{5, 25}},
-	"claude-sonnet-5": {price: Price{3, 15}, introUntil: "2026-08-31", intro: Price{2, 10}},
+// 공급사 식별자. 캐시 생성 축의 계산 경로가 여기서 갈린다.
+const (
+	ProviderAnthropic = "anthropic"
+	ProviderOpenAI    = "openai"
+	ProviderGoogle    = "google"
+)
 
-	"claude-sonnet-4-6": {price: Price{3, 15}},
-	"claude-sonnet-4-5": {price: Price{3, 15}},
-	"claude-fable-5":    {price: Price{10, 50}},
-	"claude-mythos-5":   {price: Price{10, 50}},
-	"claude-haiku-4-5":  {price: Price{1, 5}},
+var anthropicSeed = map[string]seedEntry{
+	"claude-opus-5":   {provider: ProviderAnthropic, price: Price{5, 25}},
+	"claude-opus-4-8": {provider: ProviderAnthropic, price: Price{5, 25}},
+	"claude-opus-4-7": {provider: ProviderAnthropic, price: Price{5, 25}},
+	"claude-opus-4-6": {provider: ProviderAnthropic, price: Price{5, 25}},
+	"claude-opus-4-5": {provider: ProviderAnthropic, price: Price{5, 25}},
+	"claude-sonnet-5": {provider: ProviderAnthropic, price: Price{3, 15}, introUntil: "2026-08-31", intro: Price{2, 10}},
+
+	"claude-sonnet-4-6": {provider: ProviderAnthropic, price: Price{3, 15}},
+	"claude-sonnet-4-5": {provider: ProviderAnthropic, price: Price{3, 15}},
+	"claude-fable-5":    {provider: ProviderAnthropic, price: Price{10, 50}},
+	"claude-mythos-5":   {provider: ProviderAnthropic, price: Price{10, 50}},
+	"claude-haiku-4-5":  {provider: ProviderAnthropic, price: Price{1, 5}},
+}
+
+// seed 는 공급사별 표를 합친 것이다(openaiSeed·googleSeed 는 seed_openai.go·seed_google.go).
+var seed = mergeSeeds(anthropicSeed, openaiSeed, googleSeed)
+
+// mergeSeeds 는 키가 겹치면 **죽는다.** 조용한 덮어쓰기가 이 표에서 가장 위험한 사고이기
+// 때문이다 — 예컨대 gemini-3-flash 를 두 표에 서로 다른 단가로 적어 넣으면 어느 쪽이 이겼는지
+// 화면에 아무 흔적도 남지 않는다. 이 표는 전부 소스에 박힌 리터럴이라, 충돌하면 패키지 init
+// 에서 즉시 터져 테스트가 빨개진다(사용자 데이터로는 절대 발생할 수 없다).
+func mergeSeeds(tables ...map[string]seedEntry) map[string]seedEntry {
+	out := make(map[string]seedEntry)
+	for _, t := range tables {
+		for k, v := range t {
+			if _, dup := out[k]; dup {
+				panic("cost: 시드 단가표에 중복 모델 키가 있다: " + k)
+			}
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // SeedPricedAt 은 공급자 공식 가격표와 대조·검증한 날짜다.
-const SeedPricedAt = "2026-08-04"
+//
+// 공급사마다 검증일이 다르다 — 한 날짜로 뭉뚱그리면 화면이 "2026-08-10 기준"이라고 말하면서
+// 실제로는 08-04 에 확인한 Anthropic 값을 보여주게 된다. SeedPricedAt 은 기존 호출부(PricedAt)
+// 하위호환을 위해 Anthropic 값을 유지하고, 공급사별 값은 SeedPricedAtFor 로 읽는다.
+const (
+	SeedPricedAtAnthropic = "2026-08-04" // platform.claude.com/docs/ko/about-claude/pricing
+	SeedPricedAtOpenAI    = "2026-08-10" // developers.openai.com/api/docs/pricing
+	SeedPricedAtGoogle    = "2026-08-05" // ai.google.dev/gemini-api/docs/pricing
+
+	SeedPricedAt = SeedPricedAtAnthropic
+)
+
+// SeedPricedAtFor 는 공급사별 단가 검증일을 돌려준다. 모르는 공급사면 "" 다
+// (화면이 "기준일 미상"으로 표시할 수 있게 — 아무 날짜나 지어내지 않는다).
+func SeedPricedAtFor(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case ProviderAnthropic:
+		return SeedPricedAtAnthropic
+	case ProviderOpenAI:
+		return SeedPricedAtOpenAI
+	case ProviderGoogle:
+		return SeedPricedAtGoogle
+	default:
+		return ""
+	}
+}
+
+// ProviderOf 는 시드에 등록된 모델의 공급사를 돌려준다. 미등록이면 ("", false) —
+// 이름만 보고 추측하지 않는다(`gpt-` 로 시작한다고 OpenAI 라는 보장이 없다. 사내 게이트웨이가
+// 임의 별칭을 붙여 보내는 경우가 실제로 있다).
+func ProviderOf(model string) (string, bool) {
+	e, ok := seed[NormalizeModel(model)]
+	if !ok {
+		return "", false
+	}
+	return e.provider, true
+}
+
+// LongContextPrice 는 200K 초과 구간 단가와 "이 모델이 계단 요금인가"를 돌려준다.
+//
+// ⚠ 이 값은 **아직 비용 계산에 반영되지 않는다.** 집계된 행으로는 요청별 컨텍스트 길이를 알 수
+// 없어 계단 판정이 불가능하다(후속: 요청단위 분리). 지금은 화면이 "이 모델은 긴 컨텍스트에서
+// 단가가 오른다"고 경고할 수 있게 노출만 한다.
+func LongContextPrice(model string) (Price, bool) {
+	e, ok := seed[NormalizeModel(model)]
+	if !ok || e.priceLong == (Price{}) {
+		return Price{}, false
+	}
+	return e.priceLong, true
+}
 
 /*
  * 캐시 축의 입력가 대비 배수.
@@ -178,9 +299,17 @@ func Seed() Table {
 
 // NormalizeModel 은 표 조회 전에 모델명의 꼬리를 떼어낸다.
 //
-//	'claude-opus-5[1m]'        → 'claude-opus-5'   (컨텍스트 변형 접미사)
-//	'claude-opus-4-5-20251101' → 'claude-opus-4-5' (날짜 스냅샷)
-//	'anthropic.claude-opus-5'  → 'claude-opus-5'   (Bedrock 접두사)
+//	'claude-opus-5[1m]'                     → 'claude-opus-5'          (컨텍스트 변형 접미사)
+//	'claude-opus-4-5-20251101'              → 'claude-opus-4-5'        (Anthropic 날짜 스냅샷)
+//	'gpt-5.5-2026-04-23'                    → 'gpt-5.5'                (OpenAI 날짜 스냅샷)
+//	'gemini-2.5-flash-lite-preview-09-2025' → 'gemini-2.5-flash-lite'  (Gemini 프리뷰 스냅샷)
+//	'anthropic.claude-opus-5'               → 'claude-opus-5'          (Bedrock 접두사)
+//
+// **'-latest' 는 자르지 않는다.** 'chat-latest' · 'gpt-5.3-chat-latest' 는 스냅샷 별칭이 아니라
+// 그 자체가 정식 과금 ID다. 자르면 표에 없는 이름이 되어 비용이 통째로 빠진다.
+//
+// 조회는 **정확 일치**로만 한다. 접두사 매칭을 넣고 싶어지지만 그러면 'gemini-3-flash' 가
+// 'gemini-3-flash-preview' 에 붙어 3배 틀린 단가가 조용히 적용된다(seed_google.go 참조).
 //
 // 이 정규화가 실패해도 문제되지 않는다 — 표에 없으면 Priced=false 로 정직하게 나간다.
 func NormalizeModel(model string) string {
@@ -207,21 +336,57 @@ func stripBracketSuffix(s string) string {
 	return s[:open]
 }
 
-// /-\d{8}$/ 와 같다.
+// 모델명 꼬리에 붙는 날짜 스냅샷 표기. 공급사마다 모양이 다르다.
+//
+//	/-\d{8}$/               Anthropic  claude-opus-4-5-20251101
+//	/-\d{4}-\d{2}-\d{2}$/   OpenAI     gpt-5.5-2026-04-23
+//	/-preview-\d{2}-\d{4}$/ Gemini     gemini-2.5-flash-lite-preview-09-2025
+//
+// 'd' 는 숫자 한 자리, 나머지 문자는 그 문자 자신이다(suffixMatches 참조).
+// regexp 를 쓰지 않는 이유: 패턴이 셋뿐이고 전부 고정 길이라 손으로 읽는 편이 빠르다.
+const (
+	snapAnthropic = "-dddddddd"
+	snapOpenAI    = "-dddd-dd-dd"
+	snapGemini    = "-preview-dd-dddd"
+)
+
+// stripDateSnapshot 은 날짜 스냅샷 꼬리를 **한 번만** 떼어낸다.
+//
+// 긴 패턴부터 본다. 세 패턴은 실제로 서로 겹치지 않지만(프리뷰 꼬리는 '-' 자리에 글자가 와서
+// 다른 둘과 매치되지 않는다), 나중에 패턴이 늘었을 때 짧은 쪽이 먼저 먹고 이름을 반쪽만
+// 남기는 사고를 구조적으로 막는다.
 func stripDateSnapshot(s string) string {
-	if len(s) < 9 {
+	// '-latest' 는 스냅샷이 아니라 정식 과금 ID의 일부다. 지금의 세 패턴 중 어느 것도 여기에
+	// 매치되지 않지만, 패턴이 늘어나면 그 보장이 사라지므로 입구에서 못 박아 둔다.
+	if strings.HasSuffix(s, "-latest") {
 		return s
 	}
-	tail := s[len(s)-9:]
-	if tail[0] != '-' {
-		return s
-	}
-	for i := 1; i < len(tail); i++ {
-		if tail[i] < '0' || tail[i] > '9' {
-			return s
+	for _, pat := range []string{snapGemini, snapOpenAI, snapAnthropic} {
+		if suffixMatches(s, pat) {
+			return s[:len(s)-len(pat)]
 		}
 	}
-	return s[:len(s)-9]
+	return s
+}
+
+// suffixMatches 는 s 의 꼬리가 pat 모양인지 본다. pat 의 'd' 는 숫자 한 자리를 뜻한다.
+func suffixMatches(s, pat string) bool {
+	if len(s) < len(pat) {
+		return false
+	}
+	tail := s[len(s)-len(pat):]
+	for i := 0; i < len(pat); i++ {
+		if pat[i] == 'd' {
+			if tail[i] < '0' || tail[i] > '9' {
+				return false
+			}
+			continue
+		}
+		if tail[i] != pat[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Pricing 은 시드에 config 오버라이드를 얹은 단가표를 만든다.
@@ -285,12 +450,50 @@ func Multipliers() Mult {
 	}
 }
 
+// modelMult 는 전역 배수(base) 위에 **모델별 배수**를 얹은 복사본을 돌려준다.
+//
+// 규칙:
+//   - cacheReadMult 가 0 이면 base.CacheRead 를 그대로 쓴다. Anthropic 시드가 전부 0 이므로
+//     기존 동작(전역 0.1 + config 오버라이드)이 비트 단위로 보존된다.
+//   - 캐시 **생성**은 공급사로 갈린다.
+//     Anthropic(및 공급사 미상): TTL 로 갈리는 축이라 base 의 5분/1시간 배수를 그대로 쓴다.
+//     OpenAI·Google: cacheWriteMult 하나로 갈음한다. 0 이면 캐시 생성 무과금이다.
+//
+// 모델별 값이 config 의 전역 오버라이드보다 **우선**한다. 전역 오버라이드는 "Anthropic 기준
+// 배수를 조정한다"는 뜻으로 들어온 값이라, 그걸 o3(0.25배)나 *-pro(1.0배)에 덮어씌우면
+// 이번 개편이 고치려던 바로 그 오류(공급사 기준이 뒤섞여 조용히 틀리는 것)로 되돌아간다.
+// 모델별로 배수를 조정해야 할 일이 생기면 그때 config 스키마에 모델별 칸을 판다.
+func modelMult(model string, base Mult) Mult {
+	e, ok := seed[model]
+	if !ok {
+		// 시드에 없는 모델 — 대개는 priced=false 로 나가지만, config 의 `usage.pricing` 이
+		// 단가를 직접 꽂아 넣은 사내 게이트웨이 모델일 수도 있다. 그 경우 배수를 알 길이
+		// 없으므로 전역 기준선을 쓴다(현행 동작과 같다).
+		return base
+	}
+	m := base
+	if e.cacheReadMult > 0 {
+		m.CacheRead = clampRange(e.cacheReadMult)
+	}
+	// 공급사는 **허용 목록**으로 판정한다. 값이 비었거나 모르는 공급사면 캐시 생성 배수를
+	// 건드리지 않는다 — 여기서 잘못 0 을 넣으면 비용이 조용히 사라지는 쪽으로 틀린다.
+	switch e.provider {
+	case ProviderOpenAI, ProviderGoogle:
+		w := clampRange(e.cacheWriteMult)
+		m.CacheCreate, m.CacheCreate1h = w, w
+	}
+	return m
+}
+
 // CostOf 는 한 행의 비용을 낸다.
 //
 // table 이 nil 이면 그 자리에서 Pricing(오늘)을 읽는다. mult 가 제로값이면 Multipliers() 를
 // 읽는다 — 세 배수가 **동시에** 0 인 설정은 "캐시가 전부 공짜"라는 뜻이라 실재하는 의도가
 // 아니고, 이 모듈의 규율(0 으로 클램프해 비용을 사라지게 하지 않는다)과도 어긋나기 때문에
 // "안 넘겼다"로 읽는 편이 안전하다.
+//
+// mult 는 **전역 기준선**이다. 시드에 모델별 배수가 적혀 있으면 그 모델에 한해 기준선을
+// 덮어쓴다(modelMult 참조). 넘긴 값을 변형하지는 않는다 — 복사본에만 얹는다.
 func CostOf(row Usage, table Table, mult Mult) Result {
 	if table == nil {
 		table = Pricing(time.Time{})
@@ -301,6 +504,7 @@ func CostOf(row Usage, table Table, mult Mult) Result {
 
 	model := NormalizeModel(row.Model)
 	p, priced := table[model]
+	mult = modelMult(model, mult)
 
 	// TTL 분해값이 있으면 그것이 진실이다. 없을 때만 총량 + 5분 가정으로 내려간다.
 	cc5 := tok(row.CacheCreate5m)
@@ -452,6 +656,12 @@ func clampMult(v any, dflt float64) float64 {
 	if !ok {
 		n = dflt
 	}
+	return clampRange(n)
+}
+
+// clampRange 는 배수를 [multMin, multMax] 로 자른다. 시드에 박힌 모델별 배수도 이 문을 지난다
+// — 지금은 전부 범위 안이지만, 오타 하나가 폭발 반경을 키우지 않게 같은 문을 쓴다.
+func clampRange(n float64) float64 {
 	return math.Max(multMin, math.Min(multMax, n))
 }
 

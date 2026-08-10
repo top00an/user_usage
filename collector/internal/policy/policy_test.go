@@ -11,8 +11,8 @@ func TestBashKey(t *testing.T) {
 		{"git commit -m 'msg with secret'", "git"},
 		{"/usr/local/bin/pytest -q tests/", "pytest"},
 		{"sudo systemctl restart nginx", "systemctl"}, // 감싸는 낱말(sudo)은 건너뛴다
-		{"cd /repo && npm run build", "npm"},           // cd + 구분자 뒤를 본다
-		{"FOO=bar deploy --prod", "deploy"},            // 환경변수 대입은 건너뛴다
+		{"cd /repo && npm run build", "npm"},          // cd + 구분자 뒤를 본다
+		{"FOO=bar deploy --prod", "deploy"},           // 환경변수 대입은 건너뛴다
 		{"", ""},
 		{"./a b c", "a"},
 	}
@@ -54,11 +54,11 @@ func TestSafeKeyword(t *testing.T) {
 	}
 
 	keep := map[string]string{
-		"Refactor":   "refactor", // 소문자로 접힌다
-		"database":   "database",
-		"node.js":    "node.js",
-		"c++":        "c++",
-		"한글키워드": "한글키워드",
+		"Refactor": "refactor", // 소문자로 접힌다
+		"database": "database",
+		"node.js":  "node.js",
+		"c++":      "c++",
+		"한글키워드":    "한글키워드",
 	}
 	for in, want := range keep {
 		if k, ok := SafeKeyword(in); !ok || k != want {

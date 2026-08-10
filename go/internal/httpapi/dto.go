@@ -407,6 +407,44 @@ func sessionUsage(s store.Session) cost.Usage {
 	}
 }
 
+/*
+ * platformDTO — 플랫폼별 요약 한 행(신규 엔드포인트 전용).
+ *
+ * ⚠ 기존 응답 shape 에는 platform 을 **추가하지 않는다.** 이 축은 여기서만 나간다 —
+ *   기존 화면·계약(골든)이 그대로 살아 있어야 멀티플랫폼이 무회귀로 얹힌다.
+ *
+ * firstSeen/lastSeen 은 빈 문자열일 수 있다(시각을 안 보낸 세션뿐인 플랫폼). 그건 "모른다"다.
+ */
+type platformDTO struct {
+	Platform    string  `json:"platform"`
+	Sessions    int     `json:"sessions"`
+	Input       int64   `json:"input"`
+	Output      int64   `json:"output"`
+	CacheRead   int64   `json:"cacheRead"`
+	CacheCreate int64   `json:"cacheCreate"`
+	CostUsd     float64 `json:"costUsd"`
+	FirstSeen   string  `json:"firstSeen"`
+	LastSeen    string  `json:"lastSeen"`
+}
+
+type platformsResponse struct {
+	Platforms []platformDTO `json:"platforms"`
+}
+
+// platformModelUsage — 플랫폼 안의 모델별 합계를 cost 입력으로 옮긴다.
+//
+// ⚠ 세션 행과 같은 한계를 갖는다: TTL 분해(cc5m/cc1h)가 없어 cost 가 5분으로 가정한다.
+// 여기서 0 이 아닌 값을 지어내면 그 가정이 사실로 둔갑한다.
+func platformModelUsage(m store.PlatformModelRow) cost.Usage {
+	return cost.Usage{
+		Model:       m.Model,
+		Input:       float64(m.Input),
+		Output:      float64(m.Output),
+		CacheRead:   float64(m.CacheRead),
+		CacheCreate: float64(m.CacheCreate),
+	}
+}
+
 func bucketUsage(b store.Bucket) cost.Usage {
 	return cost.Usage{
 		Model:         b.Model,
