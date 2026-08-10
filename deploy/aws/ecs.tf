@@ -70,6 +70,7 @@ data "aws_iam_policy_document" "exec_secrets" {
       aws_secretsmanager_secret.database_url.arn,
       aws_secretsmanager_secret.admin_token.arn,
       aws_secretsmanager_secret.intake_token.arn,
+      aws_secretsmanager_secret.bootstrap_admin_password.arn,
     ]
   }
 }
@@ -126,12 +127,19 @@ resource "aws_ecs_task_definition" "app" {
       { name = "USAGE_PORT", value = tostring(var.container_port) },
       { name = "USAGE_DB_MODE", value = "remote" },
       { name = "USAGE_MULTITENANT", value = "1" },
+      # 세션 로그인 / 부트스트랩 관리자 — 비밀번호만 secrets 로, 나머지는 평문 env.
+      { name = "USAGE_BOOTSTRAP_ADMIN_USER", value = var.bootstrap_admin_user },
+      { name = "USAGE_BOOTSTRAP_TENANT", value = var.bootstrap_tenant },
+      { name = "USAGE_SESSION_TTL", value = var.session_ttl },
+      # 신뢰 프록시 홉 수 — ALB 가 1홉이므로 rate-limiter 가 X-Forwarded-For 에서 실제 클라이언트 IP 를 집는다.
+      { name = "USAGE_TRUSTED_PROXY_COUNT", value = tostring(var.trusted_proxy_count) },
     ]
 
     secrets = [
       { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.database_url.arn },
       { name = "USAGE_ADMIN_TOKEN", valueFrom = aws_secretsmanager_secret.admin_token.arn },
       { name = "USAGE_INTAKE_TOKEN", valueFrom = aws_secretsmanager_secret.intake_token.arn },
+      { name = "USAGE_BOOTSTRAP_ADMIN_PASSWORD", valueFrom = aws_secretsmanager_secret.bootstrap_admin_password.arn },
     ]
 
     logConfiguration = {

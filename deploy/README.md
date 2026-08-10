@@ -11,8 +11,8 @@ Terraform 구성이다. 코드 위치: [`deploy/aws/`](./aws/).
                      │  /healthz 헬스체크 (무인증·무DB)
                      ▼
               ECS Fargate 태스크  (프라이빗 서브넷, 포트 4191)
-                 │ env: USAGE_DB_MODE=remote, USAGE_MULTITENANT=1
-                 │ secrets: DATABASE_URL / USAGE_ADMIN_TOKEN / USAGE_INTAKE_TOKEN
+                 │ env: USAGE_DB_MODE=remote, USAGE_MULTITENANT=1, 세션 로그인 설정
+                 │ secrets: DATABASE_URL / ADMIN_TOKEN / INTAKE_TOKEN / BOOTSTRAP_ADMIN_PASSWORD
                  ▼
               RDS PostgreSQL (프라이빗, 암호화, 자동 백업)
 ```
@@ -61,11 +61,18 @@ Terraform 이 만들지 않는, 계정에 한 번만 해두는 것들:
 | `waf_rate_limit` |  | `2000` | 5분/IP 요청 상한 |
 | `admin_token_override` |  | `""`(자동생성) | 열람 토큰 직접 지정(16자+) |
 | `intake_token_override` |  | `""`(자동생성) | 인제스트 토큰 직접 지정(16자+) |
+| `bootstrap_admin_user` |  | `admin` | 최초 관리자 로그인 아이디 |
+| `bootstrap_tenant` |  | `default` | 부트스트랩 관리자 tenant |
+| `session_ttl` |  | `12h` | 세션 유효기간(Go duration) |
+| `trusted_proxy_count` |  | `1` | 로그인 rate-limiter 가 신뢰할 프론트 프록시 홉 수(ALB=1) |
+| `bootstrap_admin_password_override` |  | `""`(자동생성) | 최초 관리자 비번 직접 지정 |
 
 ### 비밀 취급
 
 **DB 접속문자열·admin 토큰·intake 토큰 3종은 tfvars 에 넣지 않는다.**
-기본적으로 Terraform 이 `random_password` 로 생성해 Secrets Manager 에 넣는다
+**최초 관리자 로그인 비밀번호**(`USAGE_BOOTSTRAP_ADMIN_PASSWORD`)도 같은 패턴으로 자동 생성되어
+`<name>/bootstrap-admin-password` 시크릿에 들어가고 ECS `secrets` 로 주입된다(§2-6 참조). 기본적으로
+나머지 토큰과 함께 Terraform 이 `random_password` 로 생성해 Secrets Manager 에 넣는다
 ([`aws/secrets.tf`](./aws/secrets.tf)). RDS 마스터 비밀번호는 RDS 가 별도 관리 시크릿으로 자동 생성한다
 (`manage_master_user_password`). 굳이 토큰을 직접 지정하려면 `terraform.tfvars` 가 아니라
 환경변수로만 넘긴다:
@@ -74,6 +81,19 @@ Terraform 이 만들지 않는, 계정에 한 번만 해두는 것들:
 export TF_VAR_admin_token_override='...'   # 16자 이상
 export TF_VAR_intake_token_override='...'  # admin 과 다른 값
 ```
+
+### 로그인 rate-limiter 와 신뢰 프록시 (`trusted_proxy_count`)
+
+로그인 rate-limiter 는 클라이언트 IP 별로 버킷을 나눈다. ALB 뒤에서는 소켓 상대 IP 가 항상 ALB 라
+그대로 두면 **전체 로그인 시도가 단일 버킷으로 붕괴**한다(한 명이 나머지를 잠글 수 있다). 앱은
+`USAGE_TRUSTED_PROXY_COUNT` 만큼의 프록시 홉을 신뢰해 `X-Forwarded-For` 우측에서 그 수만큼 벗겨낸
+값을 실제 클라이언트 IP 로 쓴다. **ALB 는 정확히 1홉이므로 기본값 `1`** 이다. 앞단에 CloudFront 등을
+더 두면 홉 수만큼 올린다.
+
+이 신뢰가 안전한 이유는 **앱 태스크가 ALB 를 통해서만 접근 가능**하기 때문이다 — tasks SG 인바운드는
+ALB SG 한 곳만 허용하고([`aws/ecs.tf`](./aws/ecs.tf) `tasks_from_alb`), 태스크는 프라이빗 서브넷·퍼블릭
+IP 없음이라 클라이언트가 ALB 를 우회해 `X-Forwarded-For` 를 위조 주입할 경로가 없다. ALB 는 인입
+`X-Forwarded-For` 뒤에 자신이 본 소켓 IP 를 덧붙이므로 우측 1개가 신뢰 가능한 실제 원본이다.
 
 ---
 
@@ -183,6 +203,13 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE O
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO usage_app;
 ```
 
+> **로그인 표 권한**: 세션 로그인은 `auth_users`(부트스트랩 관리자 생성 시 INSERT)와
+> `auth_sessions`(로그인마다 세션 INSERT)에 쓴다. 위 `GRANT ... ON ALL TABLES IN SCHEMA public`
+> 는 마이그레이션이 만든 이 두 표까지 포함하므로 별도 GRANT 는 필요 없다. 단 **마이그레이션을 먼저
+> 돌린 뒤 GRANT** 순서를 지켜야 하고(이 표들이 존재해야 ALL TABLES 가 잡힌다), 나중에 auth 관련
+> 표가 추가되면 `ALTER DEFAULT PRIVILEGES` 로 커버되거나 재-GRANT 가 필요하다. 이 표들이 RLS 대상이면
+> `app.tenant_id` GUC 를 앱이 세팅하므로 `usage_app` 롤은 그대로 동작한다(BYPASSRLS 불필요).
+
 > **RLS 주의**: `usage_*`·`member_tokens` 표는 `FORCE ROW LEVEL SECURITY` + `tenant_isolation` 정책으로
 > `app.tenant_id` GUC 에 묶인다(예: `migrations/pg/0032_member_tokens.sql`). `orgs`·`ingest_keys` 는
 > 인제스트 키→tenant 라우팅 표라 RLS 를 걸지 않는다(순환 방지). **절대 슈퍼유저/BYPASSRLS 롤로 앱을
@@ -209,6 +236,35 @@ aws secretsmanager get-secret-value --secret-id "$(terraform output -raw secret_
 ```bash
 aws secretsmanager get-secret-value --secret-id "$(terraform output -raw secret_intake_token_arn)" --query SecretString --output text
 ```
+
+### 2-6. 최초 관리자 로그인 (turnkey)
+
+앱은 첫 기동 시 **해당 tenant 에 사용자가 하나도 없으면** 관리자 1명을 멱등 생성한다
+(`USAGE_BOOTSTRAP_ADMIN_USER`/`USAGE_BOOTSTRAP_ADMIN_PASSWORD`/`USAGE_BOOTSTRAP_TENANT`).
+비밀번호는 로그에 찍히지 않으므로 **Secrets Manager 에서 꺼낸다**:
+
+```bash
+cd deploy/aws
+echo "아이디:  $(terraform output -raw bootstrap_admin_user)"          # 기본 admin
+echo "tenant: default"                                                  # bootstrap_tenant
+aws secretsmanager get-secret-value \
+  --secret-id "$(terraform output -raw secret_bootstrap_admin_password_arn)" \
+  --query SecretString --output text                                    # 최초 비밀번호
+```
+
+그 자격으로 **`https://<domain>`** (= `terraform output service_url`)에 로그인한다. 세션 유효기간은
+`session_ttl`(기본 12h). **최초 로그인 후 비밀번호 변경을 권장**한다. 부트스트랩은 사용자가 없을 때만
+동작하므로, 한 번 생성된 뒤에는 이 시크릿을 바꿔도 기존 계정 비번은 바뀌지 않는다.
+
+추가 사용자는 컨테이너 안에서 CLI 로 만든다(예: ECS Exec 로 실행 중인 태스크에 들어가):
+
+```bash
+usage-server user add   # 앱 바이너리의 사용자 추가 서브커맨드
+```
+
+> ECS Exec 를 쓰려면 서비스에 `enable_execute_command=true` 가 필요하다(현재 기본 미설정 —
+> 필요 시 [`aws/ecs.tf`](./aws/ecs.tf) 서비스 리소스에 추가하고 태스크 역할에 SSM 권한을 부여).
+> 그 전까지는 부트스트랩 관리자로 로그인해 앱 UI 에서 사용자를 관리한다.
 
 ---
 
@@ -275,7 +331,7 @@ terraform destroy
 | `ecr.tf` | ECR 리포지토리 + lifecycle |
 | `ecs.tf` | 클러스터, 태스크 SG, 로그그룹, IAM(exec/task), 태스크 정의, 서비스 |
 | `rds.tf` | RDS Postgres, RDS SG, 서브넷 그룹 |
-| `secrets.tf` | Secrets Manager 3종 + 값 생성 |
+| `secrets.tf` | Secrets Manager 4종(DB URL·admin·intake·부트스트랩 관리자 비번) + 값 생성 |
 | `waf.tf` | (선택) WAFv2 rate-based + ALB 연결 |
 | `outputs.tf` | apply 후 참조값 |
 | `terraform.tfvars.example` | 입력 예시(실값 금지) |

@@ -40,3 +40,11 @@ domain_name = "usage.example.com"
 # WAF
 # enable_waf     = true
 # waf_rate_limit = 2000
+
+# 세션 로그인 / 부트스트랩 관리자
+# bootstrap_admin_user = "admin"     # 최초 로그인 아이디
+# bootstrap_tenant     = "default"
+# session_ttl          = "12h"       # Go duration
+# trusted_proxy_count  = 1           # ALB 단독 = 1홉. CloudFront 등 앞단 추가 시 홉 수만큼 증가.
+# 비밀번호는 자동 생성되어 Secrets Manager <name>/bootstrap-admin-password 에 들어간다.
+# 직접 지정하려면 tfvars 가 아니라: export TF_VAR_bootstrap_admin_password_override='...'

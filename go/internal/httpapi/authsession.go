@@ -92,7 +92,7 @@ func (s *server) serveAuth(w http.ResponseWriter, r *http.Request, p string) {
 func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// 브루트포스 방어 — IP 당 rate limit. 리미터가 없으면(구성 실패) 통과시키지 않고 열어 둔다
 	// (allow 가 nil 리시버에서 true 를 돌려주므로 안전하다).
-	if !s.loginLimiter.allow(clientIP(r)) {
+	if !s.loginLimiter.allow(clientIP(r, s.cfg.TrustedProxyCount)) {
 		sendError(w, http.StatusTooManyRequests, "로그인 시도가 너무 잦습니다 — 잠시 후 다시 시도하세요")
 		return
 	}
@@ -230,9 +230,48 @@ func isHTTPS(r *http.Request) bool {
 	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
-// clientIP 는 rate limit 키로 쓸 원격 IP 다. RemoteAddr 만 쓴다(스푸핑 가능한 XFF 헤더는
-// 신뢰하지 않는다 — 이 대시보드는 루프백/터널 뒤에 붙는다).
-func clientIP(r *http.Request) string {
+/*
+ * clientIP 는 rate limit 키로 쓸 실클라이언트 IP 다.
+ *
+ * trustedProxyCount==0(기본): RemoteAddr 만 쓴다. XFF 는 완전히 무시한다 — 스푸핑 가능한
+ * 헤더를 신뢰하지 않는 현행 동작 그대로다(루프백/터널 뒤 직결 배포).
+ *
+ * trustedProxyCount==N>0: 서버 앞에 신뢰 프록시가 N홉 있다는 선언이다(예: ALB 단독=1).
+ * X-Forwarded-For 를 콤마 분리·trim 한 리스트에서 실클라이언트 = parts[len-N] 을 뽑는다.
+ * 이게 없으면 ALB 뒤에서 모든 요청이 ALB IP 라는 **단일 버킷**으로 붕괴해 로그인 rate-limit 이
+ * 무력화된다(무인증 로그인 DoS). 단 XFF 는 여전히 위조 가능하므로 아래 가드로 fail-safe 한다:
+ *
+ *   · 헤더 없음/빈값                → RemoteAddr 폴백
+ *   · len(parts) < N(위조·오설정)   → RemoteAddr 폴백(공유버킷보다 안전)
+ *   · 뽑은 값이 유효 IP 가 아님      → RemoteAddr 폴백
+ *
+ * 폴백은 절대 XFF 를 신뢰하지 않는다 — 최악의 경우에도 현행(count=0) 수준의 안전성을 유지한다.
+ */
+func clientIP(r *http.Request, trustedProxyCount int) string {
+	remote := remoteHost(r)
+	if trustedProxyCount <= 0 {
+		return remote
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if strings.TrimSpace(xff) == "" {
+		return remote
+	}
+	parts := strings.Split(xff, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	if len(parts) < trustedProxyCount {
+		return remote
+	}
+	candidate := parts[len(parts)-trustedProxyCount]
+	if net.ParseIP(candidate) == nil {
+		return remote
+	}
+	return candidate
+}
+
+// remoteHost 는 RemoteAddr 의 host(포트 제거)다. 파싱 실패면 원문 그대로.
+func remoteHost(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

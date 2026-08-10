@@ -188,6 +188,40 @@ variable "intake_token_override" {
   }
 }
 
+# ── 세션 로그인 / 부트스트랩 관리자 ───────────────────────────────────────
+# 첫 기동 시 해당 tenant 에 사용자가 없으면 관리자 1명을 멱등 생성한다(로그인용).
+# 비밀번호는 평문 env 가 아니라 Secrets Manager 로만 주입한다(secrets.tf).
+variable "bootstrap_admin_user" {
+  description = "최초 관리자 로그인 아이디(USAGE_BOOTSTRAP_ADMIN_USER). 평문 env 로 주입."
+  type        = string
+  default     = "admin"
+}
+
+variable "bootstrap_tenant" {
+  description = "부트스트랩 관리자가 속할 tenant(USAGE_BOOTSTRAP_TENANT)."
+  type        = string
+  default     = "default"
+}
+
+variable "session_ttl" {
+  description = "세션 유효기간(USAGE_SESSION_TTL, Go duration 형식 예 12h)."
+  type        = string
+  default     = "12h"
+}
+
+variable "trusted_proxy_count" {
+  description = "클라이언트 IP 확정 시 신뢰할 프론트 프록시 홉 수(USAGE_TRUSTED_PROXY_COUNT). ALB 단독 = 1. CloudFront 등 앞단 추가 시 홉 수만큼 증가."
+  type        = number
+  default     = 1
+}
+
+variable "bootstrap_admin_password_override" {
+  description = "부트스트랩 관리자 비밀번호를 직접 지정. 비우면 자동 생성. tfvars 금지 — TF_VAR 환경변수로만."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 # ── WAF ───────────────────────────────────────────────────────────────────
 variable "enable_waf" {
   description = "ALB 앞에 WAFv2(rate-based) 를 붙일지."

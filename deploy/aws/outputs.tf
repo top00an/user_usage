@@ -70,6 +70,16 @@ output "secret_intake_token_arn" {
   value       = aws_secretsmanager_secret.intake_token.arn
 }
 
+output "bootstrap_admin_user" {
+  description = "최초 관리자 로그인 아이디."
+  value       = var.bootstrap_admin_user
+}
+
+output "secret_bootstrap_admin_password_arn" {
+  description = "최초 관리자 로그인 비밀번호 시크릿 ARN(값 조회: get-secret-value). 로그인 후 비번 변경 권장."
+  value       = aws_secretsmanager_secret.bootstrap_admin_password.arn
+}
+
 # ACM DNS 검증 레코드 — route53_zone_id 를 안 줬을 때 수동으로 심어야 하는 값.
 output "acm_certificate_arn" {
   description = "ACM 인증서 ARN."

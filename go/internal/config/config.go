@@ -139,6 +139,13 @@ type Config struct {
 	BootstrapAdminUser     string
 	BootstrapAdminPassword string
 	BootstrapTenant        string
+
+	// TrustedProxyCount 는 서버 앞에 놓인 **신뢰 프록시 홉 수**다(USAGE_TRUSTED_PROXY_COUNT, 기본 0).
+	// 0 이면 X-Forwarded-For 를 완전히 무시하고 RemoteAddr 만 rate-limit 키로 쓴다(현행 동작).
+	// N>0 이면 XFF 우측 N홉을 신뢰 프록시로 보고 그 왼쪽을 실클라이언트로 뽑는다(예: ALB 단독=1).
+	// 이게 없으면 ALB 뒤에서 모든 로그인이 ALB IP 라는 단일 버킷으로 붕괴해 rate-limit 이 무력화된다.
+	// 음수·비정수는 조용히 0 으로 접는다 — 안전한 기본값이지 부팅 거부 게이트가 아니다.
+	TrustedProxyCount int
 }
 
 // Env 는 프로세스 환경을 Read 가 받는 맵으로 만든다. **부작용을 아는 유일한 함수다.**
@@ -248,6 +255,7 @@ func Read(env map[string]string) (Config, []error) {
 		// 비밀번호는 **트림하지 않는다** — 앞뒤 공백도 유효한 비밀번호의 일부일 수 있다.
 		BootstrapAdminPassword: env["USAGE_BOOTSTRAP_ADMIN_PASSWORD"],
 		BootstrapTenant:        bootstrapTenant(get("USAGE_BOOTSTRAP_TENANT")),
+		TrustedProxyCount:      trustedProxyCount(get("USAGE_TRUSTED_PROXY_COUNT")),
 	}
 	return cfg, errs
 }
@@ -270,6 +278,24 @@ func bootstrapTenant(raw string) string {
 		return DefaultTenant
 	}
 	return raw
+}
+
+/*
+ * trustedProxyCount 는 신뢰 프록시 홉 수를 읽는다.
+ *
+ * 비었거나 비정수거나 음수면 **조용히 0**(현행 동작 = XFF 무시). 여기서 거부 에러를 내지
+ * 않는 이유: 잘못 적어도 안전한 쪽(RemoteAddr 만 신뢰)으로 접히기 때문이다. 홉 수를 늘려
+ * XFF 를 신뢰하는 것이 위험한 방향이지, 0 으로 접는 것은 위험하지 않다.
+ */
+func trustedProxyCount(raw string) int {
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // floatDefault 는 float env 를 읽는다. 비었거나 파싱 실패면 dflt.
@@ -376,6 +402,8 @@ func Help() string {
 		"  USAGE_CONFIG       단가표 config.json 경로(기본 <cwd>/config.json)",
 		"  USAGE_KEYWORD_RETENTION_DAYS  keyword 축 보존일(기본 90). off 면 정리기를 띄우지 않는다",
 		"  USAGE_SESSION_TTL  사람 로그인 세션 쿠키 수명(기본 12h). Go duration 문법(예: 12h·30m)",
+		"  USAGE_TRUSTED_PROXY_COUNT  서버 앞 신뢰 프록시 홉 수(기본 0=XFF 무시). ALB 단독이면 1. " +
+			"로그인 rate-limit 이 프록시 IP 단일 버킷으로 붕괴하는 것을 막는다",
 		"  USAGE_BOOTSTRAP_ADMIN_USER      최초 관리자 아이디(그 tenant 에 사용자가 없을 때만 생성)",
 		"  USAGE_BOOTSTRAP_ADMIN_PASSWORD  최초 관리자 비밀번호(로그에 절대 찍지 않는다)",
 		"  USAGE_BOOTSTRAP_TENANT          부트스트랩 대상 테넌트(기본 default)",

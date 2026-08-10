@@ -1,4 +1,4 @@
-# secrets.tf — Secrets Manager 3종(DB 접속문자열·admin 토큰·intake 토큰).
+# secrets.tf — Secrets Manager 4종(DB 접속문자열·admin 토큰·intake 토큰·부트스트랩 관리자 비번).
 #
 # 평문 env 금지: 세 값 모두 여기서 관리하고 ECS 태스크에 `secrets` 로 주입한다(ecs.tf).
 # 기본은 terraform 이 random 으로 생성한다 — tfvars 에 실제 비밀을 커밋할 일이 없다.
@@ -25,9 +25,18 @@ resource "random_password" "intake_token" {
   special = false
 }
 
+# 부트스트랩 관리자 로그인 비밀번호. 평문 env 금지 — Secrets Manager 로만 주입한다.
+resource "random_password" "bootstrap_admin" {
+  length  = 24
+  special = true
+  # 셸/URL 오해석 소지가 있는 문자를 제외(비번은 로그인 폼 입력값이라 특수문자 자체는 허용).
+  override_special = "!@#%^*-_=+"
+}
+
 locals {
-  admin_token  = var.admin_token_override != "" ? var.admin_token_override : random_password.admin_token.result
-  intake_token = var.intake_token_override != "" ? var.intake_token_override : random_password.intake_token.result
+  admin_token            = var.admin_token_override != "" ? var.admin_token_override : random_password.admin_token.result
+  intake_token           = var.intake_token_override != "" ? var.intake_token_override : random_password.intake_token.result
+  bootstrap_admin_passwd = var.bootstrap_admin_password_override != "" ? var.bootstrap_admin_password_override : random_password.bootstrap_admin.result
 
   # 앱 전용 롤로 붙는 접속 문자열. sslmode=require 로 RDS TLS 를 강제한다.
   database_url = format(
@@ -71,4 +80,15 @@ resource "aws_secretsmanager_secret" "intake_token" {
 resource "aws_secretsmanager_secret_version" "intake_token" {
   secret_id     = aws_secretsmanager_secret.intake_token.id
   secret_string = local.intake_token
+}
+
+# ── USAGE_BOOTSTRAP_ADMIN_PASSWORD ──────────────────────────────────────────
+resource "aws_secretsmanager_secret" "bootstrap_admin_password" {
+  name        = "${local.name}/bootstrap-admin-password"
+  description = "최초 관리자 로그인 비밀번호(첫 기동 시 멱등 생성)."
+}
+
+resource "aws_secretsmanager_secret_version" "bootstrap_admin_password" {
+  secret_id     = aws_secretsmanager_secret.bootstrap_admin_password.id
+  secret_string = local.bootstrap_admin_passwd
 }
