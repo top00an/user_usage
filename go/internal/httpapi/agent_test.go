@@ -77,3 +77,40 @@ func TestServeCollector(t *testing.T) {
 		t.Fatalf("지원 플랫폼(?key=): code=%d (기대 200 또는 503)", rec.Code)
 	}
 }
+
+/*
+ * 수집기 다운로드는 **보고 자격이면 충분하다** — 바이너리에는 테넌트 데이터가 없고, 이 엔드포인트의
+ * 목적은 "오픈 바이너리 CDN 이 되지 않는 것" 하나다. 이미 보고할 수 있는 자격(cfg 인테이크 토큰)과
+ * 관리 자격(admin 토큰)은 인제스트 키보다 강하므로 여기서 거절할 이유가 없다. 거절하면 종전
+ * 단일 토큰 배포는 원커맨드 설치를 ②에서 401 로 못 넘긴다.
+ *
+ * 단 cfg 토큰은 **헤더로만** 받는다 — ?key= 는 액세스 로그·리퍼러에 남는 자리라 관리 토큰을
+ * 태울 곳이 아니다.
+ */
+func TestServeCollectorAcceptsAdminAndIntakeTokens(t *testing.T) {
+	ctx := tenant.With(context.Background(), "default")
+	d := openDB(t)
+	if err := org.Init(ctx, d); err != nil {
+		t.Fatalf("org.Init: %v", err)
+	}
+	h := New(testCfg(false))
+	const target = "/api/agent/collector?os=linux&arch=amd64"
+
+	// admin 토큰(헤더) → 인증 통과(200 또는 바이너리 미빌드 503).
+	if rec := do(t, h, http.MethodGet, target, "", withAdmin); rec.Code != http.StatusOK && rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("admin 토큰 다운로드: code=%d (기대 200 또는 503)", rec.Code)
+	}
+	// 인테이크 토큰(헤더) → 인증 통과.
+	if rec := do(t, h, http.MethodGet, target, "", withIntake); rec.Code != http.StatusOK && rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("인테이크 토큰 다운로드: code=%d (기대 200 또는 503)", rec.Code)
+	}
+	// cfg 토큰을 ?key= 로 → 401(쿼리에는 인제스트 키만).
+	if rec := do(t, h, http.MethodGet, target+"&key="+testAdmin, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("?key=admin토큰: code=%d (기대 401)", rec.Code)
+	}
+	// 틀린 Bearer 는 여전히 401(org 키로도 해석 안 된다).
+	badTok := func(r *http.Request) { r.Header.Set("Authorization", "Bearer nope-not-a-token") }
+	if rec := do(t, h, http.MethodGet, target, "", badTok); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("틀린 Bearer: code=%d (기대 401)", rec.Code)
+	}
+}

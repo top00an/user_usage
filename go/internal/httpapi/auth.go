@@ -29,6 +29,10 @@ type Auth struct {
 	// Tenant 는 멀티테넌트 모드에서 인제스트 키가 해석한 tenant 다. 빈 문자열이면 게이트가
 	// cfg.Tenant(단일 테넌트 기본)를 쓴다.
 	Tenant string
+	// IngestKey 는 이 자격이 org 인제스트 키(uu_ing_…)로 해석됐음을 뜻한다. cfg 인테이크 토큰과
+	// 스코프는 같지만 **출처가 다르다** — 키는 팀원 PC 마다 복제되는 자격이라 게이트가 여기에만
+	// rate limit 을 건다(cfg 토큰 경로는 종전 그대로 둔다).
+	IngestKey bool
 	// Username 은 member 스코프에서 이 토큰이 대표하는 사용자다. 게이트가 조회를 이 이름으로
 	// 강제한다(자기 것만 본다). 다른 스코프에서는 빈 문자열.
 	Username string
