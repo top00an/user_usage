@@ -23,6 +23,7 @@ import type {
   ErrorBody,
   Dev,
   Leaderboard,
+  PlatformsResponse,
   Quality,
   Seats,
   SeriesResponse,
@@ -187,14 +188,48 @@ export const logout = (o?: RequestOptions) =>
 export const getMe = (o?: RequestOptions) =>
   request<AuthUser>('/api/auth/me', { ...o, skipUnauthorizedHook: true });
 
-/* ── 엔드포인트 10개 ──────────────────────────────────────────────────── */
+/* ── 플랫폼 필터 ──────────────────────────────────────────────────────────
+ *
+ * 동결 계약: 조회 엔드포인트가 선택적 `platform=` 을 받는다(claude|codex|gemini|other).
+ *
+ *   · **미지정 = 전체**다. 파라미터를 아예 붙이지 않는다 — 빈 값(`platform=`)을 보내면 서버는
+ *     그것을 오타로 보고 400 을 낸다. 미전송이 곧 현행 동작이고, 골든 44개가 사는 근거다.
+ *   · 허용목록 밖 값은 **400** 이다(서버가 other 로 접지 않는다 — 요청한 것과 다른 모집단이
+ *     조용히 돌아오는 편이 더 나쁘기 때문이다). 그래서 호출부는 lib/platforms.ts 의
+ *     isPlatformId 로 좁힌 값만 넘긴다.
+ *
+ * ⚠ **모든 엔드포인트가 이 축을 받는 것은 아니다.** 서버 라우팅(go/internal/httpapi/analytics.go)
+ *   기준으로 갈린다:
+ *     받는다  — series · distribution · sessions · quality · coverage · leaderboard · platforms
+ *     안 받는다 — summary · dispatch · seats · teams · dev  (핸들러가 platform 을 읽기 전에 끝난다)
+ *
+ *   안 받는 쪽에 platform 을 붙여도 서버는 **조용히 무시하고 전체를 돌려준다.** 그래서 여기서는
+ *   아예 받을 수 있는 함수에만 인자를 둔다 — 타입이 "이건 못 거른다"를 말하게 해서, 화면이
+ *   전체 합계를 그 플랫폼의 값인 척 그리는 사고를 컴파일 시점에 막는다.
+ *   (화면은 그 사실을 사용자에게도 말한다 — components/platform/PlatformScope.tsx)
+ */
+export interface PlatformParams {
+  /** 미지정·빈 문자열 = 전체. 허용목록 밖 값은 보내지 않는다. */
+  platform?: string;
+}
 
+/** 플랫폼 값을 질의에 실는다. 빈 값이면 **키 자체를 만들지 않는다**(=전체). */
+function setPlatform(q: URLSearchParams, platform?: string): void {
+  if (platform) q.set('platform', platform);
+}
+
+function withPlatform(path: string, platform?: string): string {
+  const q = new URLSearchParams();
+  setPlatform(q, platform);
+  const qs = q.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
+/* ── 엔드포인트 ───────────────────────────────────────────────────────── */
+
+/* platform 축을 받지 않는 조회 — 인자를 두지 않는다(위 주석 참고). */
 export const getSummary = (o?: RequestOptions) => request<Summary>('/api/usage/summary', o);
 export const getDispatch = (o?: RequestOptions) => request<Dispatch>('/api/usage/dispatch', o);
-export const getDistribution = (o?: RequestOptions) => request<Distribution>('/api/usage/distribution', o);
-export const getQuality = (o?: RequestOptions) => request<Quality>('/api/usage/quality', o);
-export const getCoverage = (o?: RequestOptions) => request<Coverage>('/api/usage/coverage', o);
-export const getLeaderboard = (o?: RequestOptions) => request<Leaderboard>('/api/usage/leaderboard', o);
 export const getSeats = (days = 30, o?: RequestOptions) =>
   request<Seats>(`/api/usage/seats?days=${days}`, o);
 export const getTeams = (days = 30, o?: RequestOptions) =>
@@ -203,13 +238,35 @@ export const getDev = (days = 30, o?: RequestOptions) =>
   request<Dev>(`/api/usage/dev?days=${days}`, o);
 export const getIdentity = (o?: RequestOptions) => request<unknown>('/api/usage/identity', o);
 
+/* platform 축을 받는 조회. */
+export const getDistribution = (p: PlatformParams = {}, o?: RequestOptions) =>
+  request<Distribution>(withPlatform('/api/usage/distribution', p.platform), o);
+export const getQuality = (p: PlatformParams = {}, o?: RequestOptions) =>
+  request<Quality>(withPlatform('/api/usage/quality', p.platform), o);
+export const getCoverage = (p: PlatformParams = {}, o?: RequestOptions) =>
+  request<Coverage>(withPlatform('/api/usage/coverage', p.platform), o);
+export const getLeaderboard = (p: PlatformParams = {}, o?: RequestOptions) =>
+  request<Leaderboard>(withPlatform('/api/usage/leaderboard', p.platform), o);
+
+/**
+ * 플랫폼별 롤업 — "이 서버에 어떤 플랫폼의 데이터가 얼마나 있나".
+ *
+ * 기간 파라미터를 붙이지 않는다: 서버는 이 경로에서 from/to 만 읽고 days 는 보지 않으므로,
+ * days 를 실어 보내면 화면이 "최근 N일"이라고 말하면서 실제로는 전체 기간을 받게 된다.
+ * 그래서 **전체 기간 누적**으로 부르고, 화면도 그렇게 말한다(응답의 firstSeen·lastSeen 이
+ * 실제 구간을 밝힌다).
+ */
+export const getPlatforms = (o?: RequestOptions) =>
+  request<PlatformsResponse>('/api/usage/platforms', o);
+
 export const getSessions = (
-  params: { sort?: string; top?: number } = {},
+  params: { sort?: string; top?: number } & PlatformParams = {},
   o?: RequestOptions,
 ) => {
   const q = new URLSearchParams();
   if (params.sort) q.set('sort', params.sort);
   if (params.top != null) q.set('top', String(params.top));
+  setPlatform(q, params.platform);
   const qs = q.toString();
   return request<SessionsResponse>(`/api/usage/sessions${qs ? `?${qs}` : ''}`, o);
 };
@@ -217,7 +274,7 @@ export const getSessions = (
 export const getSessionDetail = (id: string, o?: RequestOptions) =>
   request<SessionDetail>(`/api/usage/sessions/${encodeURIComponent(id)}`, o);
 
-export interface SeriesParams {
+export interface SeriesParams extends PlatformParams {
   metric?: 'cost' | 'tokens' | 'sessions' | 'turns';
   interval?: 'hour' | 'day' | 'week';
   groupBy?: string;
@@ -235,6 +292,7 @@ export function seriesQuery(p: SeriesParams): string {
   if (p.user) q.set('user', p.user);
   if (p.from) q.set('from', p.from);
   if (p.to) q.set('to', p.to);
+  setPlatform(q, p.platform);
   return `/api/usage/series?${q.toString()}`;
 }
 

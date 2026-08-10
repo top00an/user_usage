@@ -342,6 +342,32 @@ export interface Dev {
   byDay: DevDay[];
 }
 
+/* ── GET /api/usage/platforms — 플랫폼별 롤업 ──────────────────────── */
+
+/**
+ * 한 플랫폼(=세션을 만든 도구)의 누적치.
+ *
+ * ⚠ `platform` 을 PlatformId 로 좁히지 않는다. 서버가 우리보다 새로울 수 있고, 그때 모르는
+ *   이름을 타입으로 막아 버리면 화면에서 그 플랫폼이 통째로 사라진다 — 서버가 허용목록 밖
+ *   보고를 other 로 **남기는** 것과 같은 이유다. 좁히는 자리는 질의(lib/platforms.ts 의
+ *   isPlatformId)뿐이다.
+ *
+ * ⚠ 여기의 0 은 그 자체로 "안 썼다"를 뜻하지 않는다. 플랫폼마다 기록하는 축이 달라서,
+ *   `0` 인지 `미수집`인지 `해당 없음`인지는 lib/platforms.ts 의 지원표가 판정한다.
+ */
+export interface PlatformRow extends TokenAxes {
+  platform: string;
+  sessions: number;
+  /** API 환산 비용(구독 청구액이 아니다 — lib/costLabels.ts). */
+  costUsd: number;
+  firstSeen: string | null;
+  lastSeen: string | null;
+}
+
+export interface PlatformsResponse {
+  platforms: PlatformRow[];
+}
+
 /* ── GET /api/usage/series ──────────────────────────────────────────── */
 
 export interface SeriesPoint {

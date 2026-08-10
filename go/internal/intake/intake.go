@@ -104,6 +104,11 @@ type Session struct {
 	Project   *string
 	Model     *string
 
+	// Platform 은 이 세션을 만든 도구다(claude|codex|gemini). **선택적 필드**다 —
+	// 현행 수집기는 보내지 않으므로 nil 이 정상이고, 그 자리를 채우는 규칙(빈 값→claude,
+	// 허용목록 밖→other)은 저장 계층이 단일 출처로 갖는다. 여기서 또 접으면 규칙이 두 벌이 된다.
+	Platform *string
+
 	Input       int64
 	Output      int64
 	CacheRead   int64
@@ -280,26 +285,28 @@ func NormSession(raw map[string]any, ctx ...Ctx) (Session, bool) {
 	}
 
 	s := Session{
-		SessionID:   sessionID,
-		Username:    nilIfEmpty(clip(firstTruthyString(raw["username"], c.Username), 200)),
-		Machine:     nilIfEmpty(clip(firstTruthyString(raw["machine"], c.Machine), 200)),
-		StartedAt:   nilIfEmpty(clip(jsString(raw["startedAt"]), 40)),
-		EndedAt:     nilIfEmpty(clip(jsString(raw["endedAt"]), 40)),
-		Project:     nilIfEmpty(clip(jsString(raw["project"]), 200)),
-		Model:       nilIfEmpty(clip(jsString(raw["model"]), 120)),
-		Input:       nat(raw["input"]),
-		Output:      nat(raw["output"]),
-		CacheRead:   nat(raw["cacheRead"]),
-		CacheCreate: nat(raw["cacheCreate"]),
-		WebSearch:   nat(raw["webSearch"]),
-		WebFetch:    nat(raw["webFetch"]),
-		Turns:       nat(raw["turns"]),
+		SessionID: sessionID,
+		Username:  nilIfEmpty(clip(firstTruthyString(raw["username"], c.Username), 200)),
+		Machine:   nilIfEmpty(clip(firstTruthyString(raw["machine"], c.Machine), 200)),
+		StartedAt: nilIfEmpty(clip(jsString(raw["startedAt"]), 40)),
+		EndedAt:   nilIfEmpty(clip(jsString(raw["endedAt"]), 40)),
+		Project:   nilIfEmpty(clip(jsString(raw["project"]), 200)),
+		Model:     nilIfEmpty(clip(jsString(raw["model"]), 120)),
+		// 40자로 자른다 — 식별자 하나이고, 길면 어차피 저장 계층이 other 로 접는다.
+		Platform:      nilIfEmpty(clip(jsString(raw["platform"]), 40)),
+		Input:         nat(raw["input"]),
+		Output:        nat(raw["output"]),
+		CacheRead:     nat(raw["cacheRead"]),
+		CacheCreate:   nat(raw["cacheCreate"]),
+		WebSearch:     nat(raw["webSearch"]),
+		WebFetch:      nat(raw["webFetch"]),
+		Turns:         nat(raw["turns"]),
 		LinesAdded:    nat(raw["linesAdded"]),
 		LinesRemoved:  nat(raw["linesRemoved"]),
 		EditsAccepted: nat(raw["editsAccepted"]),
 		EditsRejected: nat(raw["editsRejected"]),
-		Counters:    []Counter{},
-		Series:      []Bucket{},
+		Counters:      []Counter{},
+		Series:        []Bucket{},
 	}
 	if v, present := raw["noTsTurns"]; present && v != nil {
 		n := nat(v)

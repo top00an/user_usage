@@ -7,9 +7,11 @@
 import { useState } from 'react';
 import Modal from '@/components/Modal';
 import { addPanel, type ChartType, type GroupBy, type Metric, type CustomPanel } from '@/lib/customPanels';
+import { COST_LABEL_SHORT } from '@/lib/costLabels';
 
 const METRICS: { v: Metric; label: string }[] = [
-  { v: 'tokens', label: '토큰' }, { v: 'cost', label: '비용' },
+  // '비용'이 아니라 '환산 비용'이다 — 청구액과 다르다(lib/costLabels.ts).
+  { v: 'tokens', label: '토큰' }, { v: 'cost', label: COST_LABEL_SHORT },
   { v: 'sessions', label: '세션' }, { v: 'turns', label: '턴' },
 ];
 const TYPES: { v: ChartType; label: string }[] = [

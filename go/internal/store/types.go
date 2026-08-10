@@ -19,6 +19,10 @@ type SessionInput struct {
 	Username  string
 	Project   string
 	Model     string // 그 세션의 **최빈 모델 1개** — 모델 축이 아니다
+	// Platform 은 이 세션을 만든 도구다(claude|codex|gemini). 빈 값은 claude 로 채우고,
+	// 허용목록 밖은 other 로 접는다 — 규칙의 단일 출처는 NormalizePlatform 이다.
+	// 현행 수집기는 이 필드를 보내지 않으므로 **빈 값이 정상 입력**이다.
+	Platform string
 
 	Input       int64
 	Output      int64
@@ -250,6 +254,7 @@ type Session struct {
 	Username    string
 	Project     string
 	Model       string
+	Platform    string
 	Input       int64
 	Output      int64
 	CacheRead   int64
@@ -260,6 +265,33 @@ type Session struct {
 	StartedAt   *string
 	EndedAt     *string
 	ReportedAt  *string
+}
+
+// PlatformModelRow 는 한 플랫폼 안의 모델별 토큰이다 — **비용 계산의 근거**다.
+// 단가는 모델별이라 플랫폼 합계 토큰만으로는 값을 매길 수 없다(저장 계층은 단가를 모른다).
+type PlatformModelRow struct {
+	Model       string
+	Input       int64
+	Output      int64
+	CacheRead   int64
+	CacheCreate int64
+	Sessions    int
+}
+
+// PlatformRow 는 플랫폼 하나의 요약이다.
+//
+// FirstSeen/LastSeen 은 관측 경계다(started_at 의 min/max). 시각을 안 보낸 세션은 빠지므로
+// 빈 문자열이 나올 수 있다 — 그건 "모른다"이지 "0" 이 아니다.
+type PlatformRow struct {
+	Platform    string
+	Sessions    int
+	Input       int64
+	Output      int64
+	CacheRead   int64
+	CacheCreate int64
+	FirstSeen   string
+	LastSeen    string
+	Models      []PlatformModelRow
 }
 
 // Bucket 은 시간 버킷 원행이다.
@@ -305,6 +337,10 @@ type Filter struct {
 	To       string // YYYY-MM-DD
 	Username string
 	Model    string
+	// Platform 은 **빈 값이면 조건을 걸지 않는다** = 전체(현행과 같은 동작).
+	// 정규화하지 않는다 — 오타를 other 로 접으면 요청과 다른 집합이 조용히 돌아온다.
+	// 호출부가 IsPlatformFilter 로 걸러 400 을 내는 것이 정직하다.
+	Platform string
 	Limit    int // 0 이면 기본값
 }
 

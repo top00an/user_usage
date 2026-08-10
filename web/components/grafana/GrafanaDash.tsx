@@ -9,10 +9,13 @@
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
-import { getSummary, getSeats, getDev } from '@/lib/api';
+import { getSummary, getSeats, getDev, getPlatforms } from '@/lib/api';
 import { softly, useResource } from '@/hooks/useResource';
-import type { Dev, Seats, Summary } from '@/lib/types';
+import type { Dev, PlatformsResponse, Seats, Summary } from '@/lib/types';
 import { ErrorState, Loading } from '@/components/ui';
+import PlatformFilter from '@/components/platform/PlatformFilter';
+import PlatformSummary from '@/components/platform/PlatformSummary';
+import { COST_DISCLAIMER, COST_LABEL, COST_WHY } from '@/lib/costLabels';
 import EChart from '@/components/charts/EChart';
 import DragGrid, { resetLayout, type GridItem } from './DragGrid';
 import { areaOption, gaugeOption, donutOption, barOption, short, fmtInt } from './options';
@@ -23,7 +26,13 @@ import {
   type CustomPanel,
 } from '@/lib/customPanels';
 
-interface Data { summary: Summary | null; seats: Seats | null; dev: Dev | null; }
+interface Data {
+  summary: Summary | null;
+  seats: Seats | null;
+  dev: Dev | null;
+  /** 플랫폼 롤업. 관리자 전용이라 member 스코프에서는 null 이다(카드가 스스로 안내한다). */
+  platforms: PlatformsResponse | null;
+}
 
 const usd = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -36,9 +45,9 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
     </div>
   );
 }
-function StatTile({ tone, k, v, s }: { tone: string; k: string; v: string; s?: string }) {
+function StatTile({ tone, k, v, s, title }: { tone: string; k: string; v: string; s?: string; title?: string }) {
   return (
-    <div className={`gstat ${tone}`}>
+    <div className={`gstat ${tone}`} title={title}>
       <span className="gstat-k">{k}</span>
       <span className="gstat-v num">{v}</span>
       {s && <span className="gstat-s">{s}</span>}
@@ -76,12 +85,13 @@ function BarTable({ rows, unit, fmt }: { rows: { label: string; value: number }[
 
 export default function GrafanaDash() {
   const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<Data> => {
-    const [summary, seats, dev] = await Promise.all([
+    const [summary, seats, dev, platforms] = await Promise.all([
       softly(getSummary({ signal }), null as Summary | null),
       softly(getSeats(3650, { signal }), null as Seats | null),
       softly(getDev(365, { signal }), null as Dev | null),
+      softly(getPlatforms({ signal }), null as PlatformsResponse | null),
     ]);
-    return { summary, seats, dev };
+    return { summary, seats, dev, platforms };
   }, []);
   const { state, reload } = useResource(load, []);
 
@@ -103,7 +113,8 @@ export default function GrafanaDash() {
   if (state.status === 'loading') return <Loading />;
   if (state.status === 'error') return <ErrorState what="대시보드를 불러오지 못했습니다." error={state.error} onRetry={reload} />;
 
-  const { summary, seats, dev } = state.data;
+  const { summary, seats, dev, platforms } = state.data;
+  const platformRows = platforms?.platforms ?? null;
   if (!summary?.totals) {
     // member 스코프(전사 지표 403) 또는 무데이터.
     return <p className="hint" style={{ padding: '24px 0' }}>이 대시보드는 관리자 토큰이 필요합니다(전사 지표). 개인 열람 토큰은 사용 관측 탭에서 자기 데이터를 봅니다.</p>;
@@ -127,7 +138,19 @@ export default function GrafanaDash() {
   // ── 섹션별 아이템 ──
   const live: GridItem[] = [
     { id: 'live-sessions', node: <StatTile tone="t-teal" k="Active Sessions" v={fmtInt(t.sessions)} s={`users ${t.users} · machines ${t.machines}`} /> },
-    { id: 'live-cost', node: <StatTile tone="t-blue" k="Total Cost" v={cost == null ? '—' : usd(cost)} s="90-day" /> },
+    /*
+     * 'Total Cost' 였던 자리. 그 이름은 청구액으로 읽힌다 — 우리 값은 환산 추정치다(lib/costLabels.ts).
+     * 부제의 '90-day' 도 사실이 아니었다: 이 타일은 getSeats(3650) 의 합계라 전체 기간이다.
+     */
+    { id: 'live-cost', node: (
+      <StatTile
+        tone="t-blue"
+        k={COST_LABEL}
+        v={cost == null ? '—' : usd(cost)}
+        s="전체 기간 · 실제 청구액 아님"
+        title={`${COST_DISCLAIMER}. ${COST_WHY}`}
+      />
+    ) },
     { id: 'live-tokens', node: <StatTile tone="t-orange" k="Total Tokens" v={short(tokensTotal)} s={`cache read ${short(t.cacheRead)}`} /> },
     { id: 'live-output', node: <StatTile tone="t-purple" k="Output Tokens" v={short(t.output)} s={`input ${short(t.input)}`} /> },
     { id: 'live-hit', node: <GaugeTile tone="t-teal" label="Cache Hit Ratio" value={cacheHit} color="#73bf69" /> },
@@ -215,6 +238,18 @@ export default function GrafanaDash() {
         </>,
         headSlot,
       )}
+
+      {/*
+        플랫폼 선택 — 이 탭의 패널들(summary·seats·dev)은 서버가 platform 축으로 거르지 못한다.
+        그래서 applies={false} 로 두고 화면이 그 사실을 말한다. 선택은 탭을 넘어 유지되므로
+        여기서 고른 값이 '사용 관측'의 조회에 그대로 실린다.
+      */}
+      <PlatformFilter rows={platformRows} applies={false} what="아래 패널은 플랫폼 축으로 걸러지지 않습니다" />
+
+      <section className="gsect">
+        <div className="gsect-h"><span className="caret">▾</span> 플랫폼</div>
+        <PlatformSummary rows={platformRows} />
+      </section>
 
       {customItems.length > 0 && (
         <Sect title="내 그래프" gid="custom" cls="g2" items={customItems} />

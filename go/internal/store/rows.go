@@ -22,49 +22,18 @@ import (
  * 필터는 **값만 바인딩한다** — 컬럼명·정렬축을 문자열로 이어 붙이지 않는다(주입 표면 0).
  */
 
-const sessionSelectCols = "session_id, machine, username, project, model, input, output, cache_read," +
+const sessionSelectCols = "session_id, machine, username, project, model, platform, input, output, cache_read," +
 	" cache_create, web_search, web_fetch, turns, started_at, ended_at, reported_at"
 
-// strOrNil 은 빈 값을 nil 로 남긴다 — 안 보낸 값을 "" 로 지어내지 않는다.
-func strOrNil(r db.Row, col string) *string {
-	if r.IsNull(col) {
-		return nil
-	}
-	s := r.Str(col)
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
-func mapSession(r db.Row) Session {
-	return Session{
-		SessionID:   r.Str("session_id"),
-		Machine:     r.Str("machine"),
-		Username:    r.Str("username"),
-		Project:     r.Str("project"),
-		Model:       r.Str("model"),
-		Input:       r.Int("input"),
-		Output:      r.Int("output"),
-		CacheRead:   r.Int("cache_read"),
-		CacheCreate: r.Int("cache_create"),
-		WebSearch:   r.Int("web_search"),
-		WebFetch:    r.Int("web_fetch"),
-		Turns:       r.Int("turns"),
-		StartedAt:   strOrNil(r, "started_at"),
-		EndedAt:     strOrNil(r, "ended_at"),
-		ReportedAt:  strOrNil(r, "reported_at"),
-	}
-}
-
-// SessionRows 는 세션 원행이다 — 분포·비용·드릴다운이 공유하는 단일 조회구.
-func SessionRows(ctx context.Context, f Filter) ([]Session, error) {
-	d, err := conn()
-	if err != nil {
-		return nil, err
-	}
-	lim := clampInt(f.Limit, 1, SessionRowsMax, SessionRowsDefault)
-
+/*
+ * sessionWhere 는 usage_sessions 필터를 한곳에서 만든다(SessionRows·PlatformRollup 공용).
+ *
+ * 두 벌로 두지 않는 이유: 날짜 경계 규칙(접두 10자 비교)이 미묘해서, 한쪽만 고쳐지면 같은
+ * 화면의 두 카드가 서로 다른 하루를 세게 된다.
+ *
+ * ⚠ **값만 바인딩한다** — 컬럼명·정렬축을 문자열로 이어 붙이지 않으므로 주입 표면이 0 이다.
+ */
+func sessionWhere(f Filter) ([]string, []any) {
 	var where []string
 	var args []any
 	/*
@@ -88,6 +57,71 @@ func SessionRows(ctx context.Context, f Filter) ([]Session, error) {
 		where = append(where, "model = ?")
 		args = append(args, f.Model)
 	}
+	// 미지정이면 조건 자체가 없다 = 전체(현행과 같은 동작). 이 한 줄이 무회귀의 근거다.
+	if f.Platform != "" {
+		where = append(where, "platform = ?")
+		args = append(args, f.Platform)
+	}
+	return where, args
+}
+
+/*
+ * seriesPlatformCond 는 시간 버킷을 플랫폼으로 거르는 조건이다.
+ *
+ * usage_series 에는 platform 컬럼이 없다(같은 사실을 두 테이블에 적지 않는다 — platform.go 주석).
+ * 그래서 세션 행으로 되짚는다. 이 조건을 빼면 `platform=codex` 요청이 조용히 전 플랫폼을
+ * 돌려주는데, 그게 이 축에서 가장 나쁜 실패다(요청과 다른 모집단을 요청한 이름으로 보여준다).
+ */
+func seriesPlatformCond(f Filter) (string, []any) {
+	if f.Platform == "" {
+		return "", nil
+	}
+	return "EXISTS (SELECT 1 FROM usage_sessions s WHERE s.session_id = usage_series.session_id" +
+		" AND s.platform = ?)", []any{f.Platform}
+}
+
+// strOrNil 은 빈 값을 nil 로 남긴다 — 안 보낸 값을 "" 로 지어내지 않는다.
+func strOrNil(r db.Row, col string) *string {
+	if r.IsNull(col) {
+		return nil
+	}
+	s := r.Str(col)
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func mapSession(r db.Row) Session {
+	return Session{
+		SessionID:   r.Str("session_id"),
+		Machine:     r.Str("machine"),
+		Username:    r.Str("username"),
+		Project:     r.Str("project"),
+		Model:       r.Str("model"),
+		Platform:    r.Str("platform"),
+		Input:       r.Int("input"),
+		Output:      r.Int("output"),
+		CacheRead:   r.Int("cache_read"),
+		CacheCreate: r.Int("cache_create"),
+		WebSearch:   r.Int("web_search"),
+		WebFetch:    r.Int("web_fetch"),
+		Turns:       r.Int("turns"),
+		StartedAt:   strOrNil(r, "started_at"),
+		EndedAt:     strOrNil(r, "ended_at"),
+		ReportedAt:  strOrNil(r, "reported_at"),
+	}
+}
+
+// SessionRows 는 세션 원행이다 — 분포·비용·드릴다운이 공유하는 단일 조회구.
+func SessionRows(ctx context.Context, f Filter) ([]Session, error) {
+	d, err := conn()
+	if err != nil {
+		return nil, err
+	}
+	lim := clampInt(f.Limit, 1, SessionRowsMax, SessionRowsDefault)
+
+	where, args := sessionWhere(f)
 	sql := "SELECT " + sessionSelectCols + " FROM usage_sessions"
 	if len(where) > 0 {
 		sql += " WHERE " + strings.Join(where, " AND ")
@@ -186,6 +220,10 @@ func SeriesRows(ctx context.Context, f Filter) ([]Bucket, error) {
 		where = append(where, "model = ?")
 		args = append(args, f.Model)
 	}
+	if cond, cargs := seriesPlatformCond(f); cond != "" {
+		where = append(where, cond)
+		args = append(args, cargs...)
+	}
 	sql := "SELECT " + seriesSelectCols + " FROM usage_series"
 	if len(where) > 0 {
 		sql += " WHERE " + strings.Join(where, " AND ")
@@ -252,6 +290,10 @@ func SeriesQualityTotals(ctx context.Context, f Filter) (QualityTotals, error) {
 	if f.Username != "" {
 		where = append(where, "username = ?")
 		args = append(args, f.Username)
+	}
+	if cond, cargs := seriesPlatformCond(f); cond != "" {
+		where = append(where, cond)
+		args = append(args, cargs...)
 	}
 	w := ""
 	if len(where) > 0 {

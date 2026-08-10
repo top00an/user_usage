@@ -12,6 +12,8 @@
 import type { Seats } from '@/lib/types';
 import { n, pctOf, usd } from '@/lib/format';
 import { Card, TableWrap } from '@/components/ui';
+import { COST_LABEL, COST_LABEL_SHORT, COST_WHY } from '@/lib/costLabels';
+import PlatformScope from '@/components/platform/PlatformScope';
 
 function Delta({ pct, isNew }: { pct: number | null; isNew: boolean }) {
   if (isNew) return <span className="help">신규</span>;
@@ -30,13 +32,18 @@ export default function SeatsCard({ d }: { d: Seats | null }) {
 
   const s = d.summary;
   return (
-    <Card title="좌석당 비용 · 기간 비교" className="mt">
-      <p className="help">
-        최근 {d.days}일({d.from}~{d.to}) 대 직전 {d.days}일({d.prevFrom}~{d.prevTo}). 증감은 비용 기준.
+    <Card
+      title={`좌석당 ${COST_LABEL} · 기간 비교`}
+      className="mt"
+      /* 이 조회는 서버가 platform 축으로 거르지 못한다 — 필터가 걸려 있으면 그렇다고 말한다. */
+      aside={<PlatformScope applies={false} />}
+    >
+      <p className="help" title={COST_WHY}>
+        최근 {d.days}일({d.from}~{d.to}) 대 직전 {d.days}일({d.prevFrom}~{d.prevTo}). 증감은 {COST_LABEL} 기준.
       </p>
       <div className="row" style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', margin: '0.5rem 0' }}>
         <div><b>{n(s.activeSeats)}</b> 활성 좌석 <span className="help">(직전 {n(s.prevActiveSeats)})</span></div>
-        <div><b>{usd(s.totalUsd)}</b> 총비용 <Delta pct={s.totalUsdDeltaPct} isNew={false} /></div>
+        <div><b>{usd(s.totalUsd)}</b> 총 {COST_LABEL_SHORT} <Delta pct={s.totalUsdDeltaPct} isNew={false} /></div>
         <div><b>{usd(s.usdPerSeat)}</b> 좌석당 평균</div>
       </div>
       <TableWrap>
@@ -45,7 +52,7 @@ export default function SeatsCard({ d }: { d: Seats | null }) {
             <tr>
               <th>사용자</th>
               <th className="num">세션</th>
-              <th className="num">비용</th>
+              <th className="num" title={COST_WHY}>{COST_LABEL_SHORT}</th>
               <th className="num">세션당</th>
               <th className="num">캐시적중</th>
               <th className="num">직전 대비</th>

@@ -3,6 +3,8 @@
 import type { SessionsResponse } from '@/lib/types';
 import { n, ratio, usd } from '@/lib/format';
 import { Flag, TableWrap } from '@/components/ui';
+import { COST_LABEL, COST_LABEL_SHORT, COST_WHY } from '@/lib/costLabels';
+import PlatformScope from '@/components/platform/PlatformScope';
 
 /*
  * 비용 카드 — 이 화면의 존재 이유.
@@ -40,23 +42,31 @@ export default function CostCard({ s }: { s: SessionsResponse }) {
   return (
     <section className="card glass">
       <div className="between">
-        <h3>API 환산액</h3>
-        <span className="help">단가 기준일 {s.pricedAt || '-'}</span>
+        <h3>{COST_LABEL}</h3>
+        <span className="row">
+          <PlatformScope applies />
+          <span className="help">단가 기준일 {s.pricedAt || '-'}</span>
+        </span>
       </div>
-      <div className="v" style={{ fontSize: '1.6rem' }}>{usd(s.usd)}</div>
+      <div className="v" style={{ fontSize: '1.6rem' }} title={COST_WHY}>{usd(s.usd)}</div>
       <p className="help mt-sm">
-        <b>실제 결제액이 아닙니다.</b> 팀은 구독(Claude Max·Team)으로 쓰므로 결제액은 <b>정액 구독료</b>이고,
-        이 숫자는 같은 사용량을 <b>API 종량제로 썼다면</b> 나왔을 금액입니다 — 즉 구독이 얼마나
-        절약하고 있는지를 보여줍니다. 사용자·모델 간 <b>상대 비교</b>와 어느 축이 비싼지를 보는 용도입니다.
+        <b>실제 청구액이 아닙니다.</b> 구독 요금제(Claude Max·Team, ChatGPT Plus·Pro)는 토큰당 과금이
+        아니라 <b>정액</b>이고, 이 숫자는 같은 사용량을 <b>공개 API 단가로 종량 과금했다면</b> 나왔을
+        금액입니다 — 즉 구독이 얼마나 절약하고 있는지를 보여줍니다. 사용자·모델·플랫폼 간
+        <b> 상대 비교</b>와 어느 축이 비싼지를 보는 용도입니다.
       </p>
 
       <TableWrap>
         <table className="mt-sm">
           <caption className="help" style={{ captionSide: 'top', textAlign: 'left', paddingBottom: 4 }}>
-            비용의 축별 분해 (비중 내림차순)
+            {COST_LABEL}의 축별 분해 (비중 내림차순)
           </caption>
           <thead>
-            <tr><th>축</th><th aria-label="비중 막대" /><th className="num">환산액</th><th className="num">비중</th></tr>
+            <tr>
+              <th>축</th><th aria-label="비중 막대" />
+              <th className="num" title={COST_WHY}>{COST_LABEL_SHORT}</th>
+              <th className="num">비중</th>
+            </tr>
           </thead>
           <tbody>
             {rows.map((a) => (
@@ -87,11 +97,11 @@ export default function CostCard({ s }: { s: SessionsResponse }) {
         <p className="help mt-sm">
           {unpriced.length ? (
             <>
-              <Flag title="단가표에 없어 이 모델의 사용량은 환산액 0 으로 잡혔습니다. 즉 위 합계는 그만큼 적습니다.">
+              <Flag title={`단가표에 없어 이 모델의 사용량은 ${COST_LABEL_SHORT} 0 으로 잡혔습니다. 즉 위 합계는 그만큼 적습니다.`}>
                 단가 미등록 모델 {n(unpriced.length)}종
               </Flag>{' '}
               <span className="mono wrap-any">{unpriced.join(', ')}</span>
-              {' '}— 단가표에 없어 <b>환산액 0</b> 으로 잡혔습니다. 조용히 $0 으로 처리하지 않고 이름을 남깁니다.
+              {' '}— 단가표에 없어 <b>{COST_LABEL_SHORT} 0</b> 으로 잡혔습니다. 조용히 $0 으로 처리하지 않고 이름을 남깁니다.
             </>
           ) : (
             <>단가 미등록 모델 없음 — 등장한 모든 모델이 단가표에 있습니다.</>

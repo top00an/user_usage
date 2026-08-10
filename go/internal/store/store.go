@@ -104,6 +104,10 @@ var sqliteDDL = []string{
 		username TEXT,
 		project TEXT,
 		model TEXT,
+		-- 이 세션을 만든 도구(claude|codex|gemini). 미지정 보고는 claude 다 — 현행 수집기는
+		-- 이 필드를 보내지 않으므로 DEFAULT 가 하위호환의 전부다(platform.go 주석).
+		-- pg 는 migrations/pg/0035_platform.sql 이 같은 컬럼을 소유한다(양 방언 동기).
+		platform TEXT NOT NULL DEFAULT 'claude',
 		input INTEGER NOT NULL DEFAULT 0,
 		output INTEGER NOT NULL DEFAULT 0,
 		cache_read INTEGER NOT NULL DEFAULT 0,
@@ -242,6 +246,24 @@ func Init(ctx context.Context, d db.DB) error {
 		if err := ensureColumn(ctx, d, "usage_sessions", col, "INTEGER"); err != nil {
 			return err
 		}
+	}
+	/*
+	 * platform 축. pg 는 migrations/pg/0035_platform.sql 이 소유한다.
+	 *
+	 * NOT NULL DEFAULT 로 추가하므로 **기존 행이 전부 claude 로 채워진다** — 그것이 맞는 사실이다
+	 * (지금까지 들어온 보고는 전부 Claude Code 수집기의 것이다).
+	 */
+	if err := ensureColumn(ctx, d, "usage_sessions", "platform", "TEXT NOT NULL DEFAULT 'claude'"); err != nil {
+		return err
+	}
+	/*
+	 * ⚠ 인덱스는 sqliteDDL 이 아니라 **여기**에 있다. 위 DDL 은 ensureColumn 보다 먼저 도는데,
+	 * 옛 DB 에는 그 시점에 platform 컬럼이 아직 없어서 CREATE INDEX 가 통째로 실패한다
+	 * (그러면 부팅이 죽는다). 컬럼 보강 뒤에 거는 것이 순서상 유일하게 맞는 자리다.
+	 */
+	if err := d.Exec(ctx,
+		"CREATE INDEX IF NOT EXISTS idx_usage_sessions_platform ON usage_sessions(platform)"); err != nil {
+		return fmt.Errorf("store: platform 인덱스 생성 실패: %w", err)
 	}
 	return nil
 }

@@ -1,11 +1,12 @@
 'use client';
 
 import { useCallback } from 'react';
-import { getDispatch, getSummary } from '@/lib/api';
+import { getDispatch, getPlatforms, getSummary } from '@/lib/api';
 import { softly, useResource } from '@/hooks/useResource';
-import type { Dispatch, Summary, UserRow } from '@/lib/types';
+import type { Dispatch, PlatformsResponse, Summary, UserRow } from '@/lib/types';
 import { n, shortTokens } from '@/lib/format';
 import { Card, Empty, ErrorState, Loading, TableWrap, TokenCount } from '@/components/ui';
+import PlatformFilter from '@/components/platform/PlatformFilter';
 import ModelTable from './ModelTable';
 import AxisExplorer from './AxisExplorer';
 import { setBuilderPrefill, type GroupBy, type Metric } from '@/lib/customPanels';
@@ -40,6 +41,8 @@ import { AX_CACHE_CREATE, AX_CACHE_READ, IN_HINT, IN_LABEL, TURNS_HINT } from '.
 interface TrackData {
   summary: Summary;
   dispatch: Dispatch | null;
+  /** 축 패널이 "어느 플랫폼이 이 축을 기록하는가"를 말하기 위해 필요하다(목록은 응답이 정한다). */
+  platforms: PlatformsResponse | null;
 }
 
 /*
@@ -114,14 +117,23 @@ export default function UsageTrackTab() {
    * '사람별 활용'(dispatch)은 fail-soft 다: 실패해도 위의 전체 집계는 그대로 보여야 한다.
    */
   const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<TrackData> => {
-    const [summary, dispatch] = await Promise.all([
+    const [summary, dispatch, platforms] = await Promise.all([
       getSummary({ signal }),
       softly(getDispatch({ signal }), null as Dispatch | null),
+      softly(getPlatforms({ signal }), null as PlatformsResponse | null),
     ]);
-    return { summary, dispatch };
+    return { summary, dispatch, platforms };
   }, []);
 
   const { state, reload } = useResource(load, []);
+
+  /*
+   * ⚠ 이 화면의 집계(summary·dispatch)는 서버가 platform 축으로 거르지 못한다(lib/api.ts 의 표).
+   *   그래서 필터는 applies={false} 로 두고 "전체 플랫폼 기준"이라고 밝힌다 — 선택만 유지된다.
+   *   대신 축 패널이 **축마다** 어느 플랫폼이 그것을 기록하는지 말한다(AxisExplorer).
+   */
+  const platformRows = state.status === 'ready' ? state.data.platforms?.platforms ?? null : null;
+  const bar = <PlatformFilter rows={platformRows} applies={false} what="이 화면의 집계는 플랫폼 축으로 걸러지지 않습니다" />;
 
   if (state.status === 'loading') return <Loading />;
   if (state.status === 'error') return <ErrorState what="사용 추적을 불러오지 못했습니다." error={state.error} onRetry={reload} />;
@@ -132,6 +144,7 @@ export default function UsageTrackTab() {
 
   return (
     <>
+      {bar}
       <p className="lead">
         동기화된 PC 들이 <b>무엇을 얼마나 썼는지</b>를 모읍니다.
         집계만 수집하며 <b>프롬프트 원문·파일 경로·명령 인자는 저장하지 않습니다.</b>{' '}
@@ -158,7 +171,7 @@ export default function UsageTrackTab() {
         <Card
           title="사용자별"
           className="mb"
-          aside={<span className="aside-row"><span className="help">이름이 실제 담당자와 다르면 <b>귀속 교정</b>(/api/usage/identity)으로 묶습니다</span><PinButton metric="cost" groupBy="user" title="사용자별 비용" /></span>}
+          aside={<span className="aside-row"><span className="help">이름이 실제 담당자와 다르면 <b>귀속 교정</b>(/api/usage/identity)으로 묶습니다</span><PinButton metric="cost" groupBy="user" title="사용자별 API 환산 비용" /></span>}
         >
           <UserTable rows={d.byUser ?? []} />
         </Card>
@@ -175,6 +188,7 @@ export default function UsageTrackTab() {
           top={d.top ?? {}}
           dispatch={state.data.dispatch}
           dispatchFailed={state.data.dispatch === null}
+          platforms={(platformRows ?? []).map((p) => p.platform)}
         />
       </div>
     </>

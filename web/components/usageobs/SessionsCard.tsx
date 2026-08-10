@@ -6,6 +6,7 @@ import { useResource } from '@/hooks/useResource';
 import type { SessionDetail, SessionsResponse } from '@/lib/types';
 import { n, seconds, shortTokens, usd } from '@/lib/format';
 import { ErrorState, Flag, Loading, TableWrap } from '@/components/ui';
+import { COST_LABEL, COST_LABEL_SHORT, COST_WHY } from '@/lib/costLabels';
 
 /* 상위 세션 — 메트릭에서 개별 세션으로 내려가는 입구. */
 
@@ -34,7 +35,7 @@ function Detail({ id }: { id: string }) {
         캐시읽기 {usd(c.byAxis.cacheRead)} · 캐시생성 {usd(c.byAxis.cacheCreate)}
         {' · '}출력 {usd(c.byAxis.output)} · 입력 {usd(c.byAxis.input)}
         {dur && <> · 지속 {dur}</>}
-        {!c.priced && <> · <Flag title="이 세션의 모델이 단가표에 없습니다 — 환산액 0 은 '공짜'가 아니라 '모른다'입니다.">단가 미등록</Flag></>}
+        {!c.priced && <> · <Flag title="이 세션의 모델이 단가표에 없습니다 — 환산 비용 0 은 '공짜'가 아니라 '모른다'입니다.">단가 미등록</Flag></>}
         {!c.exact && <> <Flag title="시간 버킷(series)이 없어 세션 최빈 모델 1개로 계산했습니다. 모델이 섞인 세션이면 틀린 단가가 적용됩니다.">근사</Flag></>}
       </p>
 
@@ -87,13 +88,14 @@ export default function SessionsCard({ s }: { s: SessionsResponse }) {
 
   return (
     <section className="card glass mt">
-      <h3>상위 세션 <span className="help">비용순 · 행을 누르면 상세</span></h3>
+      <h3>상위 세션 <span className="help" title={COST_WHY}>{COST_LABEL}순 · 행을 누르면 상세</span></h3>
       <TableWrap>
         <table className="mt-sm">
           <thead>
             <tr>
               <th>시작</th><th>사용자</th><th>모델</th><th>프로젝트</th>
-              <th className="num">턴</th><th className="num">캐시읽기</th><th className="num">비용</th>
+              <th className="num">턴</th><th className="num">캐시읽기</th>
+              <th className="num" title={COST_WHY}>{COST_LABEL_SHORT}</th>
             </tr>
           </thead>
           <tbody>
