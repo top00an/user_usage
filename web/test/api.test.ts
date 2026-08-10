@@ -9,6 +9,9 @@ import {
   getSeats,
   getTeams,
   seriesQuery,
+  login,
+  logout,
+  getMe,
 } from '@/lib/api';
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -42,11 +45,11 @@ describe('lib/api — 유일한 서버 호출구', () => {
     await expect(getSummary()).resolves.toEqual({ totals: { sessions: 3 } });
   });
 
-  it('자격증명은 쿠키로 실린다 — credentials: same-origin', async () => {
+  it('자격증명은 세션 쿠키로 실린다 — credentials: include', async () => {
     const spy = vi.fn().mockResolvedValue(jsonResponse(200, {}));
     vi.stubGlobal('fetch', spy);
     await request('/api/usage/summary');
-    expect(spy.mock.calls[0]?.[1]).toMatchObject({ credentials: 'same-origin' });
+    expect(spy.mock.calls[0]?.[1]).toMatchObject({ credentials: 'include' });
   });
 
   it('상태코드와 서버 본문을 구조로 남긴다 (문구 파싱 불필요)', async () => {
@@ -130,5 +133,66 @@ describe('lib/api — 유일한 서버 호출구', () => {
     vi.stubGlobal('fetch', spy);
     await getTeams();
     expect(spy.mock.calls[0]?.[0]).toBe('/api/usage/teams?days=30');
+  });
+});
+
+describe('lib/api — 인증(세션)', () => {
+  beforeEach(() => {
+    setUnauthorizedHandler(() => {});
+  });
+
+  it('login 은 자격증명을 JSON 바디로 POST 하고 user 를 돌려준다', async () => {
+    const spy = vi.fn().mockResolvedValue(
+      jsonResponse(200, { ok: true, user: { username: 'admin', role: 'admin', tenant: 'acme' } }),
+    );
+    vi.stubGlobal('fetch', spy);
+
+    await expect(login('admin', 'pw-123456')).resolves.toEqual({
+      username: 'admin', role: 'admin', tenant: 'acme',
+    });
+
+    const [url, init] = spy.mock.calls[0]!;
+    expect(url).toBe('/api/auth/login');
+    expect(init).toMatchObject({ method: 'POST', credentials: 'include' });
+    expect((init as RequestInit).headers).toMatchObject({ 'Content-Type': 'application/json' });
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ username: 'admin', password: 'pw-123456' });
+  });
+
+  it('login 401 은 ApiError(401) 로 던지고 전역 401 훅을 부르지 않는다', async () => {
+    const onUnauth = vi.fn();
+    setUnauthorizedHandler(onUnauth);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(401, { ok: false, error: '자격증명 오류' })));
+
+    const err = await failureOf(login('admin', 'nope'));
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(401);
+    expect(onUnauth).not.toHaveBeenCalled(); // 폼 위에 띄운다 — 게이트 훅으로 새어 나가면 안 된다
+  });
+
+  it('getMe 200 은 사용자를 돌려준다', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      jsonResponse(200, { username: 'bob', role: 'member', tenant: 'acme' }),
+    ));
+    await expect(getMe()).resolves.toEqual({ username: 'bob', role: 'member', tenant: 'acme' });
+  });
+
+  it('getMe 401 은 던지되 전역 401 훅을 부르지 않는다 (=로그인 안 됨은 정상 답)', async () => {
+    const onUnauth = vi.fn();
+    setUnauthorizedHandler(onUnauth);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(401, {})));
+
+    const err = await failureOf(getMe());
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(401);
+    expect(onUnauth).not.toHaveBeenCalled();
+  });
+
+  it('logout 은 POST 하고 204(본문 없음)에도 죽지 않는다', async () => {
+    const spy = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', spy);
+    await expect(logout()).resolves.toBeDefined();
+    const [url, init] = spy.mock.calls[0]!;
+    expect(url).toBe('/api/auth/logout');
+    expect(init).toMatchObject({ method: 'POST', credentials: 'include' });
   });
 });

@@ -61,6 +61,8 @@ type server struct {
 	cfg     config.Config
 	routes  []route
 	limiter *rateLimiter // 멀티테넌트 인테이크 rate limit. 단일테넌트면 nil(무제한).
+	// loginLimiter 는 사람 로그인(/api/auth/login) 브루트포스 방어용 IP별 rate limit. 항상 켠다.
+	loginLimiter *rateLimiter
 }
 
 /*
@@ -76,7 +78,7 @@ type server struct {
  * 이 모드에서 그 엔드포인트는 "지금은 막혔다"가 아니라 **존재하지 않기** 때문이다.
  */
 func New(cfg config.Config) http.Handler {
-	s := &server{cfg: cfg}
+	s := &server{cfg: cfg, loginLimiter: newRateLimiter(loginRefill, loginBurst)}
 	// burst<=0 이면 리미터를 만들지 않는다(무제한) — 제로값 설정이 "모든 요청 429"로
 	// 뒤집히는 footgun 을 막는다. 프로덕션 기본값은 config.Read 가 20/40 으로 채운다.
 	if cfg.MultiTenant && cfg.IntakeBurst > 0 {
@@ -86,7 +88,8 @@ func New(cfg config.Config) http.Handler {
 		// export 는 조회이므로 readOnly 에서도 유효하다(analytics 앞에 둬 admin 이 삼키기 전에 잡는다).
 		s.routes = []route{s.routeOTLPExport, s.routeAnalytics, s.readOnlyAdmin}
 	} else {
-		s.routes = []route{s.routeIntake, s.routeOTLP, s.routeOTLPExport, s.routeAnalytics, s.routeAdmin}
+		// routeOnboarding 은 /api/admin 을 소유한다(usage.go 의 /api/usage 와 겹치지 않는다).
+		s.routes = []route{s.routeIntake, s.routeOTLP, s.routeOTLPExport, s.routeAnalytics, s.routeOnboarding, s.routeAdmin}
 	}
 	return s
 }
@@ -139,13 +142,38 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// /install.sh — 무인증 부트스트랩(게이트 앞). 키가 인증을 대신한다. /api/·/v1/ 이 아니라
+	// 아래 404 게이트에 걸리기 전에 잡는다.
+	if p == "/install.sh" {
+		serveInstallScript(tw, r)
+		return
+	}
+	// /api/agent/collector — 인제스트 키 자체 검증(게이트 앞). 게이트의 인테이크 규칙이 이 GET
+	// 조회를 막으므로(그 스코프는 POST 보고만) 여기서 키를 직접 검증한다.
+	if p == "/api/agent/collector" {
+		s.serveCollector(tw, r)
+		return
+	}
+
 	// /api/* 는 대시보드·인테이크, /v1/* 는 OTLP 수신구. 둘 다 게이트를 탄다.
 	if !hasPrefix(p, "/api/") && !hasPrefix(p, "/v1/") {
 		sendError(tw, http.StatusNotFound, "not found")
 		return
 	}
 
+	// 사람 로그인(ID/PW → 세션 쿠키)은 게이트 **앞**이다 — 로그인/로그아웃은 무자격으로 닿아야
+	// 하고 /me 는 스스로 401 을 낸다. 발급된 세션은 아래 게이트가 usage_sess 쿠키로 다시 인식한다.
+	if hasPrefix(p, "/api/auth/") {
+		s.serveAuth(tw, r, p)
+		return
+	}
+
 	auth := Authenticate(r, s.cfg)
+	// 사람 로그인 세션(usage_sess 쿠키) — cfg 토큰/쿠키로 못 뚫렸으면 세션으로 해석한다.
+	// 성공하면 세션의 role 이 스코프가 된다(admin=전사 열람, member=자기 데이터만).
+	if auth == nil {
+		auth = s.sessionAuth(r)
+	}
 	// 멀티테넌트(SaaS): cfg 토큰으로 못 뚫렸으면 Bearer 를 org 인제스트 키로 해석한다 —
 	// 성공하면 보고(intake) 스코프 + 해석된 tenant. 실패하면 종전대로 401.
 	if auth == nil && s.cfg.MultiTenant {
@@ -187,7 +215,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"인테이크 토큰으로는 조회할 수 없습니다 — 열람은 USAGE_ADMIN_TOKEN 을 사용하세요")
 		return
 	}
-	// 쿠키 자격증명으로는 상태변경을 태우지 않는다(패키지 주석 ②).
+	// 레거시 usage_tok 쿠키(ViaCookie)로는 상태변경을 태우지 않는다(패키지 주석 ②) — SameSite 보장이
+	// 없어 CSRF 표면이 되므로 조회만 연다. 사람 로그인 세션(ViaSession, usage_sess)은 항상
+	// SameSite=Strict+HttpOnly 로 발급되므로(authsession.go) 브라우저가 크로스사이트 요청에 안 실어
+	// 보낸다 — CSRF-safe 라 상태변경을 허용한다(보안검토 L-4: SameSite=Strict 로 실용적 충분).
 	if r.Method != http.MethodGet && r.Method != http.MethodHead && auth.Via == ViaCookie {
 		sendError(tw, http.StatusForbidden,
 			"쿠키 인증으로는 상태변경을 할 수 없습니다 — Authorization: Bearer 를 사용하세요")

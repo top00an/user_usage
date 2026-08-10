@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/tscorp/user-usage/internal/store"
@@ -52,6 +53,9 @@ const (
 	// MinTokenLen — 토큰 하한. 짧은 토큰은 인증이 아니라 설정 실수이고, 그것을 인증으로
 	// 취급하면 게이트가 있다는 착각만 남는다.
 	MinTokenLen = 16
+
+	// DefaultSessionTTL — 사람 로그인 세션 쿠키의 기본 수명(12시간). USAGE_SESSION_TTL 로 바꾼다.
+	DefaultSessionTTL = 12 * time.Hour
 )
 
 // Modes 는 인정하는 DB 모드 전부다.
@@ -124,6 +128,24 @@ type Config struct {
 	// 직접 읽으므로 여기 값은 **로그로 밝히기 위한 것**이다 — cwd 가 레포 루트가 아니면
 	// 단가가 조용히 시드로 떨어지는데, 그 사실이 어디에도 안 남으면 아무도 모른다.
 	ConfigPath string
+
+	// SessionTTL 은 사람 로그인(ID/PW) 세션 쿠키의 수명이다(USAGE_SESSION_TTL, 기본 12h).
+	// Go duration 문법("12h"·"30m"). 쿠키 Max-Age 와 DB expires_at 이 이 값으로 정해진다.
+	SessionTTL time.Duration
+
+	// Bootstrap* — 최초 관리자 부트스트랩(운영 첫 기동용). User·Password 가 둘 다 있고 그
+	// tenant 에 사용자가 하나도 없으면 admin 1명을 만든다. Password 는 로그로 절대 찍지 않는다.
+	// BootstrapTenant 는 비면 "default".
+	BootstrapAdminUser     string
+	BootstrapAdminPassword string
+	BootstrapTenant        string
+
+	// TrustedProxyCount 는 서버 앞에 놓인 **신뢰 프록시 홉 수**다(USAGE_TRUSTED_PROXY_COUNT, 기본 0).
+	// 0 이면 X-Forwarded-For 를 완전히 무시하고 RemoteAddr 만 rate-limit 키로 쓴다(현행 동작).
+	// N>0 이면 XFF 우측 N홉을 신뢰 프록시로 보고 그 왼쪽을 실클라이언트로 뽑는다(예: ALB 단독=1).
+	// 이게 없으면 ALB 뒤에서 모든 로그인이 ALB IP 라는 단일 버킷으로 붕괴해 rate-limit 이 무력화된다.
+	// 음수·비정수는 조용히 0 으로 접는다 — 안전한 기본값이지 부팅 거부 게이트가 아니다.
+	TrustedProxyCount int
 }
 
 // Env 는 프로세스 환경을 Read 가 받는 맵으로 만든다. **부작용을 아는 유일한 함수다.**
@@ -211,14 +233,14 @@ func Read(env map[string]string) (Config, []error) {
 	}
 
 	cfg := Config{
-		Token:                token,
-		IntakeToken:          intakeToken,
-		Mode:                 mode,
-		DatabaseURL:          databaseURL,
-		Port:                 port,
-		Host:                 host,
-		Tenant:               tenant,
-		DataDir:              get("USAGE_DATA_DIR"),
+		Token:       token,
+		IntakeToken: intakeToken,
+		Mode:        mode,
+		DatabaseURL: databaseURL,
+		Port:        port,
+		Host:        host,
+		Tenant:      tenant,
+		DataDir:     get("USAGE_DATA_DIR"),
 		// remote(pg)는 기본 읽기 전용이다(이미 운영 중인 DB 를 들여다보는 용도). 그러나
 		// **멀티테넌트(SaaS)는 pg 에 인테이크를 써야** 하므로 그때는 읽기 전용을 풀어야 한다 —
 		// org 별 격리는 RLS(부팅 프로브가 NOBYPASSRLS 를 강제)가 지므로 쓰기를 열어도 안전하다.
@@ -228,8 +250,52 @@ func Read(env map[string]string) (Config, []error) {
 		IntakeBurst:          floatDefault(get("USAGE_INTAKE_BURST"), 40),
 		KeywordRetentionDays: keywordRetention(get("USAGE_KEYWORD_RETENTION_DAYS")),
 		ConfigPath:           configPath(get("USAGE_CONFIG")),
+		SessionTTL:           sessionTTL(get("USAGE_SESSION_TTL")),
+		BootstrapAdminUser:   get("USAGE_BOOTSTRAP_ADMIN_USER"),
+		// 비밀번호는 **트림하지 않는다** — 앞뒤 공백도 유효한 비밀번호의 일부일 수 있다.
+		BootstrapAdminPassword: env["USAGE_BOOTSTRAP_ADMIN_PASSWORD"],
+		BootstrapTenant:        bootstrapTenant(get("USAGE_BOOTSTRAP_TENANT")),
+		TrustedProxyCount:      trustedProxyCount(get("USAGE_TRUSTED_PROXY_COUNT")),
 	}
 	return cfg, errs
+}
+
+// sessionTTL 은 세션 쿠키 수명을 읽는다. 비었거나 파싱 실패거나 0 이하면 기본값(12h).
+func sessionTTL(raw string) time.Duration {
+	if raw == "" {
+		return DefaultSessionTTL
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return DefaultSessionTTL
+	}
+	return d
+}
+
+// bootstrapTenant 는 부트스트랩 대상 테넌트다(비면 default — cfg.Tenant 와 독립적이다).
+func bootstrapTenant(raw string) string {
+	if raw == "" {
+		return DefaultTenant
+	}
+	return raw
+}
+
+/*
+ * trustedProxyCount 는 신뢰 프록시 홉 수를 읽는다.
+ *
+ * 비었거나 비정수거나 음수면 **조용히 0**(현행 동작 = XFF 무시). 여기서 거부 에러를 내지
+ * 않는 이유: 잘못 적어도 안전한 쪽(RemoteAddr 만 신뢰)으로 접히기 때문이다. 홉 수를 늘려
+ * XFF 를 신뢰하는 것이 위험한 방향이지, 0 으로 접는 것은 위험하지 않다.
+ */
+func trustedProxyCount(raw string) int {
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // floatDefault 는 float env 를 읽는다. 비었거나 파싱 실패면 dflt.
@@ -335,6 +401,12 @@ func Help() string {
 		"  USAGE_DATA_DIR     local 모드의 sqlite 디렉터리(기본 <cwd>/data)",
 		"  USAGE_CONFIG       단가표 config.json 경로(기본 <cwd>/config.json)",
 		"  USAGE_KEYWORD_RETENTION_DAYS  keyword 축 보존일(기본 90). off 면 정리기를 띄우지 않는다",
+		"  USAGE_SESSION_TTL  사람 로그인 세션 쿠키 수명(기본 12h). Go duration 문법(예: 12h·30m)",
+		"  USAGE_TRUSTED_PROXY_COUNT  서버 앞 신뢰 프록시 홉 수(기본 0=XFF 무시). ALB 단독이면 1. " +
+			"로그인 rate-limit 이 프록시 IP 단일 버킷으로 붕괴하는 것을 막는다",
+		"  USAGE_BOOTSTRAP_ADMIN_USER      최초 관리자 아이디(그 tenant 에 사용자가 없을 때만 생성)",
+		"  USAGE_BOOTSTRAP_ADMIN_PASSWORD  최초 관리자 비밀번호(로그에 절대 찍지 않는다)",
+		"  USAGE_BOOTSTRAP_TENANT          부트스트랩 대상 테넌트(기본 default)",
 		"",
 		"자세한 절차: README.md",
 	}, "\n")

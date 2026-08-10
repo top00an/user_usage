@@ -1,20 +1,20 @@
 'use client';
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { setUnauthorizedHandler } from '@/lib/api';
-import { clearToken, subscribeToken, tokenServerSnapshot, tokenSnapshot, writeToken } from '@/lib/token';
+import { getMe, isAborted, logout, setUnauthorizedHandler, type AuthUser } from '@/lib/api';
 import { ToastProvider } from '@/components/Toast';
-import TokenGate from '@/components/TokenGate';
+import Login from '@/components/Login';
 import GrafanaDash from '@/components/grafana/GrafanaDash';
 import UsageTrackTab from '@/components/usagetrack/UsageTrackTab';
 import UsageObsTab from '@/components/usageobs/UsageObsTab';
+import Onboarding from '@/components/Onboarding';
 
 /*
- * 셸 — 필요한 것은 넷뿐이다(현행 public/app.js 와 같은 계약):
- *   ① 토큰 게이트   서버는 Authorization 헤더 또는 쿠키 usage_tok 를 요구한다. 브라우저 fetch 로
- *                   헤더를 붙이는 대신 쿠키에 담는다 — 브라우저가 알아서 싣는다.
+ * 셸 — 필요한 것은 넷뿐이다:
+ *   ① 로그인 게이트  진입 시 getMe() 로 세션을 확인한다. 401 이면 로그인 화면, 성공이면 대시보드.
+ *                   자격증명은 서버가 내린 httpOnly 세션 쿠키로 실린다 — 셸은 토큰을 만지지 않는다.
  *   ② 탭 전환       pane 을 갈아끼우고 낡은 응답을 버린다(여기서는 key + AbortController).
- *   ③ 401 복구      토큰이 틀리거나 만료(=서버 재기동으로 토큰 교체)되면 게이트로 되돌린다.
+ *   ③ 401 복구      세션이 만료되거나 서버 재기동으로 끊기면 로그인 화면으로 되돌린다.
  *   ④ 해시 딥링크   #/usageobs 로 바로 열 수 있게. 상태가 URL 에 없으면 새로고침에 탭이 날아간다.
  */
 
@@ -37,7 +37,16 @@ const TABS = [
     desc: '왜 그 숫자인가 — 비용 · 좌석 · 팀 · 분포',
     icon: 'M12 3a9 9 0 1 0 9 9h-9V3Z M13 3a9 9 0 0 1 8 8h-8V3Z', // 도넛/분해
   },
+  {
+    id: 'onboarding',
+    label: '연동',
+    desc: '개발자 머신 연동 — 인제스트 키 발급 · 원라인 설치 명령 · 키 관리',
+    icon: 'M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5', // 링크/체인
+  },
 ] as const;
+
+/** 관리자 전용 탭 — member 는 목록에서 숨기고, 딥링크로도 열리지 않게 렌더에서도 막는다. */
+const ADMIN_ONLY_TABS = new Set<TabId>(['onboarding']);
 
 type TabId = (typeof TABS)[number]['id'];
 
@@ -55,40 +64,64 @@ function subscribeHash(cb: () => void): () => void {
   return () => window.removeEventListener('hashchange', cb);
 }
 
+/*
+ * 세션 상태. 정적 export 라 마운트 전에는 서버를 물어볼 수 없다 — 'loading' 으로 두고
+ * 마운트 뒤 getMe() 한 번으로 판정한다. 'no' 로 시작하면 로그인한 사람에게 로그인 화면이
+ * 한 프레임 번쩍인다.
+ */
+type Auth =
+  | { status: 'loading' }
+  | { status: 'out' }
+  | { status: 'in'; user: AuthUser };
+
 export default function Dashboard() {
-  /*
-   * 정적 export 라 이 컴포넌트는 빌드 시각에 한 번 미리 그려진다. 그때는 쿠키도 해시도 없다 —
-   * 서버 스냅샷을 'unknown' 으로 두어 마운트 전에는 아무 판단도 하지 않는다.
-   */
-  const auth = useSyncExternalStore(subscribeToken, tokenSnapshot, tokenServerSnapshot);
+  const [auth, setAuth] = useState<Auth>({ status: 'loading' });
+  const [note, setNote] = useState<string | null>(null);
+
   const tab = useSyncExternalStore(
     subscribeHash,
     () => tabFromHash(location.hash),
     () => TABS[0].id as TabId,
   );
-  const [note, setNote] = useState<string | null>(null);
+
+  /* ① 진입 시 세션 확인 — 401 이면 로그인, 성공이면 대시보드. */
+  useEffect(() => {
+    const ac = new AbortController();
+    getMe({ signal: ac.signal })
+      .then((user) => setAuth({ status: 'in', user }))
+      .catch((e) => {
+        if (isAborted(e)) return; // 언마운트로 인한 취소는 상태를 건드리지 않는다.
+        setAuth({ status: 'out' });
+      });
+    return () => ac.abort();
+  }, []);
 
   /*
-   * ③ 401 복구. 서버를 다시 띄우면 토큰이 바뀔 수 있고, 그때 화면은 빈 카드만 남는다 —
-   * 무엇이 잘못됐는지 말해 주고 다시 넣을 자리를 준다.
-   * (clearToken 이 스토어를 흔들어 화면이 게이트로 돌아간다 — 여기서 authed 를 따로 들지 않는다.)
+   * ③ 401 복구. 세션이 만료되거나 서버 재기동으로 끊기면 데이터 요청이 401 을 물고 오고,
+   * 그때 화면은 빈 카드만 남는다 — 로그인 화면으로 되돌리고 무슨 일이 있었는지 말해 준다.
    */
   useEffect(() => {
     setUnauthorizedHandler(() => {
-      clearToken();
-      setNote('토큰이 올바르지 않거나 만료되었습니다. 다시 입력하세요.');
+      setAuth({ status: 'out' });
+      setNote('세션이 만료되었습니다. 다시 로그인하세요.');
     });
     return () => setUnauthorizedHandler(() => {});
   }, []);
 
-  const openWith = useCallback((token: string) => {
+  const onLoggedIn = useCallback((user: AuthUser) => {
     setNote(null);
-    writeToken(token);
+    setAuth({ status: 'in', user });
   }, []);
 
-  const signOut = useCallback(() => {
-    clearToken();
-    setNote('토큰을 지웠습니다.');
+  const signOut = useCallback(async () => {
+    // 서버 세션 파기를 시도한다. 실패해도 화면은 로그인으로 돌린다 — 이미 나가려는 사용자다.
+    try {
+      await logout();
+    } catch {
+      /* 무시 */
+    }
+    setNote(null);
+    setAuth({ status: 'out' });
   }, []);
 
   const selectTab = useCallback((id: TabId) => {
@@ -96,10 +129,16 @@ export default function Dashboard() {
     location.hash = `#/${id}`;
   }, []);
 
-  if (auth === 'unknown') return <div className="login-wrap"><div className="muted">로딩 중…</div></div>;
-  if (auth === 'no') return <TokenGate note={note} onSubmit={openWith} />;
+  if (auth.status === 'loading') return <div className="login-wrap"><div className="muted">로딩 중…</div></div>;
+  if (auth.status === 'out') return <Login note={note} onSuccess={onLoggedIn} />;
 
-  const active = TABS.find((t) => t.id === tab) ?? TABS[0];
+  const { user } = auth;
+  const isAdmin = user.role === 'admin';
+  const roleLabel = isAdmin ? '관리자' : '구성원';
+  // 관리자 전용 탭은 member 목록에서 뺀다. 딥링크로 #/onboarding 에 온 member 는 여기 없어
+  // active 가 첫 탭으로 접히고, 아래 패널도 렌더되지 않는다(이중 방어).
+  const visibleTabs = TABS.filter((t) => isAdmin || !ADMIN_ONLY_TABS.has(t.id));
+  const active = visibleTabs.find((t) => t.id === tab) ?? visibleTabs[0]!;
 
   return (
     <ToastProvider>
@@ -113,8 +152,8 @@ export default function Dashboard() {
           </div>
 
           <nav className="side-nav" role="tablist" aria-orientation="vertical" aria-label="화면">
-            {TABS.map((t) => {
-              const on = t.id === tab;
+            {visibleTabs.map((t) => {
+              const on = t.id === active.id;
               return (
                 <button
                   key={t.id}
@@ -129,8 +168,8 @@ export default function Dashboard() {
                   onKeyDown={(e) => {
                     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
                     e.preventDefault();
-                    const i = TABS.findIndex((x) => x.id === tab);
-                    const next = TABS[(i + (e.key === 'ArrowDown' ? 1 : -1) + TABS.length) % TABS.length]!;
+                    const i = visibleTabs.findIndex((x) => x.id === active.id);
+                    const next = visibleTabs[(i + (e.key === 'ArrowDown' ? 1 : -1) + visibleTabs.length) % visibleTabs.length]!;
                     selectTab(next.id);
                     requestAnimationFrame(() => document.getElementById(`shelltab-${next.id}`)?.focus());
                   }}
@@ -145,8 +184,13 @@ export default function Dashboard() {
           </nav>
 
           <div className="side-foot">
-            <span className="badge ok" title="이 서버는 데이터를 쓰지 않고 조회만 합니다">조회 전용</span>
-            <button className="ghost" id="signout" type="button" onClick={signOut}>토큰 지우기</button>
+            <span
+              className={`badge ${user.role === 'admin' ? 'ok' : ''}`}
+              title={`${user.username} · ${user.tenant}`}
+            >
+              {roleLabel}
+            </span>
+            <button className="ghost" id="signout" type="button" onClick={signOut}>로그아웃</button>
           </div>
         </aside>
 
@@ -165,10 +209,11 @@ export default function Dashboard() {
             ② key 로 탭마다 트리를 통째로 새로 만든다 — 앞 탭의 useEffect 정리 함수가 돌아
             진행 중인 요청이 abort 되고, 늦게 도착한 응답은 버려진다(hooks/useResource.ts).
           */}
-          <div id="tabpanel" role="tabpanel" aria-labelledby={`shelltab-${tab}`} tabIndex={-1}>
-            {tab === 'overview' && <GrafanaDash key="overview" />}
-            {tab === 'usage' && <UsageTrackTab key="usage" />}
-            {tab === 'usageobs' && <UsageObsTab key="usageobs" />}
+          <div id="tabpanel" role="tabpanel" aria-labelledby={`shelltab-${active.id}`} tabIndex={-1}>
+            {active.id === 'overview' && <GrafanaDash key="overview" />}
+            {active.id === 'usage' && <UsageTrackTab key="usage" />}
+            {active.id === 'usageobs' && <UsageObsTab key="usageobs" />}
+            {active.id === 'onboarding' && <Onboarding key="onboarding" />}
           </div>
         </main>
       </div>

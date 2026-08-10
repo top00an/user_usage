@@ -2,36 +2,43 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Dashboard from '@/components/Dashboard';
-import { readToken, writeToken, clearToken } from '@/lib/token';
-import { golden, mockFetch, obsRoutes, trackRoutes } from './helpers';
+import { authRoutes, golden, mockFetch, obsRoutes, trackRoutes } from './helpers';
 
-const TOKEN = 'test-admin-token-0123456789';
+const USER = { username: 'admin', role: 'admin', tenant: 'acme' };
 
 function allRoutes(extra: Parameters<typeof mockFetch>[0] = []) {
-  return [...extra, ...trackRoutes(), ...obsRoutes()];
+  return [...extra, ...authRoutes(USER), ...trackRoutes(), ...obsRoutes()];
+}
+
+/** 진입 시 getMe() 가 401 인(=미로그인) 상태의 라우트 묶음. */
+function loggedOutRoutes(extra: Parameters<typeof mockFetch>[0] = []) {
+  return [...extra, ['/api/auth/me', { status: 401, body: {} }] as [string, { status: number; body: unknown }], ...trackRoutes(), ...obsRoutes()];
 }
 
 beforeEach(() => {
-  clearToken();
   location.hash = '';
 });
 
-describe('셸 — 게이트 · 탭 · 401 복구', () => {
-  it('토큰이 없으면 게이트를 그린다', async () => {
-    mockFetch(allRoutes());
+describe('셸 — 로그인 게이트 · 탭 · 401 복구', () => {
+  it('세션이 없으면(getMe 401) 로그인 화면을 그린다', async () => {
+    mockFetch(loggedOutRoutes());
     render(<Dashboard />);
-    expect(await screen.findByLabelText('사용량 대시보드 토큰')).toBeInTheDocument();
+    expect(await screen.findByLabelText('아이디')).toBeInTheDocument();
+    expect(screen.getByLabelText('비밀번호')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '로그인' })).toBeInTheDocument();
   });
 
-  it('토큰을 넣으면 쿠키에 담고 대시보드를 연다 (기본 탭)', async () => {
-    mockFetch(allRoutes());
+  it('로그인에 성공하면 대시보드를 연다 (기본 탭)', async () => {
+    mockFetch(loggedOutRoutes([
+      ['/api/auth/login', { body: { ok: true, user: USER } }],
+    ]));
     const user = userEvent.setup();
     render(<Dashboard />);
 
-    await user.type(await screen.findByLabelText('사용량 대시보드 토큰'), TOKEN);
-    await user.click(screen.getByRole('button', { name: '열기' }));
+    await user.type(await screen.findByLabelText('아이디'), 'admin');
+    await user.type(screen.getByLabelText('비밀번호'), 'pw-123456');
+    await user.click(screen.getByRole('button', { name: '로그인' }));
 
-    expect(readToken()).toBe(TOKEN);
     // 기본 랜딩은 '대시보드'(overview). 탭이 선택돼 있어야 한다.
     expect(await screen.findByRole('tab', { name: '대시보드' })).toHaveAttribute('aria-selected', 'true');
     // 사용 추적으로 이동하면 그 화면이 그려진다.
@@ -39,62 +46,91 @@ describe('셸 — 게이트 · 탭 · 401 복구', () => {
     expect(await screen.findByRole('heading', { name: '사용자별' })).toBeInTheDocument();
   });
 
-  it('빈 토큰 제출은 조용히 무시되지 않는다', async () => {
-    mockFetch(allRoutes());
+  it('빈 제출은 조용히 무시되지 않는다', async () => {
+    mockFetch(loggedOutRoutes());
     const user = userEvent.setup();
     render(<Dashboard />);
-    await user.click(await screen.findByRole('button', { name: '열기' }));
-    expect(await screen.findByText('토큰을 입력하세요.')).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: '로그인' }));
+    expect(await screen.findByText('아이디와 비밀번호를 입력하세요.')).toBeInTheDocument();
+  });
+
+  it('자격증명이 틀리면(401) 폼 위에 안내하고 로그인 화면에 머문다', async () => {
+    mockFetch(loggedOutRoutes([
+      ['/api/auth/login', { status: 401, body: { ok: false, error: '아무 문장' } }],
+    ]));
+    const user = userEvent.setup();
+    render(<Dashboard />);
+
+    await user.type(await screen.findByLabelText('아이디'), 'admin');
+    await user.type(screen.getByLabelText('비밀번호'), 'wrong-pw');
+    await user.click(screen.getByRole('button', { name: '로그인' }));
+
+    expect(await screen.findByText('아이디 또는 비밀번호가 올바르지 않습니다')).toBeInTheDocument();
+    // 게이트로 남는다 — 대시보드로 넘어가지 않았다.
+    expect(screen.getByLabelText('아이디')).toBeInTheDocument();
   });
 
   /*
-   * 401 복구. 서버를 다시 띄우면 토큰이 바뀔 수 있고, 그때 화면은 빈 카드만 남는다 —
-   * 무엇이 잘못됐는지 말해 주고 다시 넣을 자리를 준다.
+   * ③ 401 복구. 세션이 만료되거나 서버 재기동으로 끊기면 데이터 요청이 401 을 물고 오고,
+   * 그때 화면은 빈 카드만 남는다 — 로그인 화면으로 되돌리고 무엇이 잘못됐는지 말해 준다.
    */
-  it('401 이면 쿠키를 지우고 게이트로 되돌아온다', async () => {
-    writeToken('stale-token');
-    mockFetch([['/api/usage', { status: 401, body: { error: 'unauthorized' } }]]);
+  it('데이터 요청이 401 이면 로그인 화면으로 되돌아온다', async () => {
+    mockFetch([
+      ...authRoutes(USER),
+      ['/api/usage', { status: 401, body: { error: 'unauthorized' } }],
+    ]);
     render(<Dashboard />);
 
-    expect(await screen.findByText('토큰이 올바르지 않거나 만료되었습니다. 다시 입력하세요.')).toBeInTheDocument();
-    expect(readToken()).toBe('');
+    expect(await screen.findByText('세션이 만료되었습니다. 다시 로그인하세요.')).toBeInTheDocument();
+    expect(screen.getByLabelText('아이디')).toBeInTheDocument();
   });
 
-  it('403 은 게이트로 튕기지 않고 권한 안내를 보여준다 (문구가 아니라 status 로 분기)', async () => {
-    writeToken(TOKEN);
+  it('403 은 로그인으로 튕기지 않고 권한 안내를 보여준다 (문구가 아니라 status 로 분기)', async () => {
     location.hash = '#/usage'; // 에러 UI 를 surface 하는 탭에서 검사(대시보드는 fail-soft)
-    // 문구는 403 과 무관한 아무 글자다 — 그래도 권한 안내가 나와야 한다.
-    mockFetch([['/api/usage', { status: 403, body: { error: '설명이 언제든 바뀔 수 있는 문장' } }]]);
+    mockFetch([
+      ...authRoutes(USER),
+      ['/api/usage', { status: 403, body: { error: '설명이 언제든 바뀔 수 있는 문장' } }],
+    ]);
     render(<Dashboard />);
 
     expect(await screen.findByRole('heading', { name: '권한이 필요합니다' })).toBeInTheDocument();
-    expect(readToken()).toBe(TOKEN);   // 게이트로 튕기지 않았다
+    expect(screen.queryByLabelText('아이디')).not.toBeInTheDocument(); // 게이트로 튕기지 않았다
   });
 
   it('5xx 는 연결 실패로 안내하고 다시 시도를 준다', async () => {
-    writeToken(TOKEN);
-    location.hash = '#/usage'; // 에러 UI 를 surface 하는 탭에서 검사(대시보드는 fail-soft)
-    mockFetch([['/api/usage', { status: 503, body: { error: '설명' } }]]);
+    location.hash = '#/usage';
+    mockFetch([
+      ...authRoutes(USER),
+      ['/api/usage', { status: 503, body: { error: '설명' } }],
+    ]);
     render(<Dashboard />);
     expect(await screen.findByRole('heading', { name: '서버가 응답하지 못했습니다' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '다시 시도' })).toBeInTheDocument();
   });
 
-  it('토큰 지우기는 쿠키를 지우고 게이트로 돌아간다', async () => {
-    writeToken(TOKEN);
-    mockFetch(allRoutes());
+  it('로그아웃하면 세션을 파기하고 로그인 화면으로 돌아간다', async () => {
+    const { fn } = mockFetch(allRoutes([
+      ['/api/auth/logout', { status: 204 }],
+    ]));
     const user = userEvent.setup();
     render(<Dashboard />);
 
     await screen.findByRole('tab', { name: '대시보드' });
-    await user.click(screen.getByRole('button', { name: '토큰 지우기' }));
+    await user.click(screen.getByRole('button', { name: '로그아웃' }));
 
-    expect(await screen.findByText('토큰을 지웠습니다.')).toBeInTheDocument();
-    expect(readToken()).toBe('');
+    expect(await screen.findByLabelText('아이디')).toBeInTheDocument();
+    // 서버 세션 파기를 실제로 호출했다.
+    expect(fn.mock.calls.some(([u]) => String(u).includes('/api/auth/logout'))).toBe(true);
+  });
+
+  it('로그인한 사용자의 role 을 배지로 보여준다', async () => {
+    mockFetch(allRoutes());
+    render(<Dashboard />);
+    await screen.findByRole('tab', { name: '대시보드' });
+    expect(screen.getByText('관리자')).toBeInTheDocument();
   });
 
   it('해시 딥링크로 관측 탭을 바로 연다', async () => {
-    writeToken(TOKEN);
     location.hash = '#/usageobs';
     mockFetch(allRoutes());
     render(<Dashboard />);
@@ -106,8 +142,8 @@ describe('셸 — 게이트 · 탭 · 401 복구', () => {
    * 없으면 화면이 틀린 값을 보여주는데 아무 에러도 안 난다. 조용한 오표시가 가장 비싸다.
    */
   it('탭을 빠르게 오가면 앞 탭의 늦은 응답을 버린다', async () => {
-    writeToken(TOKEN);
     const { fn } = mockFetch([
+      ...authRoutes(USER),
       // 추적 탭의 summary 만 아주 늦게 온다
       ['/api/usage/summary', { body: golden('summary'), delay: 500 }],
       ...trackRoutes(),
@@ -134,7 +170,6 @@ describe('셸 — 게이트 · 탭 · 401 복구', () => {
   });
 
   it('탭은 키보드 상하 화살표로도 옮겨진다(세로 내비)', async () => {
-    writeToken(TOKEN);
     mockFetch(allRoutes());
     const user = userEvent.setup();
     render(<Dashboard />);
@@ -151,7 +186,6 @@ describe('셸 — 게이트 · 탭 · 401 복구', () => {
 
 describe('사용 추적 — ④ 근사값을 정확한 값으로 위장하지 않는다', () => {
   beforeEach(() => {
-    writeToken(TOKEN);
     location.hash = '#/usage'; // 이 블록은 '사용 추적' 탭 내용을 검사한다(기본 탭은 대시보드)
     mockFetch(allRoutes());
   });
@@ -182,6 +216,7 @@ describe('사용 추적 — ④ 근사값을 정확한 값으로 위장하지 �
   it('보존 기한이 있으면 일수를 말한다', async () => {
     const s = golden<Record<string, unknown>>('summary');
     mockFetch([
+      ...authRoutes(USER),
       ['/api/usage/summary', { body: { ...s, retention: { keywordDays: 90 } } }],
       ...trackRoutes(),
       ...obsRoutes(),
@@ -193,7 +228,6 @@ describe('사용 추적 — ④ 근사값을 정확한 값으로 위장하지 �
 
 describe('사용 관측 — ④ 나머지 항목', () => {
   beforeEach(() => {
-    writeToken(TOKEN);
     location.hash = '#/usageobs';
     mockFetch(allRoutes());
   });
@@ -221,6 +255,7 @@ describe('사용 관측 — ④ 나머지 항목', () => {
 
   it('곁가지 조회가 실패해도 비용 카드는 남는다 (fail-soft)', async () => {
     mockFetch([
+      ...authRoutes(USER),
       ['/api/usage/leaderboard', { status: 500, body: { error: '터졌다' } }],
       ['/api/usage/quality', { status: 500, body: { error: '터졌다' } }],
       ['/api/usage/coverage', { status: 500, body: { error: '터졌다' } }],
@@ -257,11 +292,11 @@ describe('사용 관측 — ④ 나머지 항목', () => {
 
 describe('XSS — 서버 값을 마크업으로 해석하지 않는다', () => {
   it('사용자 이름에 태그가 들어와도 텍스트로 남는다', async () => {
-    writeToken(TOKEN);
     location.hash = '#/usage'; // byUser(사용 추적) 렌더에서 XSS 안전성 검사
     const s = golden<{ byUser: unknown[] }>('summary');
     const evil = '<img src=x onerror="document.title=\'xss\'">';
     mockFetch([
+      ...authRoutes(USER),
       ['/api/usage/summary', {
         body: {
           ...s,

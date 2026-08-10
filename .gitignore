@@ -6,6 +6,11 @@
 /go/usage-server
 /go/bin/
 
+# 수집기 크로스컴파일 산출물. scripts/build.sh 가 agentbin/<goos>_<goarch>/usage-collector 로
+# 채우고 서버가 go:embed 로 집는다 — 빌드로 재현되는 수십 MB 라 커밋하지 않는다(빈 디렉터리
+# 유지는 agentbin/.gitkeep 이 한다).
+/go/internal/httpapi/agentbin/*/
+
 # Next.js 빌드 산출물. `out/` 은 Go 바이너리가 go:embed 로 집는 정적 export 결과물이라
 # 소스가 아니다 — 빌드로 재현되는 것을 커밋하면 소스와 어긋난 채 배포되는 날이 온다.
 /web/.next/

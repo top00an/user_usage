@@ -1,0 +1,50 @@
+# terraform.tfvars.example — 이 파일을 terraform.tfvars 로 복사해 값을 채운다.
+#
+# ⚠ 실제 비밀·토큰·접속문자열을 이 파일에 넣지 말 것. DB 접속문자열과 두 토큰은
+#   terraform 이 자동 생성하여 Secrets Manager 에 넣는다(secrets.tf). 굳이 직접 지정하려면
+#   admin_token_override/intake_token_override 를 쓰되 tfvars 가 아니라 -var 나 환경변수
+#   (TF_VAR_admin_token_override=...) 로만 넘긴다. terraform.tfvars 는 .gitignore 로 제외한다.
+
+# ── 필수 ────────────────────────────────────────────────────────────────
+region      = "ap-northeast-2"
+domain_name = "usage.example.com"
+
+# 도메인이 Route53 에 있으면 zone id 를 주면 ACM 검증·A레코드가 자동 생성된다.
+# 비우면 outputs.acm_validation_records / alb_dns_name 을 보고 DNS 를 수동 설정한다.
+# route53_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# ── 선택(기본값 있음) ─────────────────────────────────────────────────────
+# project     = "user-usage"
+# environment = "prod"
+
+# 네트워크
+# vpc_cidr           = "10.20.0.0/16"
+# az_count           = 2
+# single_nat_gateway = true   # 비용 절감. 운영 고가용성엔 false.
+
+# 컴퓨트
+# image_tag     = "latest"
+# task_cpu      = 512
+# task_memory   = 1024
+# desired_count = 2
+
+# 데이터(RDS)
+# db_engine_version        = "16.4"
+# db_instance_class        = "db.t4g.micro"
+# db_allocated_storage     = 20
+# db_multi_az              = false
+# db_deletion_protection   = true
+# db_skip_final_snapshot   = false
+# db_backup_retention_days = 7
+
+# WAF
+# enable_waf     = true
+# waf_rate_limit = 2000
+
+# 세션 로그인 / 부트스트랩 관리자
+# bootstrap_admin_user = "admin"     # 최초 로그인 아이디
+# bootstrap_tenant     = "default"
+# session_ttl          = "12h"       # Go duration
+# trusted_proxy_count  = 1           # ALB 단독 = 1홉. CloudFront 등 앞단 추가 시 홉 수만큼 증가.
+# 비밀번호는 자동 생성되어 Secrets Manager <name>/bootstrap-admin-password 에 들어간다.
+# 직접 지정하려면 tfvars 가 아니라: export TF_VAR_bootstrap_admin_password_override='...'

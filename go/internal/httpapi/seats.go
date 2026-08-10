@@ -46,11 +46,11 @@ type seatRowDTO struct {
 }
 
 type seatsSummaryDTO struct {
-	ActiveSeats     int      `json:"activeSeats"`     // 현재 기간 세션 ≥1 인 사용자 수
-	PrevActiveSeats int      `json:"prevActiveSeats"` // 직전 기간
-	TotalUsd        float64  `json:"totalUsd"`
-	PrevTotalUsd    float64  `json:"prevTotalUsd"`
-	UsdPerSeat      float64  `json:"usdPerSeat"` // 활성 좌석당 평균 비용
+	ActiveSeats      int      `json:"activeSeats"`     // 현재 기간 세션 ≥1 인 사용자 수
+	PrevActiveSeats  int      `json:"prevActiveSeats"` // 직전 기간
+	TotalUsd         float64  `json:"totalUsd"`
+	PrevTotalUsd     float64  `json:"prevTotalUsd"`
+	UsdPerSeat       float64  `json:"usdPerSeat"` // 활성 좌석당 평균 비용
 	TotalUsdDeltaPct *float64 `json:"totalUsdDeltaPct"`
 }
 
@@ -68,11 +68,11 @@ type seatsResponse struct {
 
 // seatAcc 는 한 사용자의 한 기간 집계다.
 type seatAcc struct {
-	sessions              int
-	turns, tokens         int64
-	cacheRead, denom      int64
-	usd                   float64
-	priced                bool
+	sessions         int
+	turns, tokens    int64
+	cacheRead, denom int64
+	usd              float64
+	priced           bool
 }
 
 func (s *server) routeSeats(w http.ResponseWriter, r *http.Request, c *rctx) (bool, error) {
@@ -195,10 +195,10 @@ func (s *server) routeTeams(w http.ResponseWriter, r *http.Request, c *rctx) (bo
 	perUser := aggregateSeats(rows, costs)
 
 	type tacc struct {
-		members            map[string]bool
-		sessions           int
-		turns, tokens      int64
-		usd                float64
+		members       map[string]bool
+		sessions      int
+		turns, tokens int64
+		usd           float64
 	}
 	const unassigned = "미배정"
 	by := map[string]*tacc{}

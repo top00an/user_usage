@@ -269,3 +269,38 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+// USAGE_TRUSTED_PROXY_COUNT — ALB 등 신뢰 프록시 홉 수. 기본 0(현행 동작).
+// 음수·비정수는 조용히 0 으로 접는다(경고 로그 없음 — 게이트가 아니라 안전한 기본값).
+func TestTrustedProxyCount(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want int
+	}{
+		{"", 0},      // 미설정 → 기본 0
+		{"0", 0},     // 명시 0
+		{"1", 1},     // ALB 단독
+		{"2", 2},     // CDN + ALB
+		{"  2  ", 2}, // 공백 트림
+		{"-1", 0},    // 음수 → 0
+		{"abc", 0},   // 비정수 → 0
+		{"1.5", 0},   // 소수 → 0(Atoi 실패)
+		{"999999", 999999},
+	}
+	for _, tc := range cases {
+		env := ok()
+		if tc.raw != "" {
+			env["USAGE_TRUSTED_PROXY_COUNT"] = tc.raw
+		}
+		cfg := mustPass(t, env)
+		if cfg.TrustedProxyCount != tc.want {
+			t.Fatalf("USAGE_TRUSTED_PROXY_COUNT=%q → %d, want %d", tc.raw, cfg.TrustedProxyCount, tc.want)
+		}
+	}
+}
+
+func TestHelpMentionsTrustedProxyCount(t *testing.T) {
+	if !strings.Contains(Help(), "USAGE_TRUSTED_PROXY_COUNT") {
+		t.Fatal("Help() 에 USAGE_TRUSTED_PROXY_COUNT 안내가 없다")
+	}
+}
