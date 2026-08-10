@@ -780,3 +780,186 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
   line-height: 1.5;
   user-select: all;
 }
+
+/* ── 아키텍처(작동 방식) 탭 ──────────────────────────────────────────────── */
+/* 섹션 제목 — content-head 의 h1 아래 단계로, 카드 h3 위. */
+.arch-h { font-size: 1rem; font-weight: 680; letter-spacing: -.01em; }
+
+/* 핵심 데이터 정책 4배지 — 도식 앞에서 시스템의 뼈대를 먼저 세운다. */
+.arch-policy {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+  margin-bottom: var(--gap);
+}
+.arch-policy-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.arch-policy-item > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.arch-policy-ico {
+  flex: none;
+  width: 28px; height: 28px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+  color: var(--accent);
+  font-size: .95rem;
+}
+
+/* 구성도 컨테이너 — 넓으면 자기 안에서만 가로 스크롤(본문은 밀지 않는다). */
+.arch-diagram-scroll { overflow-x: auto; max-width: 100%; padding-bottom: 4px; }
+.arch-diagram {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 780px;   /* 좁은 화면에선 이 폭을 유지한 채 컨테이너가 가로 스크롤한다 */
+  padding: 4px 2px;
+}
+
+/* 영역(zone) — 개발자 머신 / 인터넷 / 클라우드. 색 틴트로 구분하고 헤더에 라벨. */
+.arch-zone {
+  flex: 1 1 0;
+  min-width: 210px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+  overflow: hidden;
+}
+.arch-zone-h {
+  padding: 8px 12px;
+  font-size: .78rem;
+  font-weight: 640;
+  color: var(--fg-muted);
+  border-bottom: 1px solid var(--border-soft);
+  display: flex; align-items: center; gap: 6px;
+}
+.arch-zone-badge {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  font-weight: 700;
+}
+.arch-zone-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  flex: 1;
+}
+/* 영역별 좌측 액센트 — 색만으로 말하지 않게 헤더 텍스트 라벨과 함께 쓴다. */
+.arch-zone.zone-client { border-color: color-mix(in srgb, var(--fg-faint) 30%, var(--border)); }
+.arch-zone.zone-net    { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.arch-zone.zone-cloud  { border-color: color-mix(in srgb, var(--accent-to) 45%, var(--border)); }
+.arch-zone.zone-net .arch-zone-h    { color: var(--accent); }
+
+/* 노드 카드 */
+.arch-node {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.arch-node-head { display: flex; align-items: center; gap: 6px; }
+.arch-node-step { color: var(--accent); font-weight: 700; font-variant-numeric: tabular-nums; }
+.arch-node-title { font-weight: 640; font-size: .9rem; }
+.arch-node-sub {
+  color: var(--fg-faint);
+  font-size: .78em;
+  overflow-wrap: anywhere;
+}
+.arch-node-note { line-height: 1.5; }
+
+/* 서버 내부 순서(org.Resolve → … → UPSERT) */
+.arch-flow {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: .8rem;
+  color: var(--fg-muted);
+}
+.arch-flow li { line-height: 1.5; }
+.arch-flow code { font-size: .92em; }
+
+/* 칩 — 흐름·정책·보안 강조. 색 + 글리프(색각 이상 대비). */
+.arch-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.arch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--fg-muted);
+  font-size: .74rem;
+  line-height: 1.5;
+}
+.arch-chip.chip-policy { border-color: var(--warn-bd); color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.arch-chip.chip-net    { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.arch-chip.chip-sec    { border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+
+/* 연결 화살표 */
+.arch-conn { display: flex; align-items: center; justify-content: center; color: var(--fg-faint); }
+.arch-conn-svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.arch-conn-down { flex-direction: column; gap: 2px; padding: 2px 0; }
+.arch-conn-down .arch-conn-svg { width: 20px; height: 20px; }
+.arch-conn-right { flex: none; align-self: center; flex-direction: column; gap: 2px; padding: 0 2px; }
+.arch-conn-right .arch-conn-svg { width: 26px; height: 26px; }
+.arch-conn-label {
+  font-size: .68rem;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  text-align: center;
+}
+
+/* 범례 */
+.arch-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 12px; }
+.arch-legend li { display: flex; align-items: center; gap: 6px; font-size: .76rem; color: var(--fg-muted); }
+.arch-legend-dot { width: 12px; height: 12px; border-radius: 4px; flex: none; border: 1px solid var(--border); }
+.arch-legend-dot.zone-client { background: color-mix(in srgb, var(--fg-faint) 40%, var(--surface-2)); }
+.arch-legend-dot.zone-net    { background: color-mix(in srgb, var(--accent) 60%, var(--surface-2)); border-color: var(--accent); }
+.arch-legend-dot.zone-cloud  { background: color-mix(in srgb, var(--accent-to) 60%, var(--surface-2)); border-color: var(--accent-to); }
+
+/* ①~⑥ 단계 설명 — 도식의 텍스트 정본. */
+.arch-step-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.arch-step {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.arch-step-num {
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent-from), var(--accent-to));
+  color: var(--accent-fg);
+  font-weight: 700;
+  font-size: .9rem;
+}
+.arch-step-body { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.arch-step-body h3 { font-size: .9rem; }
+.arch-step-body p { line-height: 1.6; }
+.arch-step-body code { overflow-wrap: anywhere; }
+
+/* 좁은 화면: 도식은 스크롤(min-width 유지), 정책·단계는 세로로 접힌다. */
+@media (max-width: 560px) {
+  .arch-step { grid-template-columns: 1fr; }
+  .arch-step-num { margin-bottom: 2px; }
+}
