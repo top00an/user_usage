@@ -8,6 +8,7 @@ import GrafanaDash from '@/components/grafana/GrafanaDash';
 import UsageTrackTab from '@/components/usagetrack/UsageTrackTab';
 import UsageObsTab from '@/components/usageobs/UsageObsTab';
 import Onboarding from '@/components/Onboarding';
+import Architecture from '@/components/Architecture';
 
 /*
  * 셸 — 필요한 것은 넷뿐이다:
@@ -43,10 +44,16 @@ const TABS = [
     desc: '개발자 머신 연동 — 인제스트 키 발급 · 원라인 설치 명령 · 키 관리',
     icon: 'M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5', // 링크/체인
   },
+  {
+    id: 'architecture',
+    label: '아키텍처',
+    desc: '작동 방식 — 인제스트 키로 데이터가 수집 · 연동 · 수신되는 구성도와 흐름 설명',
+    icon: 'M4 5h6v6H4V5Zm10 8h6v6h-6v-6ZM7 11v2m0 0h10m0 0v2M7 13H7', // 노드-연결 도식
+  },
 ] as const;
 
 /** 관리자 전용 탭 — member 는 목록에서 숨기고, 딥링크로도 열리지 않게 렌더에서도 막는다. */
-const ADMIN_ONLY_TABS = new Set<TabId>(['onboarding']);
+const ADMIN_ONLY_TABS = new Set<TabId>(['onboarding', 'architecture']);
 
 type TabId = (typeof TABS)[number]['id'];
 
@@ -214,6 +221,7 @@ export default function Dashboard() {
             {active.id === 'usage' && <UsageTrackTab key="usage" />}
             {active.id === 'usageobs' && <UsageObsTab key="usageobs" />}
             {active.id === 'onboarding' && <Onboarding key="onboarding" />}
+            {active.id === 'architecture' && <Architecture key="architecture" />}
           </div>
         </main>
       </div>
