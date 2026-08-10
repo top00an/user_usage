@@ -67,7 +67,7 @@ function BarTable({ rows, unit, fmt }: { rows: { label: string; value: number }[
   const palette = ['#5794f2', '#e0742f', '#73bf69', '#f2cc0c', '#b877d9', '#37872d', '#e0523e', '#8ab8ff'];
   return (
     <table className="gtable">
-      <thead><tr><th>Name</th><th className="r">{unit}</th></tr></thead>
+      <thead><tr><th>이름</th><th className="r">{unit}</th></tr></thead>
       <tbody>
         {rows.map((r, i) => (
           <tr key={r.label}>
@@ -136,8 +136,13 @@ export default function GrafanaDash() {
   const cost = seats?.summary?.totalUsd ?? null;
 
   // ── 섹션별 아이템 ──
+  /*
+   * 라벨은 한국어로 통일한다. 비용 타일만 한글(COST_LABEL)이고 나머지가 영어면, 한 행 안에서
+   * 두 언어가 섞여 사람은 그 차이를 **의미의 차이**로 읽는다("한글 타일만 우리가 계산한 값인가?").
+   * 여기서 바꾸는 것은 표시 문자열뿐이다 — 패널 id(DragGrid 레이아웃 키)는 건드리지 않는다.
+   */
   const live: GridItem[] = [
-    { id: 'live-sessions', node: <StatTile tone="t-teal" k="Active Sessions" v={fmtInt(t.sessions)} s={`users ${t.users} · machines ${t.machines}`} /> },
+    { id: 'live-sessions', node: <StatTile tone="t-teal" k="활성 세션" v={fmtInt(t.sessions)} s={`사용자 ${t.users} · 머신 ${t.machines}`} /> },
     /*
      * 'Total Cost' 였던 자리. 그 이름은 청구액으로 읽힌다 — 우리 값은 환산 추정치다(lib/costLabels.ts).
      * 부제의 '90-day' 도 사실이 아니었다: 이 타일은 getSeats(3650) 의 합계라 전체 기간이다.
@@ -151,15 +156,15 @@ export default function GrafanaDash() {
         title={`${COST_DISCLAIMER}. ${COST_WHY}`}
       />
     ) },
-    { id: 'live-tokens', node: <StatTile tone="t-orange" k="Total Tokens" v={short(tokensTotal)} s={`cache read ${short(t.cacheRead)}`} /> },
-    { id: 'live-output', node: <StatTile tone="t-purple" k="Output Tokens" v={short(t.output)} s={`input ${short(t.input)}`} /> },
-    { id: 'live-hit', node: <GaugeTile tone="t-teal" label="Cache Hit Ratio" value={cacheHit} color="#73bf69" /> },
-    { id: 'live-share', node: <GaugeTile tone="t-blue" label="Cache Read Share" value={cacheReadShare} color="#5794f2" /> },
+    { id: 'live-tokens', node: <StatTile tone="t-orange" k="전체 토큰" v={short(tokensTotal)} s={`캐시읽기 ${short(t.cacheRead)}`} /> },
+    { id: 'live-output', node: <StatTile tone="t-purple" k="출력 토큰" v={short(t.output)} s={`입력 ${short(t.input)}`} /> },
+    { id: 'live-hit', node: <GaugeTile tone="t-teal" label="캐시 적중률" value={cacheHit} color="#73bf69" /> },
+    { id: 'live-share', node: <GaugeTile tone="t-blue" label="캐시읽기 비중" value={cacheReadShare} color="#5794f2" /> },
   ];
 
   const cost2: GridItem[] = [
-    { id: 'cost-models', node: <Panel title="Token Distribution by Model"><BarTable rows={modelRows} unit="Tokens" fmt={short} /></Panel> },
-    { id: 'cost-rate', node: <Panel title="Token Rate (daily)"><EChart option={areaOption(x, [{ name: 'tokens', color: '#73bf69', data: days.map((d) => d.input + d.output + d.cacheRead + d.cacheCreate) }], short)} height={180} /></Panel> },
+    { id: 'cost-models', node: <Panel title="모델별 토큰 분포"><BarTable rows={modelRows} unit="토큰" fmt={short} /></Panel> },
+    { id: 'cost-rate', node: <Panel title="일별 토큰 추이"><EChart option={areaOption(x, [{ name: '토큰', color: '#73bf69', data: days.map((d) => d.input + d.output + d.cacheRead + d.cacheCreate) }], short)} height={180} /></Panel> },
   ];
 
   // 개발 지표(LOC·편집 결정) — 실제 수집값. dev 가 null 이거나 값이 0 이면 해당 패널은 대체 없이 안내.
@@ -168,43 +173,43 @@ export default function GrafanaDash() {
   const dt = dev?.totals;
   const dev2: GridItem[] = [
     { id: 'dev-loc', node: (
-      <Panel title="Lines of Code (Added vs Removed, daily)">
+      <Panel title="일별 LOC (추가 · 삭제)">
         <EChart option={areaOption(devX, [
-          { name: 'added', color: '#73bf69', data: devDays.map((d) => d.linesAdded) },
-          { name: 'removed', color: '#e0523e', data: devDays.map((d) => d.linesRemoved) },
+          { name: '추가', color: '#73bf69', data: devDays.map((d) => d.linesAdded) },
+          { name: '삭제', color: '#e0523e', data: devDays.map((d) => d.linesRemoved) },
         ], fmtInt)} height={180} />
       </Panel>
     ) },
     { id: 'dev-edit', node: (
-      <Panel title="Code Edit Decisions (Accept vs Reject)">
+      <Panel title="코드 편집 결정 (수락 · 거부)">
         <EChart option={donutOption([
-          { name: 'accept', value: dt?.editsAccepted ?? 0 },
-          { name: 'reject', value: dt?.editsRejected ?? 0 },
+          { name: '수락', value: dt?.editsAccepted ?? 0 },
+          { name: '거부', value: dt?.editsRejected ?? 0 },
         ])} height={190} />
       </Panel>
     ) },
-    { id: 'dev-io', node: <Panel title="Token I/O Rate"><EChart option={areaOption(x, [{ name: 'input', color: '#5794f2', data: days.map((d) => d.input) }, { name: 'output', color: '#73bf69', data: days.map((d) => d.output) }], short)} height={180} /></Panel> },
+    { id: 'dev-io', node: <Panel title="토큰 입출력 추이"><EChart option={areaOption(x, [{ name: '입력', color: '#5794f2', data: days.map((d) => d.input) }, { name: '출력', color: '#73bf69', data: days.map((d) => d.output) }], short)} height={180} /></Panel> },
   ];
 
   const cache: GridItem[] = [
-    { id: 'cache-usage', node: <Panel title="Cache Read vs Creation (daily)"><EChart option={areaOption(x, [{ name: 'Cache Read', color: '#73bf69', data: days.map((d) => d.cacheRead) }, { name: 'Cache Creation', color: '#5794f2', data: days.map((d) => d.cacheCreate) }], short)} height={200} /></Panel> },
+    { id: 'cache-usage', node: <Panel title="일별 캐시 읽기 · 생성"><EChart option={areaOption(x, [{ name: '캐시읽기', color: '#73bf69', data: days.map((d) => d.cacheRead) }, { name: '캐시생성', color: '#5794f2', data: days.map((d) => d.cacheCreate) }], short)} height={200} /></Panel> },
   ];
 
   const tools: GridItem[] = [
-    { id: 'tool-usage', node: <Panel title="Tool Usage"><EChart option={donutOption(donutRows(summary.top?.tool).slice(0, 10))} height={190} /></Panel> },
-    { id: 'tool-agents', node: <Panel title="Subagents"><EChart option={donutOption(donutRows(summary.top?.agent))} height={190} /></Panel> },
-    { id: 'tool-skills', node: <Panel title="Skills"><EChart option={donutOption(donutRows((summary.top?.skill ?? []).map((k) => ({ key: k.key.replace(/^superpowers:/, ''), count: k.count }))))} height={190} /></Panel> },
+    { id: 'tool-usage', node: <Panel title="도구 사용"><EChart option={donutOption(donutRows(summary.top?.tool).slice(0, 10))} height={190} /></Panel> },
+    { id: 'tool-agents', node: <Panel title="서브에이전트"><EChart option={donutOption(donutRows(summary.top?.agent))} height={190} /></Panel> },
+    { id: 'tool-skills', node: <Panel title="스킬"><EChart option={donutOption(donutRows((summary.top?.skill ?? []).map((k) => ({ key: k.key.replace(/^superpowers:/, ''), count: k.count }))))} height={190} /></Panel> },
   ];
 
   const rates: GridItem[] = [
-    { id: 'rate-sessions', node: <Panel title="Sessions per Day"><EChart option={areaOption(x, [{ name: 'sessions', color: '#73bf69', data: days.map((d) => d.sessions) }], fmtInt)} height={170} /></Panel> },
-    { id: 'rate-bash', node: <Panel title="Bash Commands"><BarTable rows={(summary.top?.bash ?? []).slice(0, 10).map((k) => ({ label: k.key, value: k.count }))} unit="Count" fmt={fmtInt} /></Panel> },
-    { id: 'rate-mcp', node: <Panel title="MCP Calls"><BarTable rows={(summary.top?.mcp ?? []).slice(0, 10).map((k) => ({ label: k.key.replace(/^mcp__/, '').slice(0, 24), value: k.count }))} unit="Count" fmt={fmtInt} /></Panel> },
+    { id: 'rate-sessions', node: <Panel title="일별 세션 수"><EChart option={areaOption(x, [{ name: '세션', color: '#73bf69', data: days.map((d) => d.sessions) }], fmtInt)} height={170} /></Panel> },
+    { id: 'rate-bash', node: <Panel title="개발 명령"><BarTable rows={(summary.top?.bash ?? []).slice(0, 10).map((k) => ({ label: k.key, value: k.count }))} unit="횟수" fmt={fmtInt} /></Panel> },
+    { id: 'rate-mcp', node: <Panel title="MCP 호출"><BarTable rows={(summary.top?.mcp ?? []).slice(0, 10).map((k) => ({ label: k.key.replace(/^mcp__/, '').slice(0, 24), value: k.count }))} unit="횟수" fmt={fmtInt} /></Panel> },
   ];
 
   const topTools = (summary.top?.tool ?? []).slice(0, 10).map((k) => ({ name: k.key, value: k.count }));
   const top: GridItem[] = [
-    { id: 'top-tools', node: <Panel title="Top Tools (calls)"><EChart option={barOption(topTools, fmtInt)} height={Math.max(120, topTools.length * 30)} /></Panel> },
+    { id: 'top-tools', node: <Panel title="상위 도구 (호출 수)"><EChart option={barOption(topTools, fmtInt)} height={Math.max(120, topTools.length * 30)} /></Panel> },
   ];
 
   const Sect = ({ title, gid, cls, items }: { title: string; gid: string; cls?: string; items: GridItem[] }) => (
@@ -255,13 +260,14 @@ export default function GrafanaDash() {
         <Sect title="내 그래프" gid="custom" cls="g2" items={customItems} />
       )}
 
-      <Sect title="Live Status" gid="live" cls="g6" items={live} />
-      <Sect title="Cost & Tokens" gid="cost" cls="g-cost" items={cost2} />
-      <Sect title="Development" gid="dev" cls="g3" items={dev2} />
-      <Sect title="Cache Token Usage" gid="cache" cls="g1" items={cache} />
-      <Sect title="Tool & Agent Analytics" gid="tools" cls="g3" items={tools} />
-      <Sect title="Rates & Details" gid="rates" cls="g3" items={rates} />
-      <Sect title="Top Tools" gid="top" cls="g1" items={top} />
+      {/* 섹션 제목도 한국어로 통일한다 — '플랫폼'·'내 그래프'가 이미 한국어라 영어 제목만 섞여 있었다. */}
+      <Sect title="실시간 현황" gid="live" cls="g6" items={live} />
+      <Sect title="비용 · 토큰" gid="cost" cls="g-cost" items={cost2} />
+      <Sect title="개발 지표" gid="dev" cls="g3" items={dev2} />
+      <Sect title="캐시 토큰 사용" gid="cache" cls="g1" items={cache} />
+      <Sect title="도구 · 에이전트 분석" gid="tools" cls="g3" items={tools} />
+      <Sect title="추이 · 상세" gid="rates" cls="g3" items={rates} />
+      <Sect title="상위 도구" gid="top" cls="g1" items={top} />
 
       {builderOpen && (
         <ChartBuilder

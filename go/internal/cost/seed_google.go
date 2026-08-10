@@ -63,9 +63,14 @@ var googleSeed = map[string]seedEntry{
 }
 
 // googleUnpriced 는 **일부러 등록하지 않은** 모델이다.
-// gemini-3-pro-preview 는 공식 가격표에 항목이 없다. gemini-3.1-pro-preview 단가를 빌려 오고
-// 싶어지지만, 그건 추측이고 화면에는 추측이라는 표시가 남지 않는다. 미등록으로 두면
-// Result.Unpriced 에 이름이 올라가 빠졌다는 사실이 보인다.
+// 둘 다 공식 가격표(SeedPricedAtGoogle 2026-08-05 확인)에 항목이 없다. 이름이 가까운 모델의
+// 단가를 빌려 오고 싶어지지만, 그건 추측이고 화면에는 추측이라는 표시가 남지 않는다.
+// 미등록으로 두면 Result.Unpriced 에 이름이 올라가 빠졌다는 사실이 보인다.
+// (공식 표에 항목이 생기면 그때 googleSeed 로 옮긴다.)
 var googleUnpriced = []string{
+	// gemini-3.1-pro-preview 단가를 빌려 오기 쉬운 자리 — 프리뷰와 본선은 다른 항목이다.
 	"gemini-3-pro-preview",
+	// gemini-3.1-pro 는 -preview 접미사가 없는 별개 ID 다. 위 프리뷰 단가($2/$12)를 그대로
+	// 붙이고 싶어지지만 공식 표에 이 ID 의 항목이 없다 — 같은 값이라는 근거가 없다.
+	"gemini-3.1-pro",
 }

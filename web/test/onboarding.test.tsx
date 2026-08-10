@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Onboarding, { installCommand } from '@/components/Onboarding';
 import { ToastProvider } from '@/components/Toast';
@@ -105,6 +105,62 @@ describe('연동 화면 — 발급 · 목록 · 해지', () => {
       expect(init.method).toBe('POST');
       expect(JSON.parse(init.body as string)).toEqual({ id: 'k1' });
     });
+  });
+});
+
+/*
+ * ── 키 스코프 표기 ───────────────────────────────────────────────────────
+ *
+ * 운영자는 이 키를 팀원 PC 에 심는다. 화면이 스코프를 말하지 않으면 사람은 **가장 넓은 쪽으로
+ * 가정한다** — "이걸로 대시보드도 보이겠지". 그 가정 위에서 키가 아껴지거나 방치된다.
+ *
+ * 아래 문구는 전부 서버 코드에서 확인된 사실이다(server.go 인테이크 게이트 · agent.go 콜렉터 ·
+ * org.go 의 revoked_at 조건과 sha256 저장). 문구가 사라지면 이 테스트가 먼저 붉어진다.
+ */
+describe('연동 화면 — 인제스트 키 스코프 표기', () => {
+  it('키 목록 카드가 이 키로 되는 일과 안 되는 일을 명시한다', async () => {
+    mockAdmin({ list: [], issued: ISSUED });
+    renderOnboarding();
+
+    const scope = within(await screen.findByRole('list', { name: '인제스트 키 스코프' }));
+    // 열리는 것 둘.
+    expect(scope.getByText('POST /api/usage')).toBeInTheDocument();
+    expect(scope.getByText('GET /api/agent/collector')).toBeInTheDocument();
+    // 안 열리는 것 — 열람은 403.
+    expect(scope.getByText('대시보드 열람 불가')).toBeInTheDocument();
+    expect(scope.getByText(/403/)).toBeInTheDocument();
+    // 해지는 즉시 401.
+    expect(scope.getByText(/바로 401/)).toBeInTheDocument();
+    // 평문은 1회 · 서버는 해시만.
+    expect(scope.getByText(/sha256 해시만/)).toBeInTheDocument();
+    // 복제되는 자격이라는 사실 + 대응.
+    expect(scope.getByText('팀원 PC 마다 복제되는 자격')).toBeInTheDocument();
+    expect(scope.getByText(/해지하고 재발급/)).toBeInTheDocument();
+  });
+
+  it('상태는 색이 아니라 글자로 말한다 (허용 · 차단 · 주의)', async () => {
+    mockAdmin({ list: [], issued: ISSUED });
+    renderOnboarding();
+
+    const scope = within(await screen.findByRole('list', { name: '인제스트 키 스코프' }));
+    expect(scope.getAllByText('허용')).toHaveLength(2);
+    expect(scope.getByText('차단')).toBeInTheDocument();
+    expect(scope.getByText('주의')).toBeInTheDocument();
+  });
+
+  it('발급 직후 패널에도 같은 스코프가 붙는다 (전달 직전이 가장 필요한 자리)', async () => {
+    mockAdmin({ list: [], issued: ISSUED });
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await screen.findByRole('heading', { name: '발급된 키' });
+    await user.click(screen.getByRole('button', { name: '인제스트 키 발급' }));
+
+    // 두 목록은 이름이 달라야 한다 — 같은 이름이면 스크린리더에서 어느 쪽인지 구분되지 않는다.
+    const issuedScope = within(await screen.findByRole('list', { name: '발급된 키 스코프' }));
+    expect(issuedScope.getByText('POST /api/usage')).toBeInTheDocument();
+    expect(issuedScope.getByText('대시보드 열람 불가')).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: '인제스트 키 스코프' })).toBeInTheDocument();
   });
 });
 

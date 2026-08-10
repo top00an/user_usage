@@ -99,6 +99,14 @@ func New(cfg config.Config) http.Handler {
 }
 
 /*
+ * resolveIngestKey 는 httpapi 가 인제스트 키를 **DB 로 해석하는 유일한 지점**이다(게이트의
+ * 인테이크 해석 + 수집기 다운로드). 값이 org.Resolve 그대로인데도 변수로 두는 이유는 하나다:
+ * 아래 접두사 게이트가 실제로 DB 를 건드리지 않는지는 "몇 번 호출됐는가"로만 증명되고,
+ * 테스트가 그것을 세려면 가로챌 자리가 필요하다(ingestkey_prefix_test.go).
+ */
+var resolveIngestKey = org.Resolve
+
+/*
  * ingestKeyAuth 는 해석된 인제스트 키를 이 배포의 자격으로 접는다. 두 모드가 갈리는 **유일한**
  * 지점이라 여기 한 곳에 둔다:
  *
@@ -201,9 +209,19 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// **모드와 무관하게** 해석한다. 온보딩 UI(POST /api/admin/keys)는 모드를 보지 않고 키를
 	// 발급하고, install.sh 는 그 키 하나로 수집기 다운로드와 백필 업로드를 모두 한다 —
 	// 단일테넌트에서 여기를 닫아 두면 다운로드만 되고 업로드가 401 인 반쪽 설치가 된다.
+	//
+	// ⚠ 단 **접두사(org.KeyPrefix)로 시작하는 Bearer 만** 해석에 태운다. 이 해석은 sha256 +
+	//   DB PK 조회이고, 아래 rate limit 은 **인증에 성공한 뒤**에 걸려 이 경로를 막지 못한다 —
+	//   접두사를 안 보면 무인증 브루트포스가 시도마다 DB 를 때리는 증폭 표면이 된다. 접두사 없는
+	//   Bearer(오타·남의 토큰·아래 member 열람 토큰)는 여기서 DB 를 아예 건드리지 않는다.
+	//
+	//   이 판정은 **"발급된 모든 키가 KeyPrefix 를 갖는다"는 불변식**에만 기대고 있다. 접두사
+	//   없이 발급하는 경로가 하나라도 생기면 유효한 키가 조용히 401 이 되고, 증상은 여기가 아니라
+	//   발급부에서 나온다 — org.TestIssuedKeysAlwaysCarryPrefix 가 그 불변식을 못박는 유일한
+	//   안전장치다. 접두사 문자열은 org 것을 그대로 쓴다(복제하면 한쪽만 바뀌는 날이 온다).
 	if auth == nil {
-		if bearer := bearerToken(r); bearer != "" {
-			t, _, ok, err := org.Resolve(r.Context(), bearer)
+		if bearer := bearerToken(r); hasPrefix(bearer, org.KeyPrefix) {
+			t, _, ok, err := resolveIngestKey(r.Context(), bearer)
 			if err != nil {
 				// 조회 실패·미초기화. 응답은 아래에서 401 로 접고(서버 상태 미노출) 원인은
 				// stderr 로만 남긴다. 미지·해지 키는 err 이 아니라 ok=false 라 여기 오지 않는다.

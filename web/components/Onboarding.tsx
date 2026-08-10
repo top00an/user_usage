@@ -43,6 +43,71 @@ export function installCommand(origin: string, key: string): string {
   return `curl -fsSL ${origin}/install.sh | sh -s -- --key ${key} --server ${origin}`;
 }
 
+/*
+ * ── 인제스트 키가 무엇을 열고 무엇을 못 여는가 ────────────────────────────
+ *
+ * 운영자는 이 키를 팀원 PC 에 심는다. 그 순간 "이걸로 대시보드도 보이나?", "해지하면 언제
+ * 끊기나?" 를 화면이 대신 답해 주지 않으면, 운영자는 가장 안전한 쪽이 아니라 **가장 넓은
+ * 쪽으로 가정한다** — 열람 권한이 있다고 믿고 키를 아끼거나, 반대로 유출을 방치한다.
+ *
+ * 아래 사실은 전부 서버 코드에서 확인된 것만 적는다(추정·계획 금지):
+ *   · go/internal/httpapi/server.go — 인테이크 스코프는 `POST /api/usage` 하나만 통과시키고
+ *     그 밖의 경로는 403 이다. 즉 이 키로는 대시보드를 열 수 없다.
+ *   · go/internal/httpapi/agent.go — `GET /api/agent/collector` 는 인제스트 키로 통과한다.
+ *   · go/internal/org/org.go — 키 해석은 요청마다 DB 조회이고 `revoked_at IS NULL` 조건이라
+ *     해지가 즉시 반영된다(캐시 없음). 해지된 키는 보고·다운로드 모두 401.
+ *   · 저장은 sha256 해시뿐이다(HashKey) — 그래서 평문은 발급 응답 그 1회가 전부다.
+ *
+ * 접근성: 상태를 **색이 아니라 글자**로 말한다(허용/차단/주의 배지 텍스트). 색만으로 구분하면
+ * 색각 이상 사용자에게 '허용'과 '차단'이 같은 회색 칩이 된다 — SupportBadge 와 같은 규율.
+ */
+const SCOPE_FACTS: { kind: string; cls: string; term: string; body: React.ReactNode }[] = [
+  {
+    kind: '허용', cls: 'ok', term: '사용량 보고',
+    body: <>이 키는 <code className="mono">POST /api/usage</code> <b>하나만</b> 엽니다.</>,
+  },
+  {
+    kind: '허용', cls: 'ok', term: '수집기 다운로드',
+    body: <><code className="mono">GET /api/agent/collector</code> 로 수집기 바이너리를 받습니다.</>,
+  },
+  {
+    kind: '차단', cls: 'mute', term: '대시보드 열람 불가',
+    body: <>이 키로 조회를 시도하면 <b>403</b> 입니다. 열람은 로그인 계정으로 합니다.</>,
+  },
+  {
+    kind: '해지', cls: '', term: '즉시 반영',
+    body: <>해지하면 그 키의 보고·다운로드가 <b>바로 401</b> 이 됩니다.</>,
+  },
+  {
+    kind: '보관', cls: '', term: '평문은 1회만',
+    body: <>서버는 <b>sha256 해시만</b> 저장합니다 — 평문은 발급 시 한 번만 표시됩니다.</>,
+  },
+  {
+    kind: '주의', cls: 'warn', term: '팀원 PC 마다 복제되는 자격',
+    body: <>유출되면 그 배포에 임의 사용량이 들어올 수 있습니다. 의심되면 해지하고 재발급하세요.</>,
+  },
+];
+
+/**
+ * 키 스코프 명세. 발급 패널과 키 목록 **양쪽**에 같은 사실을 둔다 — 한쪽만 보고 판단하는 자리를
+ * 남기지 않기 위해서다. 두 인스턴스가 한 화면에 동시에 뜨므로 aria-label 은 서로 달라야 한다
+ * (같은 이름의 목록이 둘이면 스크린리더 사용자는 어느 쪽을 듣고 있는지 알 수 없다).
+ */
+export function KeyScope({ label }: { label: string }) {
+  return (
+    <div className="key-scope" role="list" aria-label={label}>
+      {SCOPE_FACTS.map((f) => (
+        <div className="key-scope-item" role="listitem" key={f.term}>
+          <span className={`badge ${f.cls}`}>{f.kind}</span>
+          <span className="key-scope-txt">
+            <b>{f.term}</b> — {f.body}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** 클립보드 복사 — 최신 API 를 쓰되, 없거나 막힌 환경에서도 죽지 않게 textarea 로 되짚는다. */
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -107,6 +172,9 @@ function IssuedPanel({ issued, onDismiss }: { issued: IssuedKey; onDismiss: () =
         개발자 머신에서 이 한 줄을 실행하면 수집기와 훅이 자동 설치되어 바로 연동됩니다.
       </p>
 
+      {/* 이 키가 무엇을 여는 자격인지 — 전달하기 직전이 가장 필요한 자리다. */}
+      <div className="mt"><KeyScope label="발급된 키 스코프" /></div>
+
       <div className="row mt">
         <button type="button" className="ghost" onClick={onDismiss}>확인했어요 · 닫기</button>
       </div>
@@ -128,11 +196,14 @@ function KeyTable({
     return (
       <Card title="발급된 키" className="mt">
         <p className="help">아직 발급된 키가 없습니다. 위에서 첫 키를 발급하세요.</p>
+        <div className="mt"><KeyScope label="인제스트 키 스코프" /></div>
       </Card>
     );
   }
   return (
     <Card title="발급된 키" className="mt" aside={<span className="help">전체 {n(keys.length)}개</span>}>
+      {/* 목록만 보고 "이 키로 대시보드도 보이나?" 를 추측하지 않도록, 스코프를 표 위에 그대로 둔다. */}
+      <KeyScope label="인제스트 키 스코프" />
       <TableWrap>
         <table className="mt-sm">
           <thead>
@@ -251,7 +322,8 @@ export default function Onboarding() {
           <div>
             <h3>인제스트 키</h3>
             <p className="help mt-sm">
-              머신마다 이 키로 사용량을 보고합니다. 유출이 의심되면 해지하고 새로 발급하세요.
+              머신마다 이 키로 사용량을 <b>보고</b>합니다 — 열람 자격이 아닙니다.
+              아래 <b>발급된 키</b> 카드에 이 키로 되는 일과 안 되는 일을 적어 두었습니다.
             </p>
           </div>
           <button type="button" className="primary" onClick={onIssue} disabled={issuing} aria-busy={issuing}>

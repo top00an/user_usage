@@ -17,7 +17,7 @@
  * 색만으로 구분하면 색각 이상 사용자에게 그 구분이 통째로 사라진다 — ui.tsx 의 Flag 와 같은 규율.
  */
 
-import { supportOf, SUPPORT_LABEL, type MetricId, type Support } from '@/lib/platforms';
+import { showsValue, supportOf, SUPPORT_LABEL, type MetricId, type Support } from '@/lib/platforms';
 
 export function SupportBadge({ support }: { support: Support }) {
   return (
@@ -42,15 +42,25 @@ export function MetricValue({
   children: React.ReactNode;
 }) {
   const support = supportOf(platform, metric);
-  if (support.state !== 'yes') return <SupportBadge support={support} />;
+  /*
+   * conditional 도 숫자를 그린다(showsValue). 조건부 축은 **올 때는 진짜 관측**이라, 배지로
+   * 덮으면 그 순간 화면이 관측을 숨긴다 — 이 파일이 막으려는 사고의 정확히 반대 방향이다.
+   */
+  if (!showsValue(support.state)) return <SupportBadge support={support} />;
   if (zero) return <span title="수집된 값입니다 — 실제 0 입니다(미수집이 아닙니다)">{children}</span>;
   return <>{children}</>;
 }
 
-/** 축 × 플랫폼 한 칸(지원표·축 패널용). 지원되면 '수집됨'을 글자로 남긴다. */
+/**
+ * 축 × 플랫폼 한 칸(지원표·축 패널용). 지원되면 '수집됨'을 글자로 남긴다.
+ * 상태는 언제나 **글자**로 있고 색은 훑어보기를 돕는 역할만 한다(색만으로 정보를 싣지 않는다).
+ */
 export function SupportChip({ platform, metric, label }: { platform: string; metric: MetricId; label?: string }) {
   const support = supportOf(platform, metric);
-  const cls = support.state === 'yes' ? 'badge ok' : 'badge mute';
+  const cls = support.state === 'yes' ? 'badge ok'
+    // 조건부는 '수집됨'도 '미수집'도 아니다 — 점선(미수집)으로 그리면 안 온다고 읽힌다.
+    : support.state === 'conditional' ? 'badge'
+      : 'badge mute';
   return (
     <span className={cls} title={support.why}>
       {label ? `${label} · ` : ''}{SUPPORT_LABEL[support.state]}

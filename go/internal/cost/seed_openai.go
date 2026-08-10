@@ -93,7 +93,7 @@ var openaiSeed = map[string]seedEntry{
 
 // openaiUnpriced 는 **일부러 등록하지 않은** 모델이다. 목록으로 남겨 두는 이유는 다음 사람이
 // "빠뜨렸나?" 하고 아무 단가나 채워 넣지 않게 하기 위해서다. 공식 가격표에 항목이 생기면
-// 그때 openaiSeed 로 옮긴다.
+// 그때 openaiSeed 로 옮긴다. 전부 2026-08-05 확인 시점에 공식 표에 항목이 없었다.
 var openaiUnpriced = []string{
 	"gpt-5.4-cyber",
 	"codex-auto-review",
@@ -101,4 +101,8 @@ var openaiUnpriced = []string{
 	"gpt-5.1-codex",
 	"gpt-5.1-codex-mini",
 	"gpt-5.1-codex-max",
+	// gpt-oss-120b 는 오픈웨이트 모델이라 **호스팅 사업자마다 단가가 다르다** — 공식 가격표에
+	// 항목이 없고(2026-08-05 확인), 어디서 돌렸는지를 사용량 레코드가 말해 주지 않는다.
+	// 아무 제공자의 단가나 골라 박으면 그 숫자가 맞는지 아무도 확인할 수 없다.
+	"gpt-oss-120b",
 }

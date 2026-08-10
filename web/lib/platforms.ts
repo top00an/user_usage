@@ -18,24 +18,43 @@
  * "어떤 플랫폼이 화면에 나오는가"는 절대 여기서 정하지 않는다 — 그건 /api/usage/platforms
  * 응답이 정한다. 여기 있는 것은 "나온 플랫폼이 무엇을 기록하는가"라는 **사실표**뿐이다.
  *
- * ── 근거(2026-08-10 기준) ─────────────────────────────────────────────────
+ * ── 이 표의 진짜 출처는 **수집기 소스다** ─────────────────────────────────
+ *
+ * 여기 적힌 판정은 전부 `collector/` 의 코드에서 확인한 것이고, 각 항목에 그 파일:라인을
+ * 남긴다. 수집기를 고치는 사람이 **이 표도 같이 고쳐야 한다는 것을 알 수 있어야** 하기
+ * 때문이다. 실제로 한 번 어긋났다: 수집기에는 gemini 가 이미 있는데 이 표는 '준비 중'이라고
+ * 말했고, 그 상태로 두면 **올라온 Gemini 값을 화면이 숨긴다** — 없는 값을 0 으로 그리는 것과
+ * 같은 종류의 거짓말이고 방향만 반대다. 표가 낡는 쪽이 더 위험하다.
+ *
+ * ── 근거(2026-08-10, collector 소스 전수 확인) ────────────────────────────
  *   · 필터로 보낼 수 있는 값의 목록 = go/internal/store/platform.go 의
  *     PlatformFilterValues() = Platforms(claude·codex·gemini·antigravity) + other.
  *     **여기 없는 값을 보내면 서버가 400 을 낸다.** 그래서 UI 는 반드시 이 목록으로 좁힌다.
- *   · codex 의 slash·skill·agent: Codex 세션 로그에 그 개념의 기록 자체가 남지 않는다 →
- *     수집기가 보낼 것이 없다(미수집).
- *   · codex 의 cacheCreate: OpenAI 는 캐시 **쓰기**에 과금하지 않는다 → 청구/토큰 축으로서의
- *     '캐시 생성'이라는 값이 존재하지 않는다(해당 없음). 응답에 0 이 와도 그건 관측이 아니다.
- *   · gemini: 수집기가 아직 없다. 목록에 나타나더라도 값은 올라오지 않는다(준비 중).
+ *   · 축의 정본 목록 = collector/internal/policy/policy.go 의 CounterKinds =
+ *     tool · bash · slash · skill · agent · mcp · keyword (7축).
+ *   · claude: collector/internal/transcript/transcript.go 가 7축 전부 + LOC/편집을 센다
+ *     (slash 는 transcript.go:382). → 전 축 수집.
+ *   · codex: collector/internal/codex/codex.go 가 tool·bash·mcp·keyword·skill(:589)·
+ *     agent(:540,:576) 와 LOC/편집(:703,:788)을 센다. **slash 만 없다** — Codex 세션 로그에
+ *     슬래시 명령 기록이 남지 않아 보낼 값이 없다(미수집).
+ *   · gemini: collector/internal/gemini/gemini.go 가 tool·bash·mcp·keyword·skill(:639)·
+ *     agent(:642) 와 LOC/편집(:688,:808)을 센다. **수집기는 이미 있다** — 'planned' 이 아니다.
+ *     codex 와 마찬가지로 slash 만 없다.
  *   · antigravity: **gemini 와 다른 도구다.** 사람들이 "Gemini CLI" 라 부르는 것에는 오픈소스
  *     google-gemini/gemini-cli 와 Google Antigravity CLI(agy) 두 가지가 섞여 있다. 모델이 같아
- *     model 로는 안 갈리지만 수집 가능 범위가 다르다 — gemini 는 세션 파일에서 도구·MCP·
- *     subagent·skill·LOC 까지 나오는 반면, antigravity 에서 얻을 수 있는 것은 statusLine 의
- *     토큰·모델·세션·프로젝트가 전부다(훅 protobuf 스키마·대화 DB·transcript 를 전수 확인한
- *     결과 usage 외의 축이 없다). 그래서 행동 축은 '준비 중'이 아니라 **미수집**이다 —
- *     수집기를 더 만들면 언젠가 온다는 뜻이 아니라, 그 도구가 기록하지 않아 올 수 없다는 뜻이다.
- *   · antigravity 의 cacheCreate: Gemini 의 암시적 캐싱에는 캐시 **쓰기** 과금이라는 개념이
- *     없다 → 값이 존재하지 않는다(해당 없음). codex 와 같은 이유, 다른 근거다.
+ *     model 로는 안 갈리지만 수집 가능 범위가 다르다. 토큰·모델·세션·프로젝트는 statusLine 이
+ *     스풀에 적은 것에서 오고, 도구·MCP·LOC·편집은 어디에도 남지 않는다(훅 protobuf 스키마·
+ *     대화 DB·transcript 전수 확인) → 미수집.
+ *     단 **slash·keyword 는 조건부로 올라온다**: collector/internal/antigravity/spool.go:456
+ *     AddHistory 가 ~/.gemini/antigravity-cli/history.jsonl 을 읽어 두 축을 채운다(:492-499).
+ *     그 파일은 대화형 세션에서만 쌓이고 헤드리스(--print)에서는 비므로,
+ *     cmd/usage-collector/main.go:148-153 이 "없으면 그 축만 조용히 빠진다"로 처리한다.
+ *     그래서 'yes' 로 단정하지 않고 **'conditional'** 이다 — 값이 오면 관측이고, 안 와도 버그가
+ *     아니다. 이 둘을 'yes' 라고 하면 빈 화면이 고장으로 읽히고, 'unmeasured' 라고 하면
+ *     실제로 올라온 slash·keyword 를 화면이 숨긴다.
+ *   · codex·antigravity 의 cacheCreate: 캐시 **쓰기** 과금이라는 개념이 없다(OpenAI 는 과금하지
+ *     않고, Gemini 의 암시적 캐싱에는 그 개념 자체가 없다) → 값이 존재하지 않는다(해당 없음).
+ *     응답에 0 이 와도 그건 관측이 아니다. 같은 결론, 다른 근거다.
  *   · other: 허용목록 밖 이름으로 보고된 세션의 자리(서버가 claude 로 접지 않고 남긴다).
  *     무엇을 기록하는 도구인지 우리는 모른다(미상).
  *
@@ -55,25 +74,41 @@ export function isPlatformId(v: unknown): v is PlatformId {
 
 /* ── 지원 상태 ───────────────────────────────────────────────────────── */
 
+/*
+ * 'planned'(수집기가 아직 없다)는 **의도적으로 없앴다.** 한때 gemini 가 그 상태였는데 수집기가
+ * 들어온 뒤에도 표만 남아, 올라온 값을 화면이 숨길 뻔했다. "언젠가 온다"는 상태는 아무도
+ * 지우지 않아서 조용히 낡는다 — 진짜로 미구현인 것이 생기면 그때 근거와 함께 다시 만든다.
+ */
 export type SupportState =
   /** 수집된다 — 값이 0 이면 그건 관측된 0 이다. */
   | 'yes'
+  /**
+   * 조건이 맞을 때만 온다. 값이 오면 관측이고, 안 와도 고장이 아니다.
+   * (antigravity 의 slash·keyword — history.jsonl 이 있는 대화형 세션에서만 쌓인다.)
+   */
+  | 'conditional'
   /** 그 플랫폼이 기록하지 않아 수집할 수 없다 — 값이 아니라 공백이다. */
   | 'unmeasured'
   /** 개념 자체가 없다 — 0 도 아니고 공백도 아니다. */
   | 'na'
-  /** 수집기가 아직 없다. */
-  | 'planned'
   /** 우리가 모르는 플랫폼이다 — 단정하지 않는다. */
   | 'unknown';
 
 export const SUPPORT_LABEL: Record<SupportState, string> = {
   yes: '수집됨',
+  conditional: '조건부 수집',
   unmeasured: '미수집',
   na: '해당 없음',
-  planned: '준비 중',
   unknown: '미상',
 };
+
+/**
+ * 그 상태에서 **숫자를 그려도 되는가.** conditional 은 yes 와 같이 다룬다 — 올라온 값을
+ * 배지로 덮으면 그 순간 화면이 관측을 숨긴다(이 파일이 막으려는 바로 그 사고의 반대 방향).
+ */
+export function showsValue(state: SupportState): boolean {
+  return state === 'yes' || state === 'conditional';
+}
 
 export interface Support {
   state: SupportState;
@@ -150,32 +185,38 @@ const UNKNOWN: Support = {
   why: '이 화면이 모르는 플랫폼입니다 — 어떤 축을 기록하는지 단정할 수 없습니다.',
 };
 
+/** 캐시 쓰기 과금 개념이 없는 플랫폼의 cacheCreate — codex·antigravity 가 같은 결론을 공유한다. */
+const NO_CACHE_WRITE_BILLING = (why: string): Support => ({ state: 'na', why });
+
+/*
+ * 슬래시가 없는 이유는 codex·gemini 가 같다: 세션 파일에 그 개념의 기록이 남지 않는다.
+ * (collector/internal/{codex,gemini} 어디에도 count("slash") 가 없다 — claude 만 있다.)
+ */
+const NO_SLASH = (tool: string): Support => ({
+  state: 'unmeasured',
+  why: `${tool} 세션 로그에 슬래시 명령 기록이 남지 않습니다 — 수집기가 보낼 값이 없습니다.`,
+});
+
 const SUPPORT: Record<PlatformId, Record<MetricId, Support>> = {
+  // collector/internal/transcript/transcript.go — 7축 전부 + LOC/편집.
   claude: fill('yes', 'Claude Code 수집기가 전 축을 보고합니다.'),
+  // collector/internal/codex/codex.go — skill(:589)·agent(:540,:576)·LOC(:788) 전부 보고한다.
   codex: {
-    ...fill('yes', 'Codex 수집기가 보고합니다.'),
-    slash: {
-      state: 'unmeasured',
-      why: 'Codex 세션 로그에 슬래시 명령 기록이 남지 않습니다 — 수집기가 보낼 값이 없습니다.',
-    },
-    skill: {
-      state: 'unmeasured',
-      why: 'Codex 세션 로그에 스킬 호출 기록이 남지 않습니다 — 수집기가 보낼 값이 없습니다.',
-    },
-    agent: {
-      state: 'unmeasured',
-      why: 'Codex 세션 로그에 서브에이전트 위임 기록이 남지 않습니다 — 수집기가 보낼 값이 없습니다.',
-    },
-    cacheCreate: {
-      state: 'na',
-      why: 'OpenAI 는 캐시 쓰기에 과금하지 않습니다 — 캐시 생성이라는 값 자체가 없습니다(0 이 아닙니다).',
-    },
+    ...fill('yes', 'Codex 수집기가 보고합니다(collector/internal/codex).'),
+    slash: NO_SLASH('Codex'),
+    cacheCreate: NO_CACHE_WRITE_BILLING(
+      'OpenAI 는 캐시 쓰기에 과금하지 않습니다 — 캐시 생성이라는 값 자체가 없습니다(0 이 아닙니다).',
+    ),
   },
-  gemini: fill('planned', '수집기가 아직 없습니다 — 이 축의 값은 올라오지 않습니다.'),
+  // collector/internal/gemini/gemini.go — **수집기는 이미 있다.** codex 와 같은 범위(slash 만 없다).
+  gemini: {
+    ...fill('yes', 'Gemini CLI 수집기가 보고합니다(collector/internal/gemini).'),
+    slash: NO_SLASH('Gemini CLI'),
+  },
   /*
-   * antigravity — 행동 축이 '준비 중'이 아니라 '미수집'인 것이 핵심이다.
-   * 준비 중은 "언젠가 온다"이고 미수집은 "그 도구가 안 남겨서 올 수 없다"다. 여기서 '준비 중'을
-   * 쓰면 우리는 오지 않을 값을 기다리게 하고, 화면은 빈칸의 이유를 틀리게 말한다.
+   * antigravity — 행동 축이 '미수집'인 것이 핵심이다("그 도구가 안 남겨서 올 수 없다").
+   * 단 slash·keyword 는 예외로 **조건부**다. 둘을 미수집으로 두면 실제로 올라온 값이 화면에서
+   * 사라지고, yes 로 두면 헤드리스 실행의 빈칸이 고장으로 읽힌다.
    */
   antigravity: {
     ...fill(
@@ -183,10 +224,19 @@ const SUPPORT: Record<PlatformId, Record<MetricId, Support>> = {
       'Antigravity 는 이 축을 기록하지 않습니다 — statusLine 의 사용량(토큰·모델·세션·프로젝트) 외에 '
       + '수집기가 읽을 수 있는 근거가 없습니다.',
     ),
-    cacheCreate: {
-      state: 'na',
-      why: 'Gemini 의 암시적 캐싱에는 캐시 쓰기 과금이라는 개념이 없습니다 — 캐시 생성이라는 값 자체가 없습니다(0 이 아닙니다).',
+    slash: {
+      state: 'conditional',
+      why: 'Antigravity 는 history.jsonl 이 있을 때만 슬래시 명령이 올라옵니다 — 대화형 세션에서만 쌓이고 '
+        + '헤드리스(--print) 실행에서는 비어 있습니다(빈 값이 고장은 아닙니다).',
     },
+    keyword: {
+      state: 'conditional',
+      why: 'Antigravity 는 history.jsonl 이 있을 때만 키워드가 올라옵니다 — 대화형 세션에서만 쌓이고 '
+        + '헤드리스(--print) 실행에서는 비어 있습니다(빈 값이 고장은 아닙니다).',
+    },
+    cacheCreate: NO_CACHE_WRITE_BILLING(
+      'Gemini 의 암시적 캐싱에는 캐시 쓰기 과금이라는 개념이 없습니다 — 캐시 생성이라는 값 자체가 없습니다(0 이 아닙니다).',
+    ),
   },
   other: fill('unknown', UNKNOWN.why),
 };
@@ -217,10 +267,11 @@ export interface PlatformMeta {
 const META: Record<PlatformId, Omit<PlatformMeta, 'id'>> = {
   claude: { label: 'Claude', color: 'var(--series-2)', note: '' },
   codex: { label: 'Codex', color: 'var(--series-3)', note: '' },
-  gemini: { label: 'Gemini', color: 'var(--series-1)', note: '수집기 준비 중' },
+  // 수집기가 들어온 뒤에도 '준비 중'이 남아 있었다 — 그 표기가 올라온 값을 숨긴다. 이제 없다.
+  gemini: { label: 'Gemini', color: 'var(--series-1)', note: '' },
   // 표시명은 제품명 그대로다. gemini 와 나란히 서는 자리라 색까지 갈라 둔다 —
   // 같은 색이면 사람은 두 행을 한 도구의 분해로 읽는다.
-  antigravity: { label: 'Antigravity', color: 'var(--series-4)', note: '토큰·비용 축만 기록' },
+  antigravity: { label: 'Antigravity', color: 'var(--series-4)', note: '도구·MCP·LOC 미수집' },
   other: { label: '기타(미식별)', color: 'var(--series-5)', note: '허용목록 밖 이름으로 보고된 세션' },
 };
 

@@ -32,6 +32,16 @@ USAGE_E2E_SERVER_BIN="$PWD/go/usage-server" USAGE_E2E_COLLECTOR_BIN=/tmp/usage-c
 
 검증 내용: BEFORE 0 → AFTER 2 세션, 멱등(`-all` 재전송 후 input 불변), 세션 목록에 두 세션 노출.
 
+> **원천 격리(2026-08-10 보강).** 이 테스트는 합성 픽스처만 읽어야 하므로 나머지 원천을 전부
+> 끈다: `-codex-dir "" -gemini-dir "" -antigravity-dir ""`. `-gemini-dir ""` 가 빠져 있어서
+> **실제 `~/.gemini` 세션이 있는 머신에서는 그 세션이 함께 올라가 세션 수 단정이 흔들렸다.**
+> 실측으로 확인한 차이(합성 Gemini 홈 1세션 기준):
+>
+> ```
+> -gemini-dir <경로>  → [gemini] …/tmp — 세션 1개 · 바뀐 세션 1개
+> -gemini-dir ""      → (gemini 원천이 아예 스캔되지 않음)
+> ```
+
 ## 3. 멀티테넌트 격리 실측 (pg RLS, 2026-08-09)
 
 docker PostgreSQL 16 + 앱 롤(NOSUPERUSER·NOBYPASSRLS). org 2개를 실제 인제스트 키로 수집해
@@ -54,12 +64,61 @@ USAGE_MULTITENANT=1 USAGE_DB_MODE=remote DATABASE_URL=... ./go/usage-server
 > (pg 에 쓰기)가 막혔다.** `ReadOnly = remote && !MultiTenant` 로 고쳐, SaaS 는 pg 에 쓰되 격리는
 > RLS 가 지도록 했다(부팅 프로브가 NOBYPASSRLS 를 강제). 골든 44/44 불변 확인.
 
+## 4. 온보딩·키 스코프 실측 (2026-08-10)
+
+로컬 sqlite 서버 + CLI 프로비저닝으로 **원커맨드 연동 전 경로**를 실측했다.
+
+```sh
+usage-server org create --name "Acme"        # → org 생성됨: id=org_… tenant=org_…
+usage-server key issue  --org org_…          # → uu_ing_…            (평문 1회)
+usage-server user add -tenant default -username ops-admin -role admin
+usage-server key revoke --key uu_ing_…       # → 해지됨
+```
+
+응답 코드(실측):
+
+| 요청 | 유효 키 | 해지된 키 | 관리자 토큰 |
+|---|---|---|---|
+| `GET /healthz` | 200(무인증) | — | — |
+| `GET /install.sh` | 200 `text/x-shellscript`(무인증) | — | — |
+| `GET /api/agent/collector?os=darwin&arch=arm64` | **200** | **401** | 200 |
+| `POST /api/usage` | **200** | **401** | 200 |
+| `GET /api/usage/summary` | **403**(보고 전용) | **401** | **200** |
+
+키 없이 다운로드 시도, 위조 키(`uu_ing_bogus`) 둘 다 **401**.
+
+**최초 관리자 부트스트랩**: `USAGE_BOOTSTRAP_ADMIN_USER`+`_PASSWORD` 로 기동 →
+`· 최초 관리자 생성: tenant=default username=ops-admin role=admin` 출력 →
+`POST /api/auth/login` 200 + `GET /api/auth/me` 200, 틀린 비밀번호 401.
+
+## 5. 원커맨드 설치기 실측 (2026-08-10)
+
+격리한 `HOME` 에 **기존 `SessionEnd` 훅과 `theme` 가 있는 `settings.json`** 을 두고
+`scripts/install.sh` 를 실행했다.
+
+| 확인 | 결과 |
+|---|---|
+| 기존 훅·`theme` 보존 | 그대로 남음(우리 훅이 뒤에 추가됨) |
+| 재실행 멱등 | 2회 실행 후에도 우리 훅 그룹 **1개**(전체 2개 = 남의 것 1 + 우리 것 1) |
+| `settings.json` 내 평문 키 | **0건** — 토큰은 `config.env` 에만 |
+| `config.env` 권한 | `-rw-------`(600) |
+| 덮기 전 백업 | `settings.json.bak` 생성 |
+| 백필 | `연동 완료 ✓ — 0 세션 전송`(빈 픽스처라 0) |
+
+⚠ **`.bak` 은 "직전 상태"이지 "최초 원본"이 아니다** — 실측 확인. 2회 실행 후의 `.bak` 에는
+이미 우리 훅이 들어 있다. 완전한 제거는 `.bak` 복구가 아니라 jq 로 우리 훅 그룹만 빼는 쪽이
+맞다(절차는 [`OPERATIONS.md`](OPERATIONS.md) §6-1). 그 제거 후 남의 훅과 `theme` 가 보존되는
+것까지 실측했다.
+
 ## 상시 게이트 (CI)
 
 `.github/workflows/ci.yml`:
-- `go test ./...`(백엔드 13패키지)·collector 단위·web 테스트
+- `go test ./...`(백엔드 — 2026-08-10 기준 **12 패키지**)·collector 단위·web 테스트
 - 빌드 + **임베드 드리프트 0** + **contract:verify 골든 44/44**
 - **collector e2e**(위 2)
 - **pg-isolation** 잡(postgres 서비스 + 앱 롤로 크로스테넌트 격리)
 
 ⚠ pg-isolation 잡은 CI 첫 실행에서 role/grant 셋업을 1회 확인할 것(로컬은 docker 실측 완료).
+
+⚠ `ci.yml` 의 스텝 이름이 아직 "백엔드 11 패키지"다 — 실제는 12 다. 표시 문구일 뿐 게이트
+동작(`go test ./...`)에는 영향이 없지만, 세는 값이 문구와 어긋나 있다.

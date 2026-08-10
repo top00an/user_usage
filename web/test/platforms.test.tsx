@@ -5,7 +5,10 @@ import Dashboard from '@/components/Dashboard';
 import {
   getPlatforms, getSessions, getDistribution, getQuality, getCoverage, getLeaderboard, seriesQuery,
 } from '@/lib/api';
-import { supportOf, platformMeta, isPlatformId, PLATFORM_FILTER_VALUES } from '@/lib/platforms';
+import {
+  supportOf, platformMeta, isPlatformId, showsValue,
+  METRICS, SUPPORT_LABEL, PLATFORM_FILTER_VALUES,
+} from '@/lib/platforms';
 import { setPlatformFilter, getPlatformFilter } from '@/lib/platformFilter';
 import { authRoutes, mockFetch, obsRoutes, trackRoutes, PLATFORMS_FIXTURE } from './helpers';
 
@@ -39,10 +42,59 @@ describe('lib/platforms — 0 과 "모른다"를 가르는 사실표', () => {
     }
   });
 
-  it('codex 의 slash·skill·agent 는 미수집이다 (0 이 아니다)', () => {
-    for (const m of ['slash', 'skill', 'agent'] as const) {
-      expect(supportOf('codex', m).state).toBe('unmeasured');
-      expect(supportOf('codex', m).why).not.toBe('');
+  /*
+   * ── 지원표는 수집기 소스와 어긋나면 안 된다 ─────────────────────────────
+   *
+   * 한 번 어긋났었다. 수집기에는 gemini 가 있고 codex 가 skill·agent 를 보내는데, 표는
+   * '준비 중'·'미수집'이라고 말했다. 그 상태로 두면 **올라온 값을 화면이 숨긴다** — 없는 값을
+   * 0 으로 그리는 것과 같은 종류의 거짓말이고 방향만 반대다.
+   *
+   * 아래 단언은 전부 collector 소스에서 확인한 사실이다. 수집기가 바뀌었는데 표를 안 고치면
+   * 여기가 먼저 빨개진다.
+   */
+  it('codex 에서 미수집인 것은 slash 하나뿐이다 (skill·agent 는 수집기가 보낸다)', () => {
+    // collector/internal/codex/codex.go — skill(:589) · agent(:540,:576) 를 실제로 센다.
+    for (const m of ['skill', 'agent'] as const) {
+      expect(supportOf('codex', m).state).not.toBe('unmeasured');
+      expect(supportOf('codex', m).state).toBe('yes');
+    }
+    // slash 만 없다 — Codex 세션 로그에 그 기록이 남지 않는다.
+    expect(supportOf('codex', 'slash').state).toBe('unmeasured');
+    expect(supportOf('codex', 'slash').why).not.toBe('');
+    // 나머지 행동 축·LOC 도 전부 수집된다(codex.go:703,:788).
+    for (const m of ['tool', 'bash', 'mcp', 'keyword', 'loc', 'edits'] as const) {
+      expect(supportOf('codex', m).state).toBe('yes');
+    }
+  });
+
+  it('gemini 수집기는 이미 있다 — planned 로 두면 올라온 값을 화면이 숨긴다', () => {
+    // collector/internal/gemini/gemini.go — skill(:639) · agent(:642) · LOC(:688,:808).
+    for (const m of ['tool', 'bash', 'mcp', 'keyword', 'skill', 'agent', 'loc', 'edits'] as const) {
+      expect(supportOf('gemini', m).state).toBe('yes');
+    }
+    // codex 와 같은 이유로 slash 만 없다.
+    expect(supportOf('gemini', 'slash').state).toBe('unmeasured');
+  });
+
+  it("'planned' 상태는 지원표 어디에도 남아 있지 않다 (낡은 채로 방치되는 상태를 두지 않는다)", () => {
+    const platforms = ['claude', 'codex', 'gemini', 'antigravity', 'other'];
+    for (const p of platforms) {
+      for (const m of METRICS) {
+        expect(supportOf(p, m).state).not.toBe('planned');
+      }
+    }
+    expect(Object.keys(SUPPORT_LABEL)).not.toContain('planned');
+  });
+
+  it('antigravity 의 slash·keyword 는 조건부다 — 미수집도, 무조건 수집도 아니다', () => {
+    // collector/internal/antigravity/spool.go:456 AddHistory 가 history.jsonl 에서 채운다(:492-499).
+    // 그 파일은 대화형에서만 쌓인다(cmd/usage-collector/main.go:148-153).
+    for (const m of ['slash', 'keyword'] as const) {
+      const s = supportOf('antigravity', m);
+      expect(s.state).toBe('conditional');
+      expect(s.why).toMatch(/history\.jsonl/);
+      // 조건부는 값을 숨기지 않는다 — 올 때는 진짜 관측이다.
+      expect(showsValue(s.state)).toBe(true);
     }
   });
 
@@ -54,8 +106,7 @@ describe('lib/platforms — 0 과 "모른다"를 가르는 사실표', () => {
     expect(supportOf('codex', 'cacheRead').state).toBe('yes');
   });
 
-  it('gemini 는 준비 중, 모르는 플랫폼은 미상이다 — 단정하지 않는다', () => {
-    expect(supportOf('gemini', 'tool').state).toBe('planned');
+  it('모르는 플랫폼은 미상이다 — 단정하지 않는다', () => {
     expect(supportOf('grok', 'tool').state).toBe('unknown');
     expect(supportOf('other', 'tool').state).toBe('unknown');
   });
@@ -89,8 +140,9 @@ describe('lib/platforms — 0 과 "모른다"를 가르는 사실표', () => {
    * antigravity — "Gemini CLI" 라 불리는 두 도구 중 하나다(다른 하나가 gemini).
    * 모델이 같아 model 로는 안 갈리지만 **기록하는 축이 다르다.** 그래서 지원표가 갈라져야 한다.
    */
-  it('antigravity 의 행동 축(도구·bash·MCP·스킬·서브에이전트·슬래시·LOC·편집)은 미수집이다', () => {
-    for (const m of ['tool', 'bash', 'mcp', 'keyword', 'slash', 'skill', 'agent', 'loc', 'edits'] as const) {
+  it('antigravity 의 도구·bash·MCP·스킬·서브에이전트·LOC·편집은 미수집이다', () => {
+    // slash·keyword 는 여기서 뺀다 — 그 둘만 history.jsonl 로 조건부로 온다(위 테스트).
+    for (const m of ['tool', 'bash', 'mcp', 'skill', 'agent', 'loc', 'edits'] as const) {
       const s = supportOf('antigravity', m);
       expect(s.state).toBe('unmeasured');
       expect(s.why).toMatch(/Antigravity/);
@@ -114,9 +166,9 @@ describe('lib/platforms — 0 과 "모른다"를 가르는 사실표', () => {
   it('antigravity 는 gemini 와 다른 표시명·계열색을 갖는다 (한 도구로 보이면 안 된다)', () => {
     expect(platformMeta('antigravity').label).toBe('Antigravity');
     expect(platformMeta('antigravity').color).not.toBe(platformMeta('gemini').color);
-    // 기존 플랫폼의 지원표는 이 작업으로 바뀌지 않는다.
-    expect(supportOf('gemini', 'tool').state).toBe('planned');
     expect(supportOf('claude', 'loc').state).toBe('yes');
+    // gemini 에는 '수집기 준비 중' 주석이 더 이상 붙지 않는다(수집기가 있다).
+    expect(platformMeta('gemini').note).toBe('');
   });
 
   it('모르는 플랫폼도 화면에서 사라지지 않는다 (이름 그대로 그린다)', () => {
@@ -226,15 +278,21 @@ describe('플랫폼 요약 — 실제 0 · 미수집 · 해당 없음을 갈라 
     expect(cacheCreateRow?.textContent).not.toMatch(/(^|\D)0(\D|$)/);
   });
 
-  it('codex 의 슬래시·스킬·서브에이전트는 "미수집"로 표시된다', async () => {
+  /*
+   * 예전에는 slash·skill·agent 셋이라고 적혀 있었다. 수집기를 확인해 보니 codex 는 skill·agent
+   * 를 실제로 보낸다(codex.go:589,:540) — 표가 낡아 **올라온 값을 미수집이라 부르고 있었다.**
+   * 그래서 이 테스트는 "몇 개인가"가 아니라 **어느 축인가**를 못박는다.
+   */
+  it('codex 에서 "미수집" 배지가 붙는 축은 슬래시 하나뿐이다', async () => {
     render(<Dashboard />);
     await screen.findByRole('heading', { name: '플랫폼별 사용량' });
-    // 캡션에도 '미수집'이라는 낱말이 나오므로 배지만 골라 센다.
+    expect(supportCellText('슬래시 명령', 'Codex')).toBe('미수집');
+    for (const m of ['스킬', '서브에이전트', '내장 도구', 'MCP 도구', 'LOC(추가·삭제)']) {
+      expect(supportCellText(m, 'Codex')).toBe('수집됨');
+    }
+    // 배지만 있고 사유가 없으면 사람은 그걸 버그로 읽는다.
     const badges = screen.getAllByText('미수집').filter((el) => el.classList.contains('badge'));
-    // slash · skill · agent 세 축
-    expect(badges.length).toBeGreaterThanOrEqual(3);
     for (const b of badges) {
-      // 배지만 있고 사유가 없으면 사람은 그걸 버그로 읽는다.
       expect(b).toHaveAttribute('title', expect.stringContaining('기록'));
     }
   });
@@ -298,18 +356,26 @@ describe('antigravity — 응답에 뜨면 코드 변경 없이 1급으로 붙�
     expect(row.textContent).not.toMatch(/(^|\D)0(\D|$)/);
   });
 
-  it('지원표에서 도구·LOC·MCP 는 미수집, 세션·캐시읽기는 수집됨으로 갈린다', async () => {
+  it('지원표에서 도구·LOC·MCP 는 미수집, 슬래시·키워드는 조건부, 세션·캐시읽기는 수집됨으로 갈린다', async () => {
     render(<Dashboard />);
     await screen.findByRole('heading', { name: '플랫폼별 사용량' });
-    for (const m of ['내장 도구', 'MCP 도구', 'LOC(추가·삭제)', '스킬', '서브에이전트', '슬래시 명령']) {
+    for (const m of ['내장 도구', 'MCP 도구', 'LOC(추가·삭제)', '스킬', '서브에이전트']) {
       expect(supportCellText(m, 'Antigravity')).toBe('미수집');
+    }
+    /*
+     * 슬래시·키워드는 미수집이 아니다 — history.jsonl 이 있는 대화형 세션에서는 실제로 올라온다
+     * (spool.go:456 AddHistory). '미수집'이라고 쓰면 그 값을 화면이 숨기게 된다.
+     */
+    for (const m of ['슬래시 명령', '키워드']) {
+      expect(supportCellText(m, 'Antigravity')).toBe('조건부 수집');
     }
     expect(supportCellText('캐시생성', 'Antigravity')).toBe('해당 없음');
     expect(supportCellText('세션', 'Antigravity')).toBe('수집됨');
     expect(supportCellText('캐시읽기', 'Antigravity')).toBe('수집됨');
-    // 옆 열(기존 플랫폼)은 이 작업으로 바뀌지 않았다.
+    // 옆 열(기존 플랫폼).
     expect(supportCellText('내장 도구', 'Claude')).toBe('수집됨');
     expect(supportCellText('슬래시 명령', 'Codex')).toBe('미수집');
+    expect(supportCellText('스킬', 'Codex')).toBe('수집됨');
   });
 
   it('플랫폼 필터에 코드 변경 없이 선택지로 붙고, 고르면 질의로 나간다', async () => {
@@ -421,8 +487,11 @@ describe('축 패널 — 미지원 축을 0 으로 그리지 않는다', () => {
     expect(screen.getByText('이 축을 기록하는 플랫폼:')).toBeInTheDocument();
     expect(screen.getByText('Codex · 수집됨')).toBeInTheDocument();
 
-    // 서브에이전트 축으로 옮기면 Codex 는 미수집이다.
-    await user.click(screen.getByRole('tab', { name: '서브에이전트' }));
+    /*
+     * 슬래시 축으로 옮기면 Codex 는 미수집이다 — codex 에서 미수집인 축은 이것 하나뿐이다.
+     * (예전엔 서브에이전트로 검사했는데, 수집기는 agent 를 실제로 보낸다: codex.go:540,:576.)
+     */
+    await user.click(screen.getByRole('tab', { name: '슬래시 명령' }));
     expect(await screen.findByText('Codex · 미수집')).toBeInTheDocument();
     expect(screen.getByText('Claude · 수집됨')).toBeInTheDocument();
   });
@@ -433,7 +502,8 @@ describe('축 패널 — 미지원 축을 0 으로 그리지 않는다', () => {
     await screen.findByRole('heading', { name: '사용 현황' });
 
     await user.selectOptions(await screen.findByLabelText('플랫폼'), 'codex');
-    await user.click(screen.getByRole('tab', { name: '스킬' }));
+    // codex 의 미수집 축은 슬래시 하나다(스킬은 수집기가 보낸다 — codex.go:589).
+    await user.click(screen.getByRole('tab', { name: '슬래시 명령' }));
 
     expect(await screen.findByText(/0 이 아니라 애초에 없습니다/)).toBeInTheDocument();
   });

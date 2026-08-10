@@ -184,6 +184,36 @@ describe('셸 — 로그인 게이트 · 탭 · 401 복구', () => {
   });
 });
 
+/*
+ * 대시보드 타일 라벨 — 비용 타일만 한글이고 나머지가 영어였다. 한 행 안에서 두 언어가 섞이면
+ * 사람은 그 차이를 **의미의 차이**로 읽는다("한글 타일만 우리가 계산한 값인가?").
+ * 그래서 라벨이 한국어인지가 아니라 **영어가 남아 있지 않은지**까지 본다 — 절반만 옮기는 것이
+ * 이 화면에서 가장 흔한 회귀다.
+ */
+describe('대시보드 — 타일 · 섹션 라벨 한국어 통일', () => {
+  it('실시간 현황 타일이 한국어 라벨을 쓰고 영어 라벨이 남지 않는다', async () => {
+    mockFetch(allRoutes());
+    render(<Dashboard />);
+
+    expect(await screen.findByText('활성 세션')).toBeInTheDocument();
+    expect(screen.getByText('전체 토큰')).toBeInTheDocument();
+    expect(screen.getByText('출력 토큰')).toBeInTheDocument();
+    expect(screen.getByText('캐시 적중률')).toBeInTheDocument();
+    expect(screen.getByText('캐시읽기 비중')).toBeInTheDocument();
+    expect(screen.getByText(/실시간 현황/)).toBeInTheDocument();
+
+    for (const en of [
+      'Active Sessions', 'Total Tokens', 'Output Tokens',
+      'Cache Hit Ratio', 'Cache Read Share',
+    ]) {
+      expect(screen.queryByText(en)).not.toBeInTheDocument();
+    }
+    for (const en of [/Live Status/, /Cost & Tokens/, /Tool & Agent Analytics/]) {
+      expect(screen.queryByText(en)).not.toBeInTheDocument();
+    }
+  });
+});
+
 describe('사용 추적 — ④ 근사값을 정확한 값으로 위장하지 않는다', () => {
   beforeEach(() => {
     location.hash = '#/usage'; // 이 블록은 '사용 추적' 탭 내용을 검사한다(기본 탭은 대시보드)
