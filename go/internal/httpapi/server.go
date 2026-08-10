@@ -85,11 +85,10 @@ func New(cfg config.Config) http.Handler {
 		s.limiter = newRateLimiter(cfg.IntakeRate, cfg.IntakeBurst)
 	}
 	if cfg.ReadOnly {
-		// export 는 조회이므로 readOnly 에서도 유효하다(analytics 앞에 둬 admin 이 삼키기 전에 잡는다).
-		s.routes = []route{s.routeOTLPExport, s.routeAnalytics, s.readOnlyAdmin}
+		s.routes = []route{s.routeAnalytics, s.readOnlyAdmin}
 	} else {
 		// routeOnboarding 은 /api/admin 을 소유한다(usage.go 의 /api/usage 와 겹치지 않는다).
-		s.routes = []route{s.routeIntake, s.routeOTLP, s.routeOTLPExport, s.routeAnalytics, s.routeOnboarding, s.routeAdmin}
+		s.routes = []route{s.routeIntake, s.routeAnalytics, s.routeOnboarding, s.routeAdmin}
 	}
 	return s
 }
@@ -142,7 +141,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// /install.sh — 무인증 부트스트랩(게이트 앞). 키가 인증을 대신한다. /api/·/v1/ 이 아니라
+	// /install.sh — 무인증 부트스트랩(게이트 앞). 키가 인증을 대신한다. /api/ 가 아니라
 	// 아래 404 게이트에 걸리기 전에 잡는다.
 	if p == "/install.sh" {
 		serveInstallScript(tw, r)
@@ -155,8 +154,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// /api/* 는 대시보드·인테이크, /v1/* 는 OTLP 수신구. 둘 다 게이트를 탄다.
-	if !hasPrefix(p, "/api/") && !hasPrefix(p, "/v1/") {
+	// 데이터 표면은 /api/* 하나뿐이다(대시보드·인테이크) — 전부 아래 게이트를 탄다.
+	if !hasPrefix(p, "/api/") {
 		sendError(tw, http.StatusNotFound, "not found")
 		return
 	}
@@ -209,8 +208,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// 인테이크 토큰/키는 **보고 경로만** 연다(패키지 주석 ②'). 퍼스트파티(/api/usage)와 OTLP(/v1/logs).
-	if auth.Scope == ScopeIntake && !(r.Method == http.MethodPost && (p == "/api/usage" || p == "/v1/logs")) {
+	// 인테이크 토큰/키는 **보고 경로만** 연다(패키지 주석 ②') — 퍼스트파티 `POST /api/usage` 하나뿐이다.
+	if auth.Scope == ScopeIntake && !(r.Method == http.MethodPost && p == "/api/usage") {
 		sendError(tw, http.StatusForbidden,
 			"인테이크 토큰으로는 조회할 수 없습니다 — 열람은 USAGE_ADMIN_TOKEN 을 사용하세요")
 		return

@@ -15,7 +15,7 @@ import (
  *   GET /api/agent/collector?os=&arch=      인제스트 키 필수 — 오픈 바이너리 CDN 이 되지 않게.
  *
  * 둘 다 **게이트 앞**(server.go)에서 처리된다:
- *   · install.sh 는 /api/* 도 /v1/* 도 아니라 게이트가 404 로 끊기 전에 잡아야 한다.
+ *   · install.sh 는 /api/* 가 아니라 게이트가 404 로 끊기 전에 잡아야 한다.
  *   · collector 는 게이트의 인테이크 규칙이 GET 조회를 막으므로(그 스코프는 POST 보고만) 여기서
  *     인제스트 키를 직접 검증한다.
  */

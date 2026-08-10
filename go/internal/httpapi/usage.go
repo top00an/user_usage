@@ -63,8 +63,8 @@ func (s *server) routeIntake(w http.ResponseWriter, r *http.Request, c *rctx) (b
 	return true, nil
 }
 
-// storeSessions 는 정규화된 세션들을 store 에 쓴다(서버 권위 귀속·멱등 포함). 인테이크
-// (/api/usage)와 OTLP(/v1/logs)가 공유한다 — 두 진입점이 같은 저장 규율을 타게 한다.
+// storeSessions 는 정규화된 세션들을 store 에 쓴다(서버 권위 귀속·멱등 포함). 퍼스트파티
+// 인테이크(`POST /api/usage`)가 유일한 호출부다 — 수집 경로가 하나라 저장 규율도 한 벌이다.
 func (s *server) storeSessions(ctx context.Context, sessions []intake.Session) intakeResponse {
 	stored, counters, buckets := 0, 0, 0
 	for _, sess := range sessions {
