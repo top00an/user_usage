@@ -134,7 +134,7 @@ describe('셸 — 로그인 게이트 · 탭 · 401 복구', () => {
     location.hash = '#/usageobs';
     mockFetch(allRoutes());
     render(<Dashboard />);
-    expect(await screen.findByRole('heading', { name: 'API 환산액' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'API 환산 비용' })).toBeInTheDocument();
   });
 
   /*
@@ -155,12 +155,12 @@ describe('셸 — 로그인 게이트 · 탭 · 401 복구', () => {
     // 추적 탭에서 시작 → 응답 오기 전에 관측으로 이동
     await screen.findByRole('tab', { name: '사용 추적' });
     await user.click(screen.getByRole('tab', { name: '사용 관측' }));
-    await screen.findByRole('heading', { name: 'API 환산액' });
+    await screen.findByRole('heading', { name: 'API 환산 비용' });
 
     // 늦은 추적 응답이 도착하고도 남을 시간
     await new Promise((r) => setTimeout(r, 700));
 
-    expect(screen.getByRole('heading', { name: 'API 환산액' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'API 환산 비용' })).toBeInTheDocument();
     expect(screen.queryByText('보고된 세션')).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: '사용 관측' })).toHaveAttribute('aria-selected', 'true');
 
@@ -234,7 +234,7 @@ describe('사용 관측 — ④ 나머지 항목', () => {
 
   it('단가 미등록 모델의 이름을 남긴다 (조용한 $0 금지)', async () => {
     render(<Dashboard />);
-    await screen.findByRole('heading', { name: 'API 환산액' });
+    await screen.findByRole('heading', { name: 'API 환산 비용' });
     expect(screen.getByText(/단가 미등록 모델/)).toBeInTheDocument();
     // 상위 세션 표에도 같은 이름이 나온다 — 여기서 보는 것은 "환산액 카드가 이름을 남기는가"다.
     expect(screen.getAllByText('some-unreleased-model-x').length).toBeGreaterThan(0);
@@ -242,7 +242,7 @@ describe('사용 관측 — ④ 나머지 항목', () => {
 
   it('TTL 미상 행 수와 과소 추정 사실을 말한다', async () => {
     render(<Dashboard />);
-    await screen.findByRole('heading', { name: 'API 환산액' });
+    await screen.findByRole('heading', { name: 'API 환산 비용' });
     expect(screen.getByText(/TTL 미상 5행/)).toBeInTheDocument();
     expect(screen.getByText(/최대 1.6배/)).toBeInTheDocument();
   });
@@ -263,7 +263,7 @@ describe('사용 관측 — ④ 나머지 항목', () => {
       ...trackRoutes(),
     ]);
     render(<Dashboard />);
-    expect(await screen.findByRole('heading', { name: 'API 환산액' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'API 환산 비용' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: '수집 상태' })).not.toBeInTheDocument();
   });
 

@@ -5,6 +5,48 @@ import type { Dispatch, KeyRow, Summary } from '@/lib/types';
 import { n } from '@/lib/format';
 import { Empty, TableWrap, Tabs } from '@/components/ui';
 import { AXES, type AxisId } from './labels';
+import { platformMeta, supportOf } from '@/lib/platforms';
+import { usePlatformFilter } from '@/lib/platformFilter';
+import { SupportChip } from '@/components/platform/SupportBadge';
+
+/*
+ * ── 축 × 플랫폼: 0 과 '모른다'를 가른다 ───────────────────────────────────
+ *
+ * 아래 막대는 **전체 플랫폼 합계**다(summary 는 platform 축을 받지 않는다). 그 상태에서
+ * "Codex 는 서브에이전트를 0회 썼다" 같은 결론이 나오면 그건 데이터가 아니라 착시다 —
+ * Codex 는 서브에이전트 위임을 애초에 **기록하지 않는다**. 그래서 축을 고를 때마다 그 축을
+ * 어느 플랫폼이 기록하는지 함께 말한다. 목록은 응답이 준 플랫폼만 세운다(하드코딩하지 않는다).
+ */
+function AxisSupport({ axis, platforms }: { axis: AxisId; platforms: string[] }) {
+  const cur = usePlatformFilter();
+  if (!platforms.length) return null;
+
+  const blind = platforms.filter((p) => supportOf(p, axis).state !== 'yes');
+  const curSupport = cur ? supportOf(cur, axis) : null;
+
+  return (
+    <div className="mt-sm">
+      <div className="pf-chips">
+        <span className="help">이 축을 기록하는 플랫폼:</span>
+        {platforms.map((p) => (
+          <SupportChip key={p} platform={p} metric={axis} label={platformMeta(p).label} />
+        ))}
+      </div>
+      {curSupport && curSupport.state !== 'yes' && (
+        <p className="help mt-sm">
+          선택한 플랫폼 <b>{platformMeta(cur).label}</b> 은 이 축을 기록하지 않습니다 —
+          아래 숫자에 {platformMeta(cur).label} 몫은 <b>0 이 아니라 애초에 없습니다</b>. {curSupport.why}
+        </p>
+      )}
+      {!curSupport && blind.length > 0 && (
+        <p className="help mt-sm">
+          아래는 <b>전체 플랫폼 합계</b>입니다. {blind.map((p) => platformMeta(p).label).join(' · ')} 의 몫은
+          이 축에 <b>포함돼 있지 않습니다</b>(0 이 아니라 수집 자체가 되지 않습니다).
+        </p>
+      )}
+    </div>
+  );
+}
 
 /* 가로 막대 — 축별 상위 키를 한눈에. 외부 차트 라이브러리 없이 폭으로 그린다(무의존성). */
 function Bars({ rows }: { rows: KeyRow[] }) {
@@ -100,11 +142,13 @@ function DispatchTable({ axis, data, failed }: { axis: AxisId; data: Dispatch | 
 }
 
 export default function AxisExplorer({
-  top, dispatch, dispatchFailed,
+  top, dispatch, dispatchFailed, platforms = [],
 }: {
   top: Summary['top'];
   dispatch: Dispatch | null;
   dispatchFailed: boolean;
+  /** /api/usage/platforms 가 돌려준 플랫폼 id 들. 비면 지원 안내를 그리지 않는다. */
+  platforms?: string[];
 }) {
   const [axis, setAxis] = useState<AxisId>('bash');
   const def = AXES.find((a) => a.id === axis) ?? AXES[0];
@@ -117,6 +161,7 @@ export default function AxisExplorer({
       </div>
       <Tabs tabs={AXES} active={axis} onSelect={setAxis} label="사용 현황 축" idPrefix="axis" />
       <div id="axis-panel" role="tabpanel" aria-labelledby={`axis-${axis}`} className="mt">
+        <AxisSupport axis={axis} platforms={platforms} />
         <TableWrap>
           <Bars rows={top?.[axis] ?? []} />
         </TableWrap>

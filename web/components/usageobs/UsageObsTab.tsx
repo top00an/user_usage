@@ -2,14 +2,19 @@
 
 import { useCallback, useState } from 'react';
 import {
-  getCoverage, getDistribution, getLeaderboard, getQuality, getSeats, getSessions, getTeams,
+  getCoverage, getDistribution, getLeaderboard, getPlatforms, getQuality, getSeats, getSessions, getTeams,
 } from '@/lib/api';
 import { softly, useResource } from '@/hooks/useResource';
 import type {
-  Coverage, Distribution, DistributionKey, Leaderboard, Quality, Seats, SessionsResponse, Teams,
+  Coverage, Distribution, DistributionKey, Leaderboard, PlatformsResponse, Quality, Seats,
+  SessionsResponse, Teams,
 } from '@/lib/types';
 import { n, pctOf, relTime, fmtTime, seconds, shortTokens, usd } from '@/lib/format';
 import { Card, ErrorState, Flag, Loading, TableWrap } from '@/components/ui';
+import { usePlatformFilter } from '@/lib/platformFilter';
+import { platformMeta } from '@/lib/platforms';
+import { COST_LABEL, COST_LABEL_SHORT, COST_WHY } from '@/lib/costLabels';
+import PlatformFilter from '@/components/platform/PlatformFilter';
 import CostCard from './CostCard';
 import SeatsCard from './SeatsCard';
 import SessionsCard from './SessionsCard';
@@ -40,7 +45,7 @@ const DIST_DEFS: { k: DistributionKey; label: string; fmt: (v: unknown) => strin
     k: 'cacheReadPerTurn', label: '턴당 캐시읽기', fmt: (v) => shortTokens(v),
     why: '한 요청이 실어 보낸 컨텍스트 크기. 캐시읽기가 큰 이유가 여기 있다.',
   },
-  { k: 'sessionCostUsd', label: '세션당 비용', fmt: (v) => usd(v), why: '비싼 세션이 어디쯤인지.' },
+  { k: 'sessionCostUsd', label: `세션당 ${COST_LABEL_SHORT}`, fmt: (v) => usd(v), why: '비싼 세션이 어디쯤인지.' },
   { k: 'turnsPerSession', label: '세션당 턴 수', fmt: (v) => n(v), why: '' },
   { k: 'cacheHitRate', label: '캐시 적중률', fmt: (v) => pctOf(v), why: '낮아지면 접두사가 깨지고 있다는 뜻.' },
 ];
@@ -131,14 +136,14 @@ function LeaderboardCard({ d, onDetail }: { d: Leaderboard; onDetail: (u: string
   const users = d?.users ?? [];
   if (!users.length) return null;
   return (
-    <Card title="사용자별" className="mt" aside={<span className="help">API 환산액순 · 이 기간 전체</span>}>
+    <Card title="사용자별" className="mt" aside={<span className="help">{COST_LABEL}순 · 이 기간 전체</span>}>
       <TableWrap>
         <table className="mt-sm">
           <thead>
             <tr>
               <th>사용자</th><th className="num">세션</th><th className="num">턴</th>
               <th className="num">토큰</th><th className="num">캐시적중</th>
-              <th className="num">세션당</th><th className="num">환산액</th>
+              <th className="num">세션당</th><th className="num" title={COST_WHY}>{COST_LABEL_SHORT}</th>
               <th className="num"><span className="help">상세</span></th>
             </tr>
           </thead>
@@ -228,58 +233,96 @@ export default function UsageObsTab() {
   const [detailUser, setDetailUser] = useState<string | null>(null);
 
   /*
+   * 선택된 플랫폼. 이 화면의 조회 다섯(distribution·sessions·leaderboard·quality·coverage)은
+   * 서버가 platform 축으로 실제로 거른다 — 그래서 여기서는 필터가 **작동한다**.
+   * seats·teams 는 못 거른다(lib/api.ts 의 표) → 그 두 카드는 '전체 플랫폼 기준'이라고 말한다.
+   */
+  const platform = usePlatformFilter();
+
+  /*
+   * 플랫폼 목록은 조회 조건과 무관하므로 **따로** 싣는다(deps []). 같은 로더에 묶으면
+   * 플랫폼을 고를 때마다 선택지 목록까지 다시 받아온다 — 그동안 셀렉트가 사라진다.
+   */
+  const loadPlatforms = useCallback(
+    ({ signal }: { signal: AbortSignal }) => softly(getPlatforms({ signal }), null as PlatformsResponse | null),
+    [],
+  );
+  const platformsRes = useResource(loadPlatforms, []);
+  const platformRows = platformsRes.state.status === 'ready'
+    ? platformsRes.state.data?.platforms ?? null
+    : null;
+
+  /*
    * 다섯 조회를 한 로더에 묶는다 — 같은 signal 을 공유하므로 탭을 떠나면 전부 끊긴다.
    * 곁가지 넷은 fail-soft 다: 하나가 실패해도 비용 카드와 상위 세션은 그대로 보여야 한다.
    * 반대로 sessions 는 이 화면의 뼈대라 실패하면 화면 전체가 실패로 간다.
    */
   const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<ObsData> => {
+    const p = platform || undefined; // 빈 값은 파라미터 자체를 안 붙인다(=전체, 현행 동작)
     const [dist, sessions, leaderboard, quality, coverage, seats, teams] = await Promise.all([
-      getDistribution({ signal }),
-      getSessions({ sort: 'cost', top: 25 }, { signal }),
-      softly(getLeaderboard({ signal }), { users: [], pricedAt: '', sample: { limit: 0, rows: 0, truncated: false }, unpriced: [] } as Leaderboard),
-      softly(getQuality({ signal }), null as Quality | null),
-      softly(getCoverage({ signal }), { now: '', reporters: [] } as Coverage),
+      getDistribution({ platform: p }, { signal }),
+      getSessions({ sort: 'cost', top: 25, platform: p }, { signal }),
+      softly(getLeaderboard({ platform: p }, { signal }), { users: [], pricedAt: '', sample: { limit: 0, rows: 0, truncated: false }, unpriced: [] } as Leaderboard),
+      softly(getQuality({ platform: p }, { signal }), null as Quality | null),
+      softly(getCoverage({ platform: p }, { signal }), { now: '', reporters: [] } as Coverage),
       // seats·teams 는 관리자 전용(교차 뷰) — member 스코프는 403 이라 softly 로 null 처리해
       // 카드가 스스로 숨는다. 이것이 프런트의 RBAC 화면 분기다.
+      // ⚠ 이 둘은 platform 축을 받지 않는다 — 넘기지 않고, 화면이 '전체 기준'이라고 밝힌다.
       softly(getSeats(30, { signal }), null as Seats | null),
       softly(getTeams(30, { signal }), null as Teams | null),
     ]);
     return { dist, sessions, leaderboard, quality, coverage, seats, teams };
-  }, []);
+  }, [platform]);
 
-  const { state, reload } = useResource(load, []);
+  // 플랫폼이 바뀌면 키가 바뀌어 낡은 응답이 렌더에 오르지 못한다(hooks/useResource.ts ③).
+  const { state, reload } = useResource(load, [platform]);
 
-  if (state.status === 'loading') return <Loading />;
-  if (state.status === 'error') return <ErrorState what="사용 관측을 불러오지 못했습니다." error={state.error} onRetry={reload} />;
+  /* 컨트롤은 로딩·실패 중에도 남는다 — 사라지면 되돌릴 방법이 화면에서 없어진다. */
+  const bar = (
+    <PlatformFilter rows={platformRows} applies what="아래 지표는 이 플랫폼만 집계합니다" />
+  );
 
-  const { dist, sessions, leaderboard, quality, coverage, seats, teams } = state.data;
+  let body: React.ReactNode;
+  if (state.status === 'loading') {
+    body = <Loading />;
+  } else if (state.status === 'error') {
+    body = <ErrorState what="사용 관측을 불러오지 못했습니다." error={state.error} onRetry={reload} />;
+  } else {
+    const { dist, sessions, leaderboard, quality, coverage, seats, teams } = state.data;
 
-  if (!sessions.sessions?.length) {
-    return (
-      <Card title="아직 보고가 없습니다">
-        <p className="help">팀원 PC 가 수집기를 갱신한 뒤 세션을 한 번 열면 집계가 올라옵니다.</p>
-      </Card>
-    );
+    if (!sessions.sessions?.length) {
+      body = (
+        <Card title={platform ? `${platformMeta(platform).label} 보고가 없습니다` : '아직 보고가 없습니다'}>
+          <p className="help">
+            {platform
+              ? '이 플랫폼으로 보고된 세션이 없습니다 — 다른 플랫폼의 데이터는 위 선택을 전체로 바꾸면 보입니다.'
+              : '팀원 PC 가 수집기를 갱신한 뒤 세션을 한 번 열면 집계가 올라옵니다.'}
+          </p>
+        </Card>
+      );
+    } else {
+      body = (
+        <>
+          <p className="lead">
+            토큰이 아니라 <b>비용 비중</b>으로 봅니다. 축마다 단가 배수가 달라
+            토큰 수가 큰 축과 비용이 큰 축이 다릅니다.
+          </p>
+          <CostCard s={sessions} />
+          <SeatsCard d={seats} />
+          <TeamsCard d={teams} />
+          <LeaderboardCard d={leaderboard} onDetail={setDetailUser} />
+          <QualityCard q={quality} />
+          <DistCard d={dist.distributions ?? {}} />
+          <SessionsCard s={sessions} />
+          <ReporterCoverageCard d={coverage} />
+
+          {detailUser && (
+            <UserDetailModal key={detailUser} username={detailUser} onClose={() => setDetailUser(null)} />
+          )}
+        </>
+      );
+    }
   }
 
-  return (
-    <>
-      <p className="lead">
-        토큰이 아니라 <b>비용 비중</b>으로 봅니다. 축마다 단가 배수가 달라
-        토큰 수가 큰 축과 비용이 큰 축이 다릅니다.
-      </p>
-      <CostCard s={sessions} />
-      <SeatsCard d={seats} />
-      <TeamsCard d={teams} />
-      <LeaderboardCard d={leaderboard} onDetail={setDetailUser} />
-      <QualityCard q={quality} />
-      <DistCard d={dist.distributions ?? {}} />
-      <SessionsCard s={sessions} />
-      <ReporterCoverageCard d={coverage} />
-
-      {detailUser && (
-        <UserDetailModal key={detailUser} username={detailUser} onClose={() => setDetailUser(null)} />
-      )}
-    </>
-  );
+  return <>{bar}{body}</>;
 }

@@ -9,6 +9,8 @@
 import type { Teams } from '@/lib/types';
 import { n, usd } from '@/lib/format';
 import { Card, TableWrap } from '@/components/ui';
+import { COST_LABEL_SHORT, COST_WHY } from '@/lib/costLabels';
+import PlatformScope from '@/components/platform/PlatformScope';
 
 export default function TeamsCard({ d }: { d: Teams | null }) {
   if (!d || !d.teams?.length) return null;
@@ -17,7 +19,7 @@ export default function TeamsCard({ d }: { d: Teams | null }) {
   if (d.teams.length === 1 && d.teams[0]?.team === '미배정') return null;
 
   return (
-    <Card title="팀별 롤업" className="mt">
+    <Card title="팀별 롤업" className="mt" aside={<PlatformScope applies={false} />}>
       <p className="help">최근 {d.days}일. 팀 배정은 `usage-server team assign` 으로 관리합니다.</p>
       <TableWrap>
         <table className="mt-sm">
@@ -26,7 +28,7 @@ export default function TeamsCard({ d }: { d: Teams | null }) {
               <th>팀</th>
               <th className="num">멤버</th>
               <th className="num">세션</th>
-              <th className="num">비용</th>
+              <th className="num" title={COST_WHY}>{COST_LABEL_SHORT}</th>
               <th className="num">멤버당</th>
               <th>구성원</th>
             </tr>

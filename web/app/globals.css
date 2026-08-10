@@ -963,3 +963,63 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
   .arch-step { grid-template-columns: 1fr; }
   .arch-step-num { margin-bottom: 2px; }
 }
+
+/* ── 플랫폼 축 ────────────────────────────────────────────────────────────
+ *
+ * 배지의 회색은 **보조 신호일 뿐**이다 — 상태는 글자('미수집'·'해당 없음')가 말한다.
+ * 색만으로 구분하면 색각 이상 사용자에게 그 구분이 통째로 사라지고, 그때 화면은 "모른다"를
+ * "0"으로 읽히게 만든다. 그래서 점선 테두리까지 더해 형태로도 갈린다(ui.tsx 의 Flag 와 같은 규율).
+ */
+.badge.mute { color: var(--fg-faint); border-style: dashed; }
+
+.pf-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: var(--gap);
+}
+.pf-bar label { color: var(--fg-muted); font-size: .84rem; }
+.pf-bar select { min-width: 120px; }
+
+.pf-cards {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+/* 플랫폼 색은 왼쪽 띠 하나로만 쓴다 — 배경을 물들이면 표의 숫자 대비가 무너진다. */
+.pf-card { border-left-width: 3px; border-left-style: solid; min-width: 0; }
+.pf-card[aria-current="true"] { box-shadow: 0 0 0 1px var(--accent) inset; }
+.pf-name { font-weight: 640; font-size: .92rem; display: inline-flex; align-items: center; }
+.pf-dot {
+  width: 10px; height: 10px; border-radius: 3px;
+  display: inline-block; margin-right: 6px; flex: none;
+}
+
+.pf-kv { margin-top: 10px; display: flex; flex-direction: column; gap: 3px; }
+.pf-kv-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 10px;
+  font-size: .8rem;
+}
+.pf-kv dt { color: var(--fg-faint); }
+.pf-kv dd { text-align: right; font-variant-numeric: tabular-nums; min-width: 0; }
+
+.pf-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+/* 지원표는 열이 플랫폼 수만큼 늘어난다 — 좁은 화면에서는 표가 스스로 가로 스크롤한다
+ * (TableWrap 의 .table-wrap). 본문이 가로로 밀리지 않게 하는 것이 규칙이다. */
+tbody th[scope="row"] { font-weight: 500; color: var(--fg); }
+
+/* 지원표는 접어 둔다 — 배지가 왜 붙었는지 확인하러 오는 자리다(값은 위 카드가 말한다). */
+.pf-details > summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: .8rem;
+  padding: 6px 2px;
+  list-style-position: inside;
+}
+.pf-details > summary:hover { color: var(--fg); }
+.pf-details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }

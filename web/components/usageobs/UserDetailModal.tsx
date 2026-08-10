@@ -7,6 +7,8 @@ import type { SeriesLine, SeriesResponse } from '@/lib/types';
 import { dayShift, n, shortTokens } from '@/lib/format';
 import Modal from '@/components/Modal';
 import { ErrorState, Loading, TableWrap } from '@/components/ui';
+import { usePlatformFilter } from '@/lib/platformFilter';
+import PlatformScope from '@/components/platform/PlatformScope';
 
 /*
  * ── 사용자별 상세 ─────────────────────────────────────────────────────────
@@ -85,16 +87,20 @@ function Pivot({ series, label }: { series: SeriesLine[] | undefined; label: str
 }
 
 export default function UserDetailModal({ username, onClose }: { username: string; onClose: () => void }) {
+  // series 는 platform 축을 받는다 — 관측 탭에서 플랫폼을 골랐다면 이 상세도 같은 모집단이어야 한다.
+  const platform = usePlatformFilter();
+
   const load = useCallback(async ({ signal }: { signal: AbortSignal }) => {
+    const p = platform || undefined;
     // 두 요청은 서로 독립이다 — 순차로 기다릴 이유가 없다.
     const [daily, weekly] = await Promise.all([
-      getSeries({ metric: 'tokens', interval: 'day', groupBy: 'model', user: username, from: dayShift(DETAIL_DAYS - 1) }, { signal }),
-      getSeries({ metric: 'tokens', interval: 'week', groupBy: 'model', user: username, from: dayShift(DETAIL_WEEKS * 7) }, { signal }),
+      getSeries({ metric: 'tokens', interval: 'day', groupBy: 'model', user: username, from: dayShift(DETAIL_DAYS - 1), platform: p }, { signal }),
+      getSeries({ metric: 'tokens', interval: 'week', groupBy: 'model', user: username, from: dayShift(DETAIL_WEEKS * 7), platform: p }, { signal }),
     ]);
     return { daily, weekly } as { daily: SeriesResponse; weekly: SeriesResponse };
-  }, [username]);
+  }, [username, platform]);
 
-  const { state, reload } = useResource(load, [username]);
+  const { state, reload } = useResource(load, [username, platform]);
 
   return (
     <Modal title={`${username} — 사용 상세`} onClose={onClose} maxWidth={880}>
@@ -103,6 +109,7 @@ export default function UserDetailModal({ username, onClose }: { username: strin
       {state.status === 'ready' && (
         <>
           <p className="help">
+            <PlatformScope applies />{' '}
             모델별 <b>토큰 소모량</b>입니다(입력·출력·캐시읽기·캐시생성 합계).
             숫자에 마우스를 올리면 정확한 값이 나옵니다.
             시각 기준 <span className="mono">{state.data.daily.timezone || state.data.weekly.timezone || '-'}</span>.

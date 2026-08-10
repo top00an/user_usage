@@ -35,7 +35,7 @@ export function shortTokens(v: unknown): string {
 }
 
 /**
- * API 환산액. 1달러 미만은 소수 셋째 자리까지 — 세션 단가가 대개 그 구간이고,
+ * API 환산 비용(lib/costLabels.ts). 1달러 미만은 소수 셋째 자리까지 — 세션 단가가 대개 그 구간이고,
  * 반올림해 $0 으로 만들면 "0원짜리 세션"이라는 없는 사실이 생긴다.
  */
 export function usd(v: unknown): string {

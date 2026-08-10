@@ -13,7 +13,7 @@ import './globals.css';
  */
 export const metadata: Metadata = {
   title: '사용량 대시보드',
-  description: '동기화된 PC 들의 토큰·도구 사용량과 API 환산액.',
+  description: '동기화된 PC 들의 토큰·도구 사용량과 API 환산 비용.',
   robots: { index: false, follow: false },
   icons: { icon: '/favicon.svg' },
 };
