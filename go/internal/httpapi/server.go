@@ -81,7 +81,12 @@ func New(cfg config.Config) http.Handler {
 	s := &server{cfg: cfg, loginLimiter: newRateLimiter(loginRefill, loginBurst)}
 	// burst<=0 이면 리미터를 만들지 않는다(무제한) — 제로값 설정이 "모든 요청 429"로
 	// 뒤집히는 footgun 을 막는다. 프로덕션 기본값은 config.Read 가 20/40 으로 채운다.
-	if cfg.MultiTenant && cfg.IntakeBurst > 0 {
+	//
+	// 모드와 무관하게 만든다: 단일테넌트에서도 인제스트 키가 보고 경로를 열기 때문이다. 다만
+	// **무엇에 거는지**는 ServeHTTP 가 정한다 — 멀티테넌트 인테이크 전부 + (모드 무관) 인제스트
+	// 키 보고. cfg 인테이크 토큰의 단일테넌트 경로는 종전대로 무제한이다(계약 하네스가 시드를
+	// 빠르게 쏘므로 거기에 걸면 골든이 흔들린다).
+	if cfg.IntakeBurst > 0 {
 		s.limiter = newRateLimiter(cfg.IntakeRate, cfg.IntakeBurst)
 	}
 	if cfg.ReadOnly {
@@ -91,6 +96,23 @@ func New(cfg config.Config) http.Handler {
 		s.routes = []route{s.routeIntake, s.routeAnalytics, s.routeOnboarding, s.routeAdmin}
 	}
 	return s
+}
+
+/*
+ * ingestKeyAuth 는 해석된 인제스트 키를 이 배포의 자격으로 접는다. 두 모드가 갈리는 **유일한**
+ * 지점이라 여기 한 곳에 둔다:
+ *
+ *   · 멀티테넌트 — 키가 가리키는 tenant 를 그대로 싣는다. RLS 가 그 값으로 격리를 강제한다.
+ *   · 단일테넌트 — tenant 를 비워 둔다(게이트가 cfg.Tenant 를 쓴다). 키를 따라가면 sqlite 처럼
+ *     RLS 가 없는 배포에서 org 별 tenant 가 조용히 생기는데, 저장 계층이 그것을 보지 않으므로
+ *     보고는 남의 tenant 로 들어가고 대시보드에서는 사라진 것처럼 보인다.
+ */
+func (s *server) ingestKeyAuth(keyTenant string) *Auth {
+	a := &Auth{Via: ViaHeader, Scope: ScopeIntake, IngestKey: true}
+	if s.cfg.MultiTenant {
+		a.Tenant = keyTenant
+	}
+	return a
 }
 
 func (s *server) readOnlyAdmin(w http.ResponseWriter, r *http.Request, c *rctx) (bool, error) {
@@ -173,12 +195,22 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if auth == nil {
 		auth = s.sessionAuth(r)
 	}
-	// 멀티테넌트(SaaS): cfg 토큰으로 못 뚫렸으면 Bearer 를 org 인제스트 키로 해석한다 —
-	// 성공하면 보고(intake) 스코프 + 해석된 tenant. 실패하면 종전대로 401.
-	if auth == nil && s.cfg.MultiTenant {
+	// cfg 토큰으로 못 뚫렸으면 Bearer 를 org 인제스트 키로 해석한다 — 성공하면 보고(intake)
+	// 스코프. 실패하면 종전대로 401.
+	//
+	// **모드와 무관하게** 해석한다. 온보딩 UI(POST /api/admin/keys)는 모드를 보지 않고 키를
+	// 발급하고, install.sh 는 그 키 하나로 수집기 다운로드와 백필 업로드를 모두 한다 —
+	// 단일테넌트에서 여기를 닫아 두면 다운로드만 되고 업로드가 401 인 반쪽 설치가 된다.
+	if auth == nil {
 		if bearer := bearerToken(r); bearer != "" {
-			if t, _, ok, err := org.Resolve(r.Context(), bearer); err == nil && ok {
-				auth = &Auth{Via: ViaHeader, Scope: ScopeIntake, Tenant: t}
+			t, _, ok, err := org.Resolve(r.Context(), bearer)
+			if err != nil {
+				// 조회 실패·미초기화. 응답은 아래에서 401 로 접고(서버 상태 미노출) 원인은
+				// stderr 로만 남긴다. 미지·해지 키는 err 이 아니라 ok=false 라 여기 오지 않는다.
+				logf("인제스트 키 해석 실패: %v", err)
+			}
+			if err == nil && ok {
+				auth = s.ingestKeyAuth(t)
 			}
 		}
 	}
@@ -230,8 +262,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if auth.Tenant != "" {
 		tenantID = auth.Tenant
 	}
-	// 멀티테넌트 인테이크 rate limit — 테넌트별 토큰버킷. 한 org 의 폭주가 남을 굶기지 않게.
-	if auth.Scope == ScopeIntake && !s.limiter.allow(tenantID) {
+	// 인테이크 rate limit — 테넌트별 토큰버킷. 멀티테넌트에서는 한 org 의 폭주가 남을 굶기지
+	// 않게, 단일테넌트에서는 복제된 인제스트 키 사본 하나가 무한정 쓰지 못하게 건다.
+	// (단일테넌트의 cfg 인테이크 토큰 경로는 제외 — 종전 무제한 그대로다.)
+	if auth.Scope == ScopeIntake && (s.cfg.MultiTenant || auth.IngestKey) && !s.limiter.allow(tenantID) {
 		sendError(tw, http.StatusTooManyRequests, "요청이 너무 잦습니다 — 잠시 후 다시 시도하세요")
 		return
 	}

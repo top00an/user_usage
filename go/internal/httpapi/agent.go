@@ -79,8 +79,9 @@ func (s *server) serveCollector(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ① 인제스트 키 — 헤더 우선, 없으면 ?key=(curl 파이프라인 편의).
+	// ① 자격 — 헤더 우선, 없으면 ?key=(curl 파이프라인 편의).
 	key := bearerToken(r)
+	fromHeader := key != ""
 	if key == "" {
 		key = r.URL.Query().Get("key")
 	}
@@ -89,13 +90,33 @@ func (s *server) serveCollector(w http.ResponseWriter, r *http.Request) {
 			"인제스트 키가 필요합니다 — Authorization: Bearer <key> 또는 ?key=<key>")
 		return
 	}
+	/*
+	 * 다운로드는 **보고 자격이면 충분하다.** 이 엔드포인트가 막는 것은 "오픈 바이너리 CDN 이
+	 * 되는 것" 하나이고, 바이너리에는 테넌트 데이터가 없다. 이미 보고할 수 있는 cfg 인테이크
+	 * 토큰과 그보다 강한 admin 토큰을 여기서만 거절하면, 그 토큰으로 설치하는 배포는 원커맨드가
+	 * ②에서 401 로 끊긴다 — 자격에 따라 설치가 반쪽으로 끝나는 자리를 만들지 않는다.
+	 *
+	 * 단 cfg 토큰은 **헤더로만** 인정한다. ?key= 는 액세스 로그·리퍼러에 남는 자리라 전사 열람
+	 * 권한이 있는 토큰을 태울 곳이 아니다(인제스트 키는 보고 전용이라 여기까지 감수한다).
+	 */
+	authorized := false
+	if fromHeader {
+		// Bearer 가 있으므로 Authenticate 는 헤더 분기만 탄다(쿠키로 흐르지 않는다).
+		if a := Authenticate(r, s.cfg); a != nil {
+			authorized = true
+		}
+	}
 	// org.Resolve 는 전역 핸들로 키를 해석한다(게이트의 인테이크 해석과 같은 함수). err 은 조회
 	// 자체 실패(또는 미초기화)이고, !ok 는 미지·해지 키다 — 둘 다 401 로 접는다(서버 상태를
 	// 무인증 부트스트랩 경로로 흘리지 않는다). err 은 stderr 로만 남긴다.
-	if _, _, ok, err := org.Resolve(r.Context(), key); err != nil || !ok {
+	if !authorized {
+		_, _, ok, err := org.Resolve(r.Context(), key)
 		if err != nil {
 			logf("collector 인제스트 키 해석 실패: %v", err)
 		}
+		authorized = err == nil && ok
+	}
+	if !authorized {
 		sendError(w, http.StatusUnauthorized, "유효하지 않은 인제스트 키입니다")
 		return
 	}
