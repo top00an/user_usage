@@ -5,7 +5,10 @@
  * 나중에 SSO·프록시로 갈아탈 때 고칠 자리가 여기 하나여야 하기 때문이다. 컴포넌트가 fetch 를
  * 직접 부르면 그 전환이 전면 수정이 된다.
  *
- * 자격증명은 쿠키(usage_tok)로 실린다 — 브라우저가 알아서 붙이므로 호출부가 토큰을 모른다.
+ * 자격증명은 **세션 쿠키**로 실린다. 로그인이 성공하면 서버가 httpOnly 쿠키를 Set-Cookie 로
+ * 내려주고, 이후 모든 요청은 `credentials:'include'` 로 그 쿠키를 실어 보낸다 — JS 는 토큰을
+ * 만지지 않는다(httpOnly 라 읽지도 못한다). 로그인/로그아웃/현재 사용자 확인은 auth 엔드포인트
+ * 세 개로 모은다(login·logout·getMe).
  *
  * 실패는 **구조로** 남긴다(현행 public/js/core.js 의 fail 과 같은 계약):
  *   · status — 401(게이트 복귀) · 403(권한 안내) · 5xx(연결 실패)를 갈라야 하는 호출부가 있다
@@ -91,15 +94,30 @@ export function setUnauthorizedHandler(fn: UnauthorizedHandler): void {
 
 export interface RequestOptions {
   signal?: AbortSignal;
+  /** 기본 GET. auth 엔드포인트는 POST 로 부른다. */
+  method?: string;
+  /** 있으면 JSON 으로 직렬화해 보낸다(Content-Type 자동). login 바디 등. */
+  body?: unknown;
+  /**
+   * 인증 흐름(login·getMe)은 전역 401 훅을 타지 않는다 — 호출부가 인라인으로 처리한다.
+   * getMe 의 401 은 "로그인 안 됨"이라는 정상 답이고, login 의 401 은 "자격증명 오류"라
+   * 폼 위에 그대로 띄워야지 게이트 훅으로 새어 나가면 안 된다.
+   */
+  skipUnauthorizedHook?: boolean;
 }
 
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const hasBody = opts.body !== undefined;
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
-      method: 'GET',
-      credentials: 'same-origin',
-      headers: { Accept: 'application/json' },
+      method: opts.method ?? 'GET',
+      // 세션 쿠키는 httpOnly 라 JS 가 붙일 수 없다 — 브라우저가 싣게 include 로 둔다.
+      credentials: 'include',
+      headers: hasBody
+        ? { Accept: 'application/json', 'Content-Type': 'application/json' }
+        : { Accept: 'application/json' },
+      body: hasBody ? JSON.stringify(opts.body) : undefined,
       signal: opts.signal,
     });
   } catch (e) {
@@ -120,9 +138,9 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
     body = {};
   }
 
-  if (res.status === 401) {
-    // 던지기 **전에** 부른다: 토큰이 틀리거나 서버 재기동으로 바뀌었을 때 화면이 빈 카드로
-    // 남지 않고 게이트로 돌아가야 한다.
+  if (res.status === 401 && !opts.skipUnauthorizedHook) {
+    // 던지기 **전에** 부른다: 세션이 만료되거나 서버 재기동으로 끊겼을 때 화면이 빈 카드로
+    // 남지 않고 로그인으로 돌아가야 한다. (auth 엔드포인트는 skipUnauthorizedHook 로 제외.)
     unauthorizedHandler();
   }
 
@@ -133,6 +151,41 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
 
   return body as T;
 }
+
+/* ── 인증(사람 로그인) ────────────────────────────────────────────────────
+ *
+ * 동결 계약:
+ *   POST /api/auth/login  {username,password} → 200 {ok:true,user:{username,role,tenant}} · 401 {ok:false,error}
+ *   POST /api/auth/logout → 204
+ *   GET  /api/auth/me     → 200 {username,role,tenant} · 401
+ * 세션 쿠키는 서버가 Set-Cookie 로 내린다(httpOnly). 여기서는 쿠키를 만지지 않는다.
+ */
+export interface AuthUser {
+  username: string;
+  role: string;
+  tenant: string;
+}
+
+interface LoginResponse {
+  ok: boolean;
+  user: AuthUser;
+}
+
+/** 401 은 ApiError(status 401) 로 던진다 — 호출부가 "자격증명 오류"를 인라인으로 띄운다. */
+export const login = (username: string, password: string, o?: RequestOptions) =>
+  request<LoginResponse>('/api/auth/login', {
+    ...o,
+    method: 'POST',
+    body: { username, password },
+    skipUnauthorizedHook: true,
+  }).then((r) => r.user);
+
+export const logout = (o?: RequestOptions) =>
+  request<void>('/api/auth/logout', { ...o, method: 'POST' });
+
+/** 401 이면 ApiError 를 던진다("로그인 안 됨"). 호출부(셸)가 로그인 화면으로 분기한다. */
+export const getMe = (o?: RequestOptions) =>
+  request<AuthUser>('/api/auth/me', { ...o, skipUnauthorizedHook: true });
 
 /* ── 엔드포인트 10개 ──────────────────────────────────────────────────── */
 

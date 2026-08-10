@@ -61,6 +61,8 @@ type server struct {
 	cfg     config.Config
 	routes  []route
 	limiter *rateLimiter // 멀티테넌트 인테이크 rate limit. 단일테넌트면 nil(무제한).
+	// loginLimiter 는 사람 로그인(/api/auth/login) 브루트포스 방어용 IP별 rate limit. 항상 켠다.
+	loginLimiter *rateLimiter
 }
 
 /*
@@ -76,7 +78,7 @@ type server struct {
  * 이 모드에서 그 엔드포인트는 "지금은 막혔다"가 아니라 **존재하지 않기** 때문이다.
  */
 func New(cfg config.Config) http.Handler {
-	s := &server{cfg: cfg}
+	s := &server{cfg: cfg, loginLimiter: newRateLimiter(loginRefill, loginBurst)}
 	// burst<=0 이면 리미터를 만들지 않는다(무제한) — 제로값 설정이 "모든 요청 429"로
 	// 뒤집히는 footgun 을 막는다. 프로덕션 기본값은 config.Read 가 20/40 으로 채운다.
 	if cfg.MultiTenant && cfg.IntakeBurst > 0 {
@@ -145,7 +147,19 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 사람 로그인(ID/PW → 세션 쿠키)은 게이트 **앞**이다 — 로그인/로그아웃은 무자격으로 닿아야
+	// 하고 /me 는 스스로 401 을 낸다. 발급된 세션은 아래 게이트가 usage_sess 쿠키로 다시 인식한다.
+	if hasPrefix(p, "/api/auth/") {
+		s.serveAuth(tw, r, p)
+		return
+	}
+
 	auth := Authenticate(r, s.cfg)
+	// 사람 로그인 세션(usage_sess 쿠키) — cfg 토큰/쿠키로 못 뚫렸으면 세션으로 해석한다.
+	// 성공하면 세션의 role 이 스코프가 된다(admin=전사 열람, member=자기 데이터만).
+	if auth == nil {
+		auth = s.sessionAuth(r)
+	}
 	// 멀티테넌트(SaaS): cfg 토큰으로 못 뚫렸으면 Bearer 를 org 인제스트 키로 해석한다 —
 	// 성공하면 보고(intake) 스코프 + 해석된 tenant. 실패하면 종전대로 401.
 	if auth == nil && s.cfg.MultiTenant {
@@ -187,8 +201,9 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"인테이크 토큰으로는 조회할 수 없습니다 — 열람은 USAGE_ADMIN_TOKEN 을 사용하세요")
 		return
 	}
-	// 쿠키 자격증명으로는 상태변경을 태우지 않는다(패키지 주석 ②).
-	if r.Method != http.MethodGet && r.Method != http.MethodHead && auth.Via == ViaCookie {
+	// 쿠키 자격증명으로는 상태변경을 태우지 않는다(패키지 주석 ②). usage_tok 쿠키와 사람 로그인
+	// 세션(usage_sess) 둘 다 쿠키 자격이므로 같은 규칙을 받는다 — 상태변경은 Bearer 만.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && (auth.Via == ViaCookie || auth.Via == ViaSession) {
 		sendError(tw, http.StatusForbidden,
 			"쿠키 인증으로는 상태변경을 할 수 없습니다 — Authorization: Bearer 를 사용하세요")
 		return

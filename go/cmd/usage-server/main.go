@@ -37,11 +37,43 @@ func main() {
 	// 프로비저닝 서브커맨드(멀티테넌트 운영 CLI). 없으면 서버를 띄운다.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "org", "key", "team", "member":
+		case "org", "key", "team", "member", "user":
 			os.Exit(provision(os.Args[1:]))
 		}
 	}
 	os.Exit(run())
+}
+
+/*
+ * bootstrapAdmin — 최초 관리자 생성(운영 첫 기동용). USAGE_BOOTSTRAP_ADMIN_USER +
+ * USAGE_BOOTSTRAP_ADMIN_PASSWORD 가 둘 다 있고 대상 tenant 에 사용자가 하나도 없을 때만 admin 1명을
+ * 만든다. 이미 사용자가 있으면 아무것도 하지 않는다(멱등 — 재기동마다 새로 만들지 않는다).
+ *
+ * store 는 run() 이 이미 Init 했다(전역 핸들). 대상 tenant 는 cfg.BootstrapTenant(기본 default)로,
+ * cfg.Tenant 와 독립이다 — 부팅 컨텍스트를 그 tenant 로 감싸 pg RLS/컬럼 DEFAULT 가 맞게 채운다.
+ */
+func bootstrapAdmin(ctx context.Context, cfg config.Config) error {
+	if cfg.BootstrapAdminUser == "" || cfg.BootstrapAdminPassword == "" {
+		return nil // 부트스트랩 비활성(둘 다 있어야 동작)
+	}
+	bctx := tenant.With(ctx, cfg.BootstrapTenant)
+	has, err := store.HasAnyUser(bctx)
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	hash, err := store.HashPassword(cfg.BootstrapAdminPassword)
+	if err != nil {
+		return err
+	}
+	if err := store.CreateUser(bctx, cfg.BootstrapAdminUser, "admin", hash); err != nil {
+		return err
+	}
+	// 비밀번호는 절대 찍지 않는다.
+	fmt.Printf("  · 최초 관리자 생성: tenant=%s username=%s role=admin\n", cfg.BootstrapTenant, cfg.BootstrapAdminUser)
+	return nil
 }
 
 func run() int {
@@ -137,6 +169,13 @@ func run() int {
 			return 1
 		}
 		fmt.Println("  · 멀티테넌트 모드 — 인테이크는 org 인제스트 키로 인증한다")
+	}
+
+	// 최초 관리자 부트스트랩(운영 첫 기동용). env 가 걸려 있고 그 tenant 에 사용자가 없을 때만
+	// admin 1명을 만든다. 실패해도 부팅을 막지 않는다 — 크게 남기고 계속한다(마이그레이션 미적용
+	// 등은 여기서 죽일 문제가 아니다). 비밀번호는 로그에 절대 찍지 않는다.
+	if err := bootstrapAdmin(ctx, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "  ⚠ 최초 관리자 부트스트랩 실패(마이그레이션 0034 적용 여부를 확인하라): %v\n", err)
 	}
 
 	var stopRetention func()

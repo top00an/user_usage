@@ -82,3 +82,15 @@ export function trackRoutes(extra: [string, RouteSpec][] = []): [string, RouteSp
     ['/api/usage/dispatch', { body: golden('dispatch') }],
   ];
 }
+
+/**
+ * 셸 진입 시 getMe() 가 부르는 세션 확인 엔드포인트. 기본은 로그인된 관리자.
+ * 로그아웃/미로그인 시나리오는 status 401 로 넘긴다.
+ */
+export function authRoutes(
+  user: { username: string; role: string; tenant: string } = {
+    username: 'admin', role: 'admin', tenant: 'acme',
+  },
+): [string, RouteSpec][] {
+  return [['/api/auth/me', { body: user }]];
+}

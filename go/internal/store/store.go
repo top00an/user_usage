@@ -189,6 +189,26 @@ var sqliteDDL = []string{
 		revoked_at TEXT
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_member_tokens_user ON member_tokens(username)`,
+
+	// 대시보드 사람 계정(ID/PW 로그인) — bcrypt 해시만 저장. sqlite 는 단일 테넌트라 tenant_id
+	// 없음(pg 는 migrations/pg/0034 이 tenant_id + RLS 로 소유). 시간 컬럼은 text(RFC3339).
+	`CREATE TABLE IF NOT EXISTS auth_users (
+		username TEXT PRIMARY KEY,
+		password_hash TEXT NOT NULL,
+		role TEXT NOT NULL CHECK (role IN ('admin','member')),
+		created_at TEXT NOT NULL
+	)`,
+
+	// 발급된 세션 — token_hash=sha256(평문). 평문은 쿠키에만 존재한다. expires_at 은 text(RFC3339
+	// Zulu)라 사전식 비교가 곧 시간 비교다(migrations/pg/0034 과 같은 규율).
+	`CREATE TABLE IF NOT EXISTS auth_sessions (
+		token_hash TEXT PRIMARY KEY,
+		username TEXT NOT NULL,
+		role TEXT NOT NULL,
+		expires_at TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at)`,
 }
 
 // Init 은 저장소를 이 DB 에 건다. sqlite 는 DDL 을 직접 걸어 **멱등하게** 초기화하고,

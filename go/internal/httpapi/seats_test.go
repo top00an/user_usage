@@ -16,7 +16,7 @@ func TestSeatsPeriodComparison(t *testing.T) {
 	openDB(t)
 
 	today := time.Now().UTC().Format("2006-01-02")
-	cur := shiftDayLocal(today, -3)  // 현재 윈도우(days=7) 안
+	cur := shiftDayLocal(today, -3)   // 현재 윈도우(days=7) 안
 	prev := shiftDayLocal(today, -10) // 직전 윈도우 안
 
 	// alice: 현재·직전 둘 다 활동(델타 계산됨). bob: 현재만(신규).

@@ -13,8 +13,9 @@ import (
 
 // 자격증명 판정 결과. 호출부가 둘을 **다르게** 취급한다.
 const (
-	ViaHeader = "header" // Authorization: Bearer
-	ViaCookie = "cookie" // usage_tok — 조회만 태운다(CSRF 표면 제거)
+	ViaHeader  = "header"  // Authorization: Bearer
+	ViaCookie  = "cookie"  // usage_tok — 조회만 태운다(CSRF 표면 제거)
+	ViaSession = "session" // usage_sess — 사람 로그인 세션. 쿠키이므로 조회만 태운다(로그아웃 POST 는 게이트 앞에서 처리)
 	//revive:disable-next-line
 	ScopeAdmin  = "admin"  // 열람 + 상태변경 (전사)
 	ScopeIntake = "intake" // POST /api/usage 하나만

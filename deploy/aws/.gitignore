@@ -1,0 +1,15 @@
+# Terraform 로컬 산출물·비밀은 커밋하지 않는다.
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# 실제 값이 담기는 tfvars — example 만 커밋한다.
+terraform.tfvars
+*.auto.tfvars
+*.tfvars.json
+
+# -var 로 넘길 비밀 파일 등
+*.tfvars.secret
