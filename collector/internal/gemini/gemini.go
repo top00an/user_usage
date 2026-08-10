@@ -60,6 +60,21 @@ const (
 	toolWebSearch = "google_web_search"
 	toolWebFetch  = "web_fetch"
 
+	// 편집 계열은 이 **둘뿐**이다(소스 tool-names.ts: `EDIT_TOOL_NAMES = new Set([EDIT_TOOL_NAME,
+	// WRITE_FILE_TOOL_NAME])`). Claude 의 MultiEdit 에 해당하는 도구는 없다.
+	toolWrite   = "write_file" // args.content
+	toolReplace = "replace"    // args.old_string / args.new_string ← Claude 의 Edit 와 같은 모양
+
+	// 도구 호출의 종료 상태(소스 scheduler/types.ts `CoreToolCallStatus`).
+	//
+	// 세션 파일에는 **종료된 호출만** 실린다 — geminiChat.ts 의 recordCompletedToolCalls 가
+	// `CompletedToolCall = success | cancelled | error` 만 받아 recordToolCalls 로 넘긴다.
+	// 그래서 여기 셋 말고 다른 값(validating·executing 등)은 실제로는 안 나오지만, 나오면
+	// **적용 여부를 모르는 것**으로 다룬다(0 으로 위조하지 않는다).
+	statusSuccess   = "success"
+	statusError     = "error"
+	statusCancelled = "cancelled"
+
 	// mcpPrefix — MCP 도구는 이름이 `mcp_<server>_<tool>` 로 생성된다(소스 mcp-tool.ts:
 	// MCP_TOOL_PREFIX='mcp_', MCP_QUALIFIED_NAME_SEPARATOR='_').
 	//
@@ -166,16 +181,80 @@ type tokensRec struct {
 }
 
 type toolCallRec struct {
-	Name string `json:"name"`
-	Args struct {
-		Command   string `json:"command"`    // run_shell_command
-		Name      string `json:"name"`       // activate_skill
-		AgentName string `json:"agent_name"` // invoke_agent
-	} `json:"args"`
+	Name string   `json:"name"`
+	Args toolArgs `json:"args"`
+	// Status 는 종료 상태다(success | error | cancelled). LOC 를 "적용된 편집"으로 좁히고
+	// editsAccepted/Rejected 를 판정하는 **유일한** 근거다.
+	Status string `json:"status"`
 	// AgentID 는 **쓰지 않는다.** 소스에서 `randomUUID()` 라(agents/local-executor.ts) 축 키로 쓰면
 	// agent 축이 매 호출 새로 생기는 uuid 로 가득 찬다. 위임 대상 이름은 `invoke_agent` 의
 	// `args.agent_name` 에 있고, 그쪽이 Claude 의 `subagent_type` 과 같은 의미다.
 	AgentID string `json:"agentId"`
+}
+
+// toolArgs 는 도구 인자 중 **집계에 쓰는 것만** 담는다. 커스텀 UnmarshalJSON 을 쓰는 이유가 둘이다.
+//
+//  1. **편집 본문을 붙들지 않는다.** content·old_string·new_string 을 문자열 필드로 받으면 파일
+//     원문이 세션 누적이 끝날 때까지(fold 시점까지) 메모리에 남는다. 큰 write_file 몇 개면 수백
+//     MB 가 되고, 무엇보다 "내용은 저장하지 않는다"는 정책이 메모리 수준에서 깨진다.
+//     여기서는 파싱하는 그 자리에서 **줄 수로 바꾸고 문자열을 버린다** — 원문은 이 함수를 벗어나지 않는다.
+//
+//  2. **타입이 어긋난 인자에 관대하다.** MCP 도구가 `content` 를 객체로, `command` 를 숫자로 싣는
+//     일이 흔하다. 구조체 태그로 받으면 그 한 필드 때문에 messageRec 전체 unmarshal 이 실패하고
+//     **그 턴의 토큰까지 통째로 사라진다**(거부가 아니라 침묵이라 더 나쁘다). 문자열일 때만 읽는다.
+type toolArgs struct {
+	Command   string // run_shell_command
+	Name      string // activate_skill
+	AgentName string // invoke_agent
+
+	// 줄 수만 남는다. 소문자(비공개)인 것은 의도다 — 밖에서 원문을 기대하지 못하게 한다.
+	contentLines   int64 // write_file.content
+	oldStringLines int64 // replace.old_string
+	newStringLines int64 // replace.new_string
+}
+
+// UnmarshalJSON 은 **절대 실패하지 않는다.** args 가 객체가 아니어도 도구 이름 축은 살린다 —
+// 인자 하나 때문에 그 메시지의 토큰을 버리는 것이 훨씬 비싼 실수다.
+func (a *toolArgs) UnmarshalJSON(b []byte) error {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(b, &obj) != nil {
+		return nil
+	}
+	str := func(key string) string {
+		raw, ok := obj[key]
+		if !ok {
+			return ""
+		}
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			return "" // 문자열이 아니면 모르는 것으로 둔다(추정 금지)
+		}
+		return s
+	}
+	a.Command = str("command")
+	a.Name = str("name")
+	a.AgentName = str("agent_name")
+	a.contentLines = lineCount(str("content"))
+	a.oldStringLines = lineCount(str("old_string"))
+	a.newStringLines = lineCount(str("new_string"))
+	return nil
+}
+
+// lineCount 는 문자열의 줄 수를 센다(빈 문자열은 0).
+//
+// **Claude 파서(internal/transcript.lineCount)와 글자 그대로 같은 식이다:** `Count(s,"\n")+1`.
+// 끝 개행 뒤의 빈 줄도 한 줄로 센다("a\nb\n" → 3).
+//
+// 왜 Codex 쪽(끝 개행을 먼저 떼는 식)이 아니라 Claude 에 맞추나 — Gemini 의 `write_file.content`·
+// `replace.old_string/new_string` 은 Claude 의 `Write.content`·`Edit.old_string/new_string` 과
+// **같은 자리에서 온 같은 모양의 원문 텍스트**다. 같은 입력을 다른 규칙으로 세면 두 플랫폼의
+// 같은 열이 비교 불가능해진다. (Codex 는 unified diff 를 세는 다른 모양이라 규칙이 다른 것
+// 자체는 문제가 아니다.)
+func lineCount(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	return int64(strings.Count(s, "\n") + 1)
 }
 
 type messageRec struct {
@@ -470,10 +549,15 @@ type folded struct {
 	input, cacheRead, output int64
 	turns, noTsTurn          int64
 	webSearch, webFetch      int64
-	model                    string
-	modelTokens              map[string]int64
-	buckets                  map[string]*payload.Bucket
-	counters                 map[string]map[string]int64
+
+	// 개발 지표(파생). write_file·replace 호출에서 **줄 수만** 센다(내용 미저장).
+	linesAdded, linesRemoved     int64
+	editsAccepted, editsRejected int64
+
+	model       string
+	modelTokens map[string]int64
+	buckets     map[string]*payload.Bucket
+	counters    map[string]map[string]int64
 }
 
 func (sa *sessionAgg) fold() *folded {
@@ -579,9 +663,52 @@ func (f *folded) addToolCalls(m *messageRec) {
 		case name == toolWebFetch:
 			f.count("tool", toolWebFetch)
 			f.webFetch++
+		case name == toolWrite || name == toolReplace:
+			f.count("tool", name)
+			f.editUse(tc)
 		default:
 			f.count("tool", policy.NormKeyOf("tool", name))
 		}
+	}
+}
+
+// editUse 는 편집 도구 호출 하나를 접는다(정책: 줄 수·횟수만, 내용·경로는 절대 안 남긴다).
+//
+// ── 이 함수가 채우는 것은 **의미가 다른 두 축**이다. 섞지 마라 ──────────────────
+//
+//	linesAdded/linesRemoved  = **제안된 편집 규모.** 모델이 얼마나 큰 편집을 시도했나.
+//	                           거부·실패분도 **포함해서** 센다. 상태로 거르지 않는다.
+//	editsAccepted/Rejected   = **결과.** 그 시도가 받아들여졌나. 상태로만 판정한다.
+//
+// 규모를 결과로 거르면 두 축이 같은 말을 두 번 하게 되고, 정작 "얼마나 크게 시도했나"를
+// 아무도 말하지 않게 된다. 무엇보다 **Claude 파서는 구조적으로 거를 수가 없다** —
+// tool_use 시점에 세고 결과(tool_result)는 다른 줄에 온다(transcript.go:366 editUse).
+// 그래서 여기서 성공만 세면 같은 행동을 해도 Gemini 만 수치가 작게 나오고, 대시보드의
+// 플랫폼 비교가 조용히 거짓이 된다. 세 파서가 맞출 수 있는 방향은 "전부 센다" 하나뿐이다.
+func (f *folded) editUse(tc toolCallRec) {
+	// ① 규모 — 상태와 무관하게 센다.
+	switch tc.Name {
+	case toolWrite:
+		// 덮어쓰기라면 원본이 인자에 없어 **삭제 줄을 알 수 없다.** 추정하지 않고 추가만 센다
+		// (Claude 의 Write 와 같은 처리).
+		f.linesAdded += tc.Args.contentLines
+	case toolReplace:
+		// allow_multiple=true 로 여러 군데가 한 번에 바뀌어도 **몇 군데인지는 인자에 없다.**
+		// 한 번으로 센다 — 모르는 배수를 곱하는 것이 안 세는 것보다 나쁘다.
+		f.linesAdded += tc.Args.newStringLines
+		f.linesRemoved += tc.Args.oldStringLines
+	}
+
+	// ② 결과 — 종료 상태로만 판정한다.
+	switch tc.Status {
+	case statusSuccess:
+		f.editsAccepted++
+	case statusError, statusCancelled:
+		f.editsRejected++
+	default:
+		// 종료 상태가 아니거나(validating·executing…) 필드가 비었다 — 받아들여졌는지 **모른다.**
+		// 모르는 것을 0 으로 위조하지 않는다. 어느 쪽도 세지 않는다(Codex 의 applyPatch 와 같은 규율).
+		// ⚠ 규모(①)는 이 경우에도 이미 세어졌다. 그게 맞다 — 시도한 것은 시도한 것이다.
 	}
 }
 
@@ -692,6 +819,13 @@ func (a *Aggregator) Sessions() []payload.Session {
 			WebFetch:    f.webFetch,
 			Turns:       f.turns,
 			NoTsTurns:   &noTs,
+
+			// 편집이 하나도 없으면 넷 다 0 이고 omitempty 로 본문에서 빠진다. 그게 맞다 —
+			// Gemini 는 편집을 기록하는 세션에서만 이 값을 관측한다.
+			LinesAdded:    f.linesAdded,
+			LinesRemoved:  f.linesRemoved,
+			EditsAccepted: f.editsAccepted,
+			EditsRejected: f.editsRejected,
 
 			Counters: capCounters(f.counters),
 			Series:   f.sortedBuckets(),

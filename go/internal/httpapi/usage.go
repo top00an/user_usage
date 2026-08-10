@@ -235,19 +235,33 @@ func (s *server) routeAdmin(w http.ResponseWriter, r *http.Request, c *rctx) (bo
 		days := int(numOr(c.query.Get("days"), 30))
 		topN := int(numOr(c.query.Get("top"), 20))
 
-		totals, err := store.Totals(ctx)
+		/*
+		 * platform 필터 — 판정 규칙은 analytics.go 의 platformParam 이 단일 출처다
+		 * (이 라우트만 다른 파일에 있을 뿐 계약은 같다). 미지정이면 조건을 걸지 않는다.
+		 *
+		 * ⚠ 이 화면의 카드들은 **서로 다른 표**에서 온다(세션·시간 버킷·카운터). 하나라도
+		 *   안 걸면 같은 화면 안에서 두 카드가 서로 다른 플랫폼을 그리고, 그 사실이 어디에도
+		 *   표시되지 않는다. 그래서 아래는 전부 …WithFilter 로 간다.
+		 */
+		platform, ok := platformParam(w, c)
+		if !ok {
+			return true, nil
+		}
+		f := store.Filter{Platform: platform}
+
+		totals, err := store.TotalsWithFilter(ctx, f)
 		if err != nil {
 			return true, err
 		}
-		byDay, err := store.UsageByDay(ctx, days)
+		byDay, err := store.UsageByDayWithFilter(ctx, days, f)
 		if err != nil {
 			return true, err
 		}
-		byUser, err := store.UsageByUser(ctx)
+		byUser, err := store.UsageByUserWithFilter(ctx, f)
 		if err != nil {
 			return true, err
 		}
-		byModel, err := store.UsageByModel(ctx)
+		byModel, err := store.UsageByModelWithFilter(ctx, f)
 		if err != nil {
 			return true, err
 		}
@@ -256,7 +270,7 @@ func (s *server) routeAdmin(w http.ResponseWriter, r *http.Request, c *rctx) (bo
 		 * 왔나"를 말하고, 이쪽이 "누구의 값이 근사인가"를 말한다 — 둘이 붙어야 화면이
 		 * 오귀속을 정확한 값으로 위장하지 않는다.
 		 */
-		modelAxis, err := store.UsageModelAxis(ctx)
+		modelAxis, err := store.UsageModelAxisWithFilter(ctx, f)
 		if err != nil {
 			return true, err
 		}
@@ -270,13 +284,22 @@ func (s *server) routeAdmin(w http.ResponseWriter, r *http.Request, c *rctx) (bo
 			{"skill", &top.Skill}, {"agent", &top.Agent}, {"mcp", &top.MCP},
 			{"keyword", &top.Keyword},
 		} {
-			rows, err := store.TopKeys(ctx, spec.kind, topN)
+			rows, err := store.TopKeysWithFilter(ctx, spec.kind, topN, f)
 			if err != nil {
 				return true, err
 			}
 			*spec.dst = toKeyDTOs(rows)
 		}
 
+		/*
+		 * ⚠ 추천 관측(usage_recommendations)은 **플랫폼 축이 없다.** 세션에 매달려 있지 않고
+		 * (session_id 컬럼이 없다) 목표 문장·점수만 남는 별도 경로라, 어느 도구에서 나온
+		 * 호출인지 되짚을 근거가 이 표에 존재하지 않는다.
+		 *
+		 * 그래서 필터를 걸지 않는다. 빈 값으로 접지도 않는다 — 그러면 "codex 에서는 추천
+		 * 공백이 없었다"는 **없는 사실**을 만들어 낸다. 축이 없는 것과 값이 0 인 것은 다르다.
+		 * (응답 shape 를 못 바꾸므로 이 한계는 코드와 보고에만 남는다 — 잔여 항목.)
+		 */
 		gaps, err := store.RecommendationGaps(ctx, topN)
 		if err != nil {
 			return true, err

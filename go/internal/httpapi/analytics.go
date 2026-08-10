@@ -189,6 +189,33 @@ type dispatchResponse struct {
  */
 var genericAgents = []string{"general-purpose", "Explore", "Plan", "claude"}
 
+/*
+ * platformParam 은 선택적 `platform=` 을 읽는다 — 이 파라미터를 받는 **모든** 라우트의 단일 출처다.
+ *
+ * 갈래마다 따로 파싱하지 않는 이유가 이 함수의 존재 이유다: 그렇게 두면 새 엔드포인트가 이
+ * 축을 배선하는 것을 잊어도 아무 신호가 없고, 그 엔드포인트만 조용히 전체를 돌려준다
+ * (summary·dispatch·seats·teams·dev 가 실제로 그 상태였다).
+ *
+ * 반환:
+ *	("", true)   미지정 — 조건을 걸지 않는다(현행 동작 그대로)
+ *	(값, true)   허용된 필터 값
+ *	("", false)  400 을 이미 써 보냈다 — 호출부는 그대로 돌아가면 된다
+ */
+func platformParam(w http.ResponseWriter, c *rctx) (string, bool) {
+	v := c.query.Get("platform")
+	if v == "" {
+		return "", true
+	}
+	// **정규화하지 않는다.** 오타(claud)·대문자(CLAUDE)를 접으면 요청한 것과 다른 집합이
+	// 요청한 이름으로 돌아온다 — store.IsPlatformFilter 와 같은 규율이다.
+	if !store.IsPlatformFilter(v) {
+		sendError(w, http.StatusBadRequest,
+			"platform 은 "+strings.Join(store.PlatformFilterValues(), "|")+" 중 하나입니다")
+		return "", false
+	}
+	return v, true
+}
+
 /* ── 라우트 ───────────────────────────────────────────────────────────── */
 
 func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx) (bool, error) {
@@ -206,23 +233,43 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 		"/api/usage/teams": true, "/api/usage/dev": true,
 		"/api/usage/platforms": true,
 	}
+	/*
+	 * ⚠ **경로 판정이 먼저다.** platform 검증을 이 앞에 두면 `/api/usage/없는경로?platform=오타`
+	 *   가 404 대신 400 이 되어, 없는 엔드포인트의 존재를 알려주는 셈이 된다.
+	 */
+	if !known[p] && detail == nil {
+		return false, nil
+	}
+
+	/*
+	 * platform 필터 — **미지정이면 전체다**(현행과 완전히 같은 동작). 그것이 기존 계약이
+	 * 그대로 사는 근거이고, 이 기본값이 바뀌면 골든 44개가 통째로 깨진다.
+	 *
+	 * 오타는 400 이다. 저장 쪽처럼 other 로 접으면 요청한 것과 다른 모집단이 요청한 이름으로
+	 * 조용히 돌아온다 — 조회에서 그건 오분류보다 나쁘다.
+	 *
+	 * 여기서(=아래 갈래들보다 앞에서) 한 번만 읽는다. 갈래마다 따로 읽으면 언젠가 한 갈래가
+	 * 빠지고, 그 엔드포인트만 조용히 전체를 돌려준다 — 이번에 고친 결함이 정확히 그것이다.
+	 */
+	platform, ok := platformParam(w, c)
+	if !ok {
+		return true, nil
+	}
+
 	if p == "/api/usage/seats" {
-		return s.routeSeats(w, r, c)
+		return s.routeSeats(w, r, c, platform)
 	}
 	if p == "/api/usage/teams" {
-		return s.routeTeams(w, r, c)
+		return s.routeTeams(w, r, c, platform)
 	}
 	if p == "/api/usage/dev" {
 		days := clampInt(int(numOr(c.query.Get("days"), 30)), 1, 365)
-		tot, byDay, err := store.DevMetrics(r.Context(), days)
+		tot, byDay, err := store.DevMetricsWithFilter(r.Context(), days, store.Filter{Platform: platform})
 		if err != nil {
 			return true, err
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"totals": tot, "byDay": byDay}, nil)
 		return true, nil
-	}
-	if !known[p] && detail == nil {
-		return false, nil
 	}
 
 	ctx := r.Context()
@@ -240,11 +287,13 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 
 	// ── 서브에이전트·스킬 활용 ────────────────────────────────────────────
 	if p == "/api/usage/dispatch" {
-		agents, err := store.ByUser(ctx, "agent", 0)
+		// 근거가 usage_counters 라 platform 컬럼이 없다 — 세션 행으로 되짚어 거른다(store 쪽 규율).
+		f := store.Filter{Platform: platform}
+		agents, err := store.ByUserWithFilter(ctx, "agent", 0, f)
 		if err != nil {
 			return true, err
 		}
-		skills, err := store.ByUser(ctx, "skill", 0)
+		skills, err := store.ByUserWithFilter(ctx, "skill", 0, f)
 		if err != nil {
 			return true, err
 		}
@@ -328,19 +377,6 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 
 	username := c.query.Get("user")
 	model := c.query.Get("model")
-	/*
-	 * platform 필터 — **미지정이면 전체다**(현행과 완전히 같은 동작). 그것이 기존 계약이
-	 * 그대로 사는 근거이고, 이 기본값이 바뀌면 골든 44개가 통째로 깨진다.
-	 *
-	 * 오타는 400 이다. 저장 쪽처럼 other 로 접으면 요청한 것과 다른 모집단이 요청한 이름으로
-	 * 조용히 돌아온다 — 조회에서 그건 오분류보다 나쁘다.
-	 */
-	platform := c.query.Get("platform")
-	if platform != "" && !store.IsPlatformFilter(platform) {
-		sendError(w, http.StatusBadRequest,
-			"platform 은 "+strings.Join(store.PlatformFilterValues(), "|")+" 중 하나입니다")
-		return true, nil
-	}
 
 	// ── 플랫폼별 요약(신규) ───────────────────────────────────────────────
 	//
