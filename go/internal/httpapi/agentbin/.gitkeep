@@ -1,0 +1,4 @@
+# agentbin/ 는 수집기 크로스컴파일 산출물이 놓이는 임베드 디렉터리다.
+# 실제 바이너리(agentbin/<goos>_<goarch>/usage-collector)는 scripts/build.sh 가 채우고
+# .gitignore 가 제외한다. 이 .gitkeep 은 빈 디렉터리를 커밋해 //go:embed all:agentbin 이
+# 바이너리가 하나도 없어도 컴파일되게 한다.

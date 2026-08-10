@@ -26,6 +26,8 @@ WEB="$ROOT/web"
 OUT="$WEB/out"
 WEBROOT="$ROOT/go/internal/httpapi/webroot"
 OUT_BIN="${OUT_BIN:-$ROOT/go/usage-server}"
+COLLECTOR="$ROOT/collector"
+AGENTBIN="$ROOT/go/internal/httpapi/agentbin"
 
 say() { printf '\n\033[1m▶ %s\033[0m\n' "$*"; }
 die() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
@@ -64,9 +66,39 @@ dst_n=$(find "$WEBROOT" -type f ! -name '.*' | wc -l)
 printf '   파일 %s개 · _next 청크 %s개\n' \
   "$dst_n" "$(find "$WEBROOT/_next" -type f | wc -l)"
 
-# ── ③ go build ──────────────────────────────────────────────────────────────
-# 여기서 webroot/ 가 바이너리에 박힌다. 위 동기화가 끝난 **뒤에** 돌아야 한다.
-say "③ go build → $OUT_BIN"
+# ── ③ 수집기 크로스컴파일 ────────────────────────────────────────────────────
+# 클라이언트 수집기를 4플랫폼으로 미리 빌드해 agentbin/<goos>_<goarch>/usage-collector 에
+# 둔다. 서버 오너가 이 디렉터리를 go:embed 해 `GET /api/agent/collector` 로 내려준다
+# (embed .go · .gitkeep · .gitignore 는 그의 몫 — 여기서는 바이너리만 만든다).
+#
+# **서버 go build 전에** 돌아야 한다. 서버가 이 경로를 embed 한다면 파일이 먼저 있어야 하고,
+# 아직 embed 하지 않았더라도 바이너리를 미리 깔아두는 편이 배포 순서에 안전하다.
+#
+# 수집기는 표준 라이브러리뿐이라 CGO 가 필요 없다. CGO_ENABLED=0 으로 정적 링크해
+# 팀원 PC 의 libc 차이와 무관하게 돌게 한다.
+say "③ 수집기 크로스컴파일 → $(basename "$AGENTBIN")/<goos>_<goarch>/usage-collector"
+[[ -f "$COLLECTOR/go.mod" ]] || die "수집기 모듈이 없다: $COLLECTOR/go.mod"
+for platform in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+  goos="${platform%/*}"
+  goarch="${platform#*/}"
+  dest="$AGENTBIN/${goos}_${goarch}/usage-collector"
+  mkdir -p "$(dirname "$dest")"
+  (cd "$COLLECTOR" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+     go build -trimpath -ldflags='-s -w' -o "$dest" ./cmd/usage-collector) \
+    || die "수집기 빌드 실패: $platform"
+  [[ -s "$dest" ]] || die "수집기 바이너리가 비었다: $dest"
+  printf '   %-14s %s\n' "$platform" "$(du -h "$dest" | cut -f1)"
+done
+
+# 실제 install.sh 를 embed 위치로 복사한다 — agent.go 가 이걸 //go:embed 한다.
+# 레포엔 컴파일용 placeholder(go/internal/httpapi/install.sh)가 있고, 릴리스 빌드는
+# 여기서 scripts/install.sh 원본으로 덮어 박는다(안 하면 placeholder 가 서빙된다).
+cp "$ROOT/scripts/install.sh" "$ROOT/go/internal/httpapi/install.sh"
+[[ -s "$ROOT/go/internal/httpapi/install.sh" ]] || die "install.sh 임베드 복사 실패"
+
+# ── ④ go build ──────────────────────────────────────────────────────────────
+# 여기서 webroot/ 와 install.sh·수집기 바이너리가 바이너리에 박힌다. 위 단계가 끝난 **뒤에** 돌아야 한다.
+say "④ go build → $OUT_BIN"
 (cd "$ROOT/go" && go build -o "$OUT_BIN" ./cmd/usage-server)
 [[ -x "$OUT_BIN" ]] || die "바이너리가 만들어지지 않았다: $OUT_BIN"
 

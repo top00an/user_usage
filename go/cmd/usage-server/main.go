@@ -149,25 +149,28 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "사용량 대시보드 기동 실패: identity 스키마 보장 실패: %v\n", err)
 		return 1
 	}
-	// 멀티테넌트(SaaS) 모드에서만 org·인제스트 키 스키마를 걸고 전역 핸들을 세팅한다.
+	/*
+	 * org·인제스트 키 스키마와 전역 핸들은 **항상** 건다. 온보딩(인제스트 키 발급·수집기 서빙)이
+	 * 단일테넌트 기본배포에서도 동작해야 하기 때문이다 — 이게 없으면 /api/admin/keys 가 503,
+	 * collector 서빙이 401 로 접힌다. sqlite 면 idempotent DDL, pg 면 조기반환(스키마는 migrations 소유).
+	 *
+	 * ⚠ 단, **멀티테넌트는 pg(RLS)에서만 격리가 성립한다.** sqlite 는 단일 테넌트라 org 별 tenant 를
+	 * 컨텍스트에 실어도 저장 계층이 그것을 안 본다 — 모든 org 데이터가 한 파일에 섞여 조회된다
+	 * (조용한 크로스테넌트 유출). 그래서 sqlite + 멀티테넌트는 **부팅을 거부**한다(경고로 끝낼 문제가
+	 * 아니다: 여러 org 의 사용량·비용이 서로에게 노출되는 자리다).
+	 */
+	if cfg.MultiTenant && handle.Dialect() == db.DialectSQLite {
+		fmt.Fprintln(os.Stderr, "사용량 대시보드 기동을 거부한다:")
+		fmt.Fprintln(os.Stderr, "  · USAGE_MULTITENANT 는 PostgreSQL(remote)에서만 쓸 수 있다 — "+
+			"sqlite 는 테넌트 격리(RLS)가 없어 org 데이터가 섞인다. "+
+			"USAGE_DB_MODE=remote 와 DATABASE_URL 을 설정하라.")
+		return 2
+	}
+	if err := org.Init(initCtx, handle); err != nil {
+		fmt.Fprintf(os.Stderr, "사용량 대시보드 기동 실패: org 스키마 보장 실패: %v\n", err)
+		return 1
+	}
 	if cfg.MultiTenant {
-		/*
-		 * ⚠ **멀티테넌트는 pg(RLS)에서만 격리가 성립한다.** sqlite 는 단일 테넌트라 org 별
-		 * tenant 를 컨텍스트에 실어도 저장 계층이 그것을 안 본다 — 모든 org 데이터가 한 파일에
-		 * 섞여 조회된다(조용한 크로스테넌트 유출). 그래서 sqlite + 멀티테넌트는 **부팅을 거부**한다.
-		 * 이건 경고로 끝낼 문제가 아니다: 여러 org 의 사용량·비용이 서로에게 노출되는 자리다.
-		 */
-		if handle.Dialect() == db.DialectSQLite {
-			fmt.Fprintln(os.Stderr, "사용량 대시보드 기동을 거부한다:")
-			fmt.Fprintln(os.Stderr, "  · USAGE_MULTITENANT 는 PostgreSQL(remote)에서만 쓸 수 있다 — "+
-				"sqlite 는 테넌트 격리(RLS)가 없어 org 데이터가 섞인다. "+
-				"USAGE_DB_MODE=remote 와 DATABASE_URL 을 설정하라.")
-			return 2
-		}
-		if err := org.Init(initCtx, handle); err != nil {
-			fmt.Fprintf(os.Stderr, "사용량 대시보드 기동 실패: org 스키마 보장 실패: %v\n", err)
-			return 1
-		}
 		fmt.Println("  · 멀티테넌트 모드 — 인테이크는 org 인제스트 키로 인증한다")
 	}
 

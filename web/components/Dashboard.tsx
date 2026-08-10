@@ -7,6 +7,7 @@ import Login from '@/components/Login';
 import GrafanaDash from '@/components/grafana/GrafanaDash';
 import UsageTrackTab from '@/components/usagetrack/UsageTrackTab';
 import UsageObsTab from '@/components/usageobs/UsageObsTab';
+import Onboarding from '@/components/Onboarding';
 
 /*
  * 셸 — 필요한 것은 넷뿐이다:
@@ -36,7 +37,16 @@ const TABS = [
     desc: '왜 그 숫자인가 — 비용 · 좌석 · 팀 · 분포',
     icon: 'M12 3a9 9 0 1 0 9 9h-9V3Z M13 3a9 9 0 0 1 8 8h-8V3Z', // 도넛/분해
   },
+  {
+    id: 'onboarding',
+    label: '연동',
+    desc: '개발자 머신 연동 — 인제스트 키 발급 · 원라인 설치 명령 · 키 관리',
+    icon: 'M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5', // 링크/체인
+  },
 ] as const;
+
+/** 관리자 전용 탭 — member 는 목록에서 숨기고, 딥링크로도 열리지 않게 렌더에서도 막는다. */
+const ADMIN_ONLY_TABS = new Set<TabId>(['onboarding']);
 
 type TabId = (typeof TABS)[number]['id'];
 
@@ -123,8 +133,12 @@ export default function Dashboard() {
   if (auth.status === 'out') return <Login note={note} onSuccess={onLoggedIn} />;
 
   const { user } = auth;
-  const roleLabel = user.role === 'admin' ? '관리자' : '구성원';
-  const active = TABS.find((t) => t.id === tab) ?? TABS[0];
+  const isAdmin = user.role === 'admin';
+  const roleLabel = isAdmin ? '관리자' : '구성원';
+  // 관리자 전용 탭은 member 목록에서 뺀다. 딥링크로 #/onboarding 에 온 member 는 여기 없어
+  // active 가 첫 탭으로 접히고, 아래 패널도 렌더되지 않는다(이중 방어).
+  const visibleTabs = TABS.filter((t) => isAdmin || !ADMIN_ONLY_TABS.has(t.id));
+  const active = visibleTabs.find((t) => t.id === tab) ?? visibleTabs[0]!;
 
   return (
     <ToastProvider>
@@ -138,8 +152,8 @@ export default function Dashboard() {
           </div>
 
           <nav className="side-nav" role="tablist" aria-orientation="vertical" aria-label="화면">
-            {TABS.map((t) => {
-              const on = t.id === tab;
+            {visibleTabs.map((t) => {
+              const on = t.id === active.id;
               return (
                 <button
                   key={t.id}
@@ -154,8 +168,8 @@ export default function Dashboard() {
                   onKeyDown={(e) => {
                     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
                     e.preventDefault();
-                    const i = TABS.findIndex((x) => x.id === tab);
-                    const next = TABS[(i + (e.key === 'ArrowDown' ? 1 : -1) + TABS.length) % TABS.length]!;
+                    const i = visibleTabs.findIndex((x) => x.id === active.id);
+                    const next = visibleTabs[(i + (e.key === 'ArrowDown' ? 1 : -1) + visibleTabs.length) % visibleTabs.length]!;
                     selectTab(next.id);
                     requestAnimationFrame(() => document.getElementById(`shelltab-${next.id}`)?.focus());
                   }}
@@ -195,10 +209,11 @@ export default function Dashboard() {
             ② key 로 탭마다 트리를 통째로 새로 만든다 — 앞 탭의 useEffect 정리 함수가 돌아
             진행 중인 요청이 abort 되고, 늦게 도착한 응답은 버려진다(hooks/useResource.ts).
           */}
-          <div id="tabpanel" role="tabpanel" aria-labelledby={`shelltab-${tab}`} tabIndex={-1}>
-            {tab === 'overview' && <GrafanaDash key="overview" />}
-            {tab === 'usage' && <UsageTrackTab key="usage" />}
-            {tab === 'usageobs' && <UsageObsTab key="usageobs" />}
+          <div id="tabpanel" role="tabpanel" aria-labelledby={`shelltab-${active.id}`} tabIndex={-1}>
+            {active.id === 'overview' && <GrafanaDash key="overview" />}
+            {active.id === 'usage' && <UsageTrackTab key="usage" />}
+            {active.id === 'usageobs' && <UsageObsTab key="usageobs" />}
+            {active.id === 'onboarding' && <Onboarding key="onboarding" />}
           </div>
         </main>
       </div>

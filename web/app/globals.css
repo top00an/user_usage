@@ -763,3 +763,20 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
 .aside-row { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .pin-btn { padding: 4px 10px; font-size: .78rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--accent); white-space: nowrap; }
 .pin-btn:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); }
+
+/* ── 연동(온보딩) ────────────────────────────────────────────────────────── */
+/* 발급 직후 강조 카드 — accent 경계로 "지금 이 순간만"이라는 신호를 준다. */
+.key-hero { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+/* 평문 키·설치 명령 표시. 넓으면 본문을 밀지 않고 자기 안에서 가로 스크롤한다(.table-wrap 과 같은 원칙). */
+.install-cmd {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--fg);
+  overflow-x: auto;
+  white-space: pre;
+  line-height: 1.5;
+  user-select: all;
+}

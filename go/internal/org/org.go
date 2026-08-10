@@ -14,11 +14,17 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/tscorp/user-usage/internal/db"
 )
+
+// ErrNotInit — 온보딩/멀티테넌트 서브시스템이 초기화되지 않았다(org.Init 미호출). 전역 핸들이
+// 없으면 관리자 키 API 가 이 오류를 돌려주고, 게이트 핸들러가 이를 503 으로 접는다(400 으로
+// 접으면 "잘못된 요청"으로 보여 원인이 흐려진다).
+var ErrNotInit = errors.New("org: Init 되지 않았다 — 온보딩 서브시스템이 초기화되지 않았다")
 
 // KeyPrefix — 인제스트 키의 접두사. 로그·설정에서 이 문자열이 보이면 "이건 인제스트 키"임을
 // 사람이 바로 안다(다른 토큰과 섞이지 않게).
@@ -184,6 +190,131 @@ func ListOrgs(ctx context.Context, d db.DB) ([]Org, error) {
 func RevokeKey(ctx context.Context, d db.DB, plaintext string) error {
 	if err := d.Exec(ctx, "UPDATE ingest_keys SET revoked_at=? WHERE key_hash=? AND revoked_at IS NULL",
 		nowUTC(), HashKey(plaintext)); err != nil {
+		return fmt.Errorf("org: 키 해지 실패: %w", err)
+	}
+	return nil
+}
+
+/*
+ * ── 대시보드 온보딩 헬퍼(전역 핸들 사용) ─────────────────────────────────────
+ *
+ * 관리자 대시보드가 요청마다 db 를 넘기지 않고 키를 발급/목록/해지하도록, Resolve 와 같은
+ * 관례로 전역 handle 위에서 도는 함수들을 둔다. 셋 다 handle==nil(Init 전)이면 ErrNotInit.
+ *
+ * 키 식별자(ID)는 **key_hash 그 자체**다: ingest_keys 의 PK 이고, sha256 이라 목록·해지에서
+ * 키를 안정적으로 가리키면서도 평문을 재구성하지 못한다(선상 이미지 저항성 — 해시를 알아도
+ * 인증에 못 쓴다). 평문은 발급 응답에서 1회만 노출된다.
+ */
+
+// KeyIssued 는 발급 결과다. Plain 은 **이 값이 유일한 노출 지점**이다(저장은 해시만).
+type KeyIssued struct {
+	Plain     string // 평문 인제스트 키(uu_ing_…) — 1회만
+	ID        string // key_hash — 목록·해지에서 키를 가리키는 안정 식별자
+	CreatedAt string
+}
+
+// KeyInfo 는 목록 항목이다. **평문은 절대 담지 않는다** — Masked 만 노출한다.
+type KeyInfo struct {
+	ID        string
+	Masked    string // KeyPrefix + '…' + key_hash 뒤 4자(사람이 행을 구분하는 용도)
+	CreatedAt string
+	RevokedAt string // 빈 문자열이면 미해지
+}
+
+// maskKey 는 목록 표시용 마스크다. 평문을 저장하지 않으므로 안정 재료인 key_hash 뒤 4자를 쓴다
+// (앞 접두사 + 뒤 4자). 평문의 뒤 4자가 아니다 — 평문은 어디에도 남지 않는다.
+func maskKey(keyHash string) string {
+	tail := keyHash
+	if len(tail) > 4 {
+		tail = tail[len(tail)-4:]
+	}
+	return KeyPrefix + "…" + tail
+}
+
+// ensureOrgForTenant 는 tenant 에 대응하는 active org 를 찾고, 없으면 그 tenant 로 하나 만든다.
+// CreateOrg 와 달리 tenant_id 를 **인자로 받은 tenant** 로 둔다 — 단일테넌트 기본배포(default)의
+// 요청 tenant 가 그대로 org 의 tenant 가 되어야 RLS·해석이 일관된다.
+func ensureOrgForTenant(ctx context.Context, d db.DB, tenant, name string) (string, error) {
+	row, err := d.QueryRow(ctx,
+		"SELECT id FROM orgs WHERE tenant_id=? AND status='active' ORDER BY created_at LIMIT 1", tenant)
+	if err != nil {
+		return "", fmt.Errorf("org: tenant org 조회 실패: %w", err)
+	}
+	if row != nil {
+		if id := str(row, "id"); id != "" {
+			return id, nil
+		}
+	}
+	id, err := newID("org_")
+	if err != nil {
+		return "", err
+	}
+	if err := d.Exec(ctx,
+		"INSERT INTO orgs(id,tenant_id,name,status,created_at) VALUES(?,?,?,?,?)",
+		id, tenant, name, "active", nowUTC()); err != nil {
+		return "", fmt.Errorf("org: tenant org 생성 실패: %w", err)
+	}
+	return id, nil
+}
+
+// IssueForTenant 는 tenant 의 org 를 보장(없으면 생성)하고 새 인제스트 키를 발급한다.
+// 평문은 반환값에서만 노출된다.
+func IssueForTenant(ctx context.Context, tenant, name string) (KeyIssued, error) {
+	if handle == nil {
+		return KeyIssued{}, ErrNotInit
+	}
+	orgID, err := ensureOrgForTenant(ctx, handle, tenant, name)
+	if err != nil {
+		return KeyIssued{}, err
+	}
+	plain, err := newPlainKey()
+	if err != nil {
+		return KeyIssued{}, err
+	}
+	hash := HashKey(plain)
+	created := nowUTC()
+	if err := handle.Exec(ctx,
+		"INSERT INTO ingest_keys(key_hash,org_id,created_at) VALUES(?,?,?)",
+		hash, orgID, created); err != nil {
+		return KeyIssued{}, fmt.Errorf("org: 키 저장 실패: %w", err)
+	}
+	return KeyIssued{Plain: plain, ID: hash, CreatedAt: created}, nil
+}
+
+// ListKeys 는 tenant 소유 org 들의 인제스트 키를 발급순으로 돌려준다(평문 미포함).
+func ListKeys(ctx context.Context, tenant string) ([]KeyInfo, error) {
+	if handle == nil {
+		return nil, ErrNotInit
+	}
+	rows, err := handle.Query(ctx,
+		"SELECT k.key_hash AS key_hash, k.created_at AS created_at, k.revoked_at AS revoked_at"+
+			" FROM ingest_keys k JOIN orgs o ON o.id = k.org_id"+
+			" WHERE o.tenant_id = ? ORDER BY k.created_at", tenant)
+	if err != nil {
+		return nil, fmt.Errorf("org: 키 목록 조회 실패: %w", err)
+	}
+	out := make([]KeyInfo, 0, len(rows))
+	for _, r := range rows {
+		h := str(r, "key_hash")
+		out = append(out, KeyInfo{
+			ID: h, Masked: maskKey(h),
+			CreatedAt: str(r, "created_at"), RevokedAt: str(r, "revoked_at"),
+		})
+	}
+	return out, nil
+}
+
+// RevokeByID 는 key_hash(=ID)로 키를 해지한다(멱등). **tenant 로 스코프**를 걸어 한 tenant 의
+// 관리자가 남의 tenant 키를 해지하지 못하게 한다(pg RLS 위의 방어선 한 겹 더).
+func RevokeByID(ctx context.Context, tenant, id string) error {
+	if handle == nil {
+		return ErrNotInit
+	}
+	if err := handle.Exec(ctx,
+		"UPDATE ingest_keys SET revoked_at=?"+
+			" WHERE key_hash=? AND revoked_at IS NULL"+
+			" AND org_id IN (SELECT id FROM orgs WHERE tenant_id=?)",
+		nowUTC(), id, tenant); err != nil {
 		return fmt.Errorf("org: 키 해지 실패: %w", err)
 	}
 	return nil

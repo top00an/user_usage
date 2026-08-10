@@ -240,3 +240,44 @@ export function seriesQuery(p: SeriesParams): string {
 
 export const getSeries = (p: SeriesParams, o?: RequestOptions) =>
   request<SeriesResponse>(seriesQuery(p), o);
+
+/* ── 관리자: 인제스트 키(연동/온보딩) ──────────────────────────────────────
+ *
+ * 동결 계약(백엔드와 공유 · credentials:'include'):
+ *   POST /api/admin/keys             → 200 {key:"uu_ing_…", id, createdAt}   ※ 평문 key 는 이 응답 1회뿐
+ *   GET  /api/admin/keys             → 200 {keys:[{id, masked, createdAt, revokedAt: null|str}]}
+ *   POST /api/admin/keys/revoke {id} → 204
+ *
+ * 평문 key 는 **여기서도 어디서도 저장하지 않는다** — 발급 응답을 그대로 호출부(화면)에 넘기고,
+ * 화면은 메모리에만 들고 표시한다. 목록은 masked 만 다룬다.
+ */
+export interface IssuedKey {
+  /** 평문 인제스트 키. 발급 응답에서만 존재하며 다시 조회되지 않는다. */
+  key: string;
+  id: string;
+  createdAt: string;
+}
+
+export interface KeyListItem {
+  id: string;
+  /** 서버가 마스킹한 표시용 문자열(예: uu_ing_…a1b2). 평문은 절대 담기지 않는다. */
+  masked: string;
+  createdAt: string;
+  /** null = 활성. 문자열이면 그 시각에 해지됨. */
+  revokedAt: string | null;
+}
+
+export interface KeyList {
+  keys: KeyListItem[];
+}
+
+/** 새 인제스트 키를 발급한다. 응답의 평문 key 는 이 한 번뿐이다(호출부가 즉시 표시). */
+export const issueKey = (o?: RequestOptions) =>
+  request<IssuedKey>('/api/admin/keys', { ...o, method: 'POST' });
+
+export const listKeys = (o?: RequestOptions) =>
+  request<KeyList>('/api/admin/keys', o);
+
+/** 204(본문 없음)로 답한다 — request 가 빈 본문을 견딘다. */
+export const revokeKey = (id: string, o?: RequestOptions) =>
+  request<void>('/api/admin/keys/revoke', { ...o, method: 'POST', body: { id } });

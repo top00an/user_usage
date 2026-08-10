@@ -221,9 +221,9 @@ func TestSessionCookieRecognizedByGate(t *testing.T) {
 	if rec := do(t, h, http.MethodGet, "/api/usage/summary?days=365", "", sessionCookie(tok)); rec.Code != 200 {
 		t.Fatalf("admin 세션 summary = %d: %s", rec.Code, rec.Body.String())
 	}
-	// 쿠키 자격이므로 상태변경은 403(CSRF 표면 제거) — usage_tok 규칙과 동일.
-	if rec := do(t, h, http.MethodDelete, "/api/usage/identity?machine=host-a", "", sessionCookie(tok)); rec.Code != 403 {
-		t.Fatalf("admin 세션 mutation = %d, want 403", rec.Code)
+	// 세션은 SameSite=Strict+HttpOnly 라 CSRF-safe — 상태변경(비-GET)을 태운다(레거시 usage_tok 쿠키와 다르다).
+	if rec := do(t, h, http.MethodDelete, "/api/usage/identity?machine=host-a", "", sessionCookie(tok)); rec.Code != 200 {
+		t.Fatalf("admin 세션 mutation = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 }
 

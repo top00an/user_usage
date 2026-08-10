@@ -88,7 +88,8 @@ func New(cfg config.Config) http.Handler {
 		// export 는 조회이므로 readOnly 에서도 유효하다(analytics 앞에 둬 admin 이 삼키기 전에 잡는다).
 		s.routes = []route{s.routeOTLPExport, s.routeAnalytics, s.readOnlyAdmin}
 	} else {
-		s.routes = []route{s.routeIntake, s.routeOTLP, s.routeOTLPExport, s.routeAnalytics, s.routeAdmin}
+		// routeOnboarding 은 /api/admin 을 소유한다(usage.go 의 /api/usage 와 겹치지 않는다).
+		s.routes = []route{s.routeIntake, s.routeOTLP, s.routeOTLPExport, s.routeAnalytics, s.routeOnboarding, s.routeAdmin}
 	}
 	return s
 }
@@ -139,6 +140,19 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			serveFile(tw, r, abs)
 			return
 		}
+	}
+
+	// /install.sh — 무인증 부트스트랩(게이트 앞). 키가 인증을 대신한다. /api/·/v1/ 이 아니라
+	// 아래 404 게이트에 걸리기 전에 잡는다.
+	if p == "/install.sh" {
+		serveInstallScript(tw, r)
+		return
+	}
+	// /api/agent/collector — 인제스트 키 자체 검증(게이트 앞). 게이트의 인테이크 규칙이 이 GET
+	// 조회를 막으므로(그 스코프는 POST 보고만) 여기서 키를 직접 검증한다.
+	if p == "/api/agent/collector" {
+		s.serveCollector(tw, r)
+		return
 	}
 
 	// /api/* 는 대시보드·인테이크, /v1/* 는 OTLP 수신구. 둘 다 게이트를 탄다.
@@ -201,9 +215,11 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"인테이크 토큰으로는 조회할 수 없습니다 — 열람은 USAGE_ADMIN_TOKEN 을 사용하세요")
 		return
 	}
-	// 쿠키 자격증명으로는 상태변경을 태우지 않는다(패키지 주석 ②). usage_tok 쿠키와 사람 로그인
-	// 세션(usage_sess) 둘 다 쿠키 자격이므로 같은 규칙을 받는다 — 상태변경은 Bearer 만.
-	if r.Method != http.MethodGet && r.Method != http.MethodHead && (auth.Via == ViaCookie || auth.Via == ViaSession) {
+	// 레거시 usage_tok 쿠키(ViaCookie)로는 상태변경을 태우지 않는다(패키지 주석 ②) — SameSite 보장이
+	// 없어 CSRF 표면이 되므로 조회만 연다. 사람 로그인 세션(ViaSession, usage_sess)은 항상
+	// SameSite=Strict+HttpOnly 로 발급되므로(authsession.go) 브라우저가 크로스사이트 요청에 안 실어
+	// 보낸다 — CSRF-safe 라 상태변경을 허용한다(보안검토 L-4: SameSite=Strict 로 실용적 충분).
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && auth.Via == ViaCookie {
 		sendError(tw, http.StatusForbidden,
 			"쿠키 인증으로는 상태변경을 할 수 없습니다 — Authorization: Bearer 를 사용하세요")
 		return
