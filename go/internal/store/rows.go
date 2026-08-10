@@ -33,7 +33,24 @@ const sessionSelectCols = "session_id, machine, username, project, model, platfo
  *
  * ⚠ **값만 바인딩한다** — 컬럼명·정렬축을 문자열로 이어 붙이지 않으므로 주입 표면이 0 이다.
  */
-func sessionWhere(f Filter) ([]string, []any) {
+func sessionWhere(f Filter) ([]string, []any) { return sessionWhereOn(f, "") }
+
+/*
+ * sessionWhereOn 은 sessionWhere 와 **같은 규칙**을 별칭 붙은 컬럼으로 만든다.
+ *
+ * 별칭 인자를 둔 이유: 집계 질의는 usage_sessions 를 `s` 로 별칭 붙여 다른 표와 조인한다
+ * (UsageByModel·UsageModelAxis). 거기에 무별칭 조건을 그대로 넣으면 컬럼이 어느 쪽 것인지
+ * 방언마다 다르게 해석될 여지가 생긴다. 규칙은 여전히 한 벌이다 — 붙이는 이름만 인자다.
+ *
+ * alias 는 **이 패키지의 상수 문자열만** 넘긴다(요청 값이 닿지 않는다 — 주입 표면 0).
+ */
+func sessionWhereOn(f Filter, alias string) ([]string, []any) {
+	col := func(name string) string {
+		if alias == "" {
+			return name
+		}
+		return alias + "." + name
+	}
 	var where []string
 	var args []any
 	/*
@@ -42,42 +59,65 @@ func sessionWhere(f Filter) ([]string, []any) {
 	 * 하루치를 조용히 잘라먹는 자리라 상한/하한을 같은 방식으로 맞춘다.
 	 */
 	if isDay(f.From) {
-		where = append(where, "substr(started_at,1,10) >= ?")
+		where = append(where, "substr("+col("started_at")+",1,10) >= ?")
 		args = append(args, f.From)
 	}
 	if isDay(f.To) {
-		where = append(where, "substr(started_at,1,10) <= ?")
+		where = append(where, "substr("+col("started_at")+",1,10) <= ?")
 		args = append(args, f.To)
 	}
 	if f.Username != "" {
-		where = append(where, "username = ?")
+		where = append(where, col("username")+" = ?")
 		args = append(args, f.Username)
 	}
 	if f.Model != "" {
-		where = append(where, "model = ?")
+		where = append(where, col("model")+" = ?")
 		args = append(args, f.Model)
 	}
 	// 미지정이면 조건 자체가 없다 = 전체(현행과 같은 동작). 이 한 줄이 무회귀의 근거다.
 	if f.Platform != "" {
-		where = append(where, "platform = ?")
+		where = append(where, col("platform")+" = ?")
 		args = append(args, f.Platform)
 	}
 	return where, args
 }
 
 /*
- * seriesPlatformCond 는 시간 버킷을 플랫폼으로 거르는 조건이다.
+ * platformSessionCond 는 **세션이 아닌 표**(usage_series·usage_counters)의 행을 세션으로 되짚어
+ * 플랫폼으로 거른다.
  *
- * usage_series 에는 platform 컬럼이 없다(같은 사실을 두 테이블에 적지 않는다 — platform.go 주석).
- * 그래서 세션 행으로 되짚는다. 이 조건을 빼면 `platform=codex` 요청이 조용히 전 플랫폼을
- * 돌려주는데, 그게 이 축에서 가장 나쁜 실패다(요청과 다른 모집단을 요청한 이름으로 보여준다).
+ * 그 표들에는 platform 컬럼이 없다(같은 사실을 두 테이블에 적지 않는다 — platform.go 주석).
+ * 이 조건을 빼면 `platform=codex` 요청이 조용히 전 플랫폼을 돌려주는데, 그게 이 축에서 가장
+ * 나쁜 실패다(요청과 다른 모집단을 요청한 이름으로 보여준다).
+ *
+ * childSessionCol 은 그 표의 session_id 참조식이다 — 바깥 질의가 별칭을 쓰면 별칭째로 준다.
+ * 별칭을 `ps` 로 고정한 이유: 호출 지점들이 이미 `s`·`x` 를 쓰고 있어 이름이 겹치면 상관
+ * 서브쿼리가 바깥 행을 보게 된다(문법 오류도 안 나고 값만 틀린다).
+ *
+ * ⚠ **플랫폼만 본다.** 기간·사용자 축까지 여기서 걸면 usage_series 의 hour·username 으로 이미
+ *   거른 것과 이중으로 걸려, series·quality 의 현행 모집단이 조용히 달라진다(골든 44개).
  */
-func seriesPlatformCond(f Filter) (string, []any) {
+func platformSessionCond(f Filter, childSessionCol string) (string, []any) {
 	if f.Platform == "" {
 		return "", nil
 	}
-	return "EXISTS (SELECT 1 FROM usage_sessions s WHERE s.session_id = usage_series.session_id" +
-		" AND s.platform = ?)", []any{f.Platform}
+	return "EXISTS (SELECT 1 FROM usage_sessions ps WHERE ps.session_id = " + childSessionCol +
+		" AND ps.platform = ?)", []any{f.Platform}
+}
+
+// seriesPlatformCond 는 시간 버킷(usage_series)을 플랫폼으로 거르는 조건이다.
+func seriesPlatformCond(f Filter) (string, []any) {
+	return platformSessionCond(f, "usage_series.session_id")
+}
+
+/*
+ * counterPlatformCond 는 축 카운터(usage_counters)를 같은 규율로 거른다.
+ *
+ * 세션 행이 없는 **고아 카운터**는 필터가 걸리면 빠진다. 그것이 맞다 — 귀속을 모르는 것을
+ * 특정 플랫폼의 사실로 지어내지 않는다. 미지정일 때는 종전대로 센다(조건 자체가 없다).
+ */
+func counterPlatformCond(f Filter) (string, []any) {
+	return platformSessionCond(f, "usage_counters.session_id")
 }
 
 // strOrNil 은 빈 값을 nil 로 남긴다 — 안 보낸 값을 "" 로 지어내지 않는다.

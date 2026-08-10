@@ -8,16 +8,36 @@ import (
 	"github.com/tscorp/user-usage/internal/db"
 )
 
+/*
+ * ── 필터 있는 집계 (…WithFilter) ──────────────────────────────────────
+ *
+ * CONTRACT.md 가 동결한 시그니처(`Totals(ctx)` 처럼 인자 없는 집계)는 **그대로 남긴다.**
+ * 필터를 받는 쪽을 `…WithFilter` 로 나란히 두고, 기존 함수는 빈 필터로 부르는 얇은 껍데기가 된다.
+ *
+ * 왜 인자를 늘리지 않는가: 그 함수들은 이 레포 밖(CONTRACT.md)이 소유한 표면이고, 호출부가
+ * 여럿이다. 시그니처를 바꾸면 응답 shape 는 그대로여도 남의 컴파일이 이유 없이 깨진다.
+ *
+ * **빈 필터는 조건을 하나도 만들지 않는다** — 생성되는 SQL 이 종전과 같은 문자열이다.
+ * 그것이 골든 44개 무회귀의 근거다.
+ */
+
 // Totals 는 전체 규모다.
-func Totals(ctx context.Context) (TotalsResult, error) {
+func Totals(ctx context.Context) (TotalsResult, error) { return TotalsWithFilter(ctx, Filter{}) }
+
+// TotalsWithFilter 는 필터가 걸린 전체 규모다(sessionWhere 와 같은 한 벌의 규칙).
+func TotalsWithFilter(ctx context.Context, f Filter) (TotalsResult, error) {
 	var out TotalsResult
 	d, err := conn()
 	if err != nil {
 		return out, err
 	}
-	r, err := d.QueryRow(ctx,
-		"SELECT COUNT(*) n, SUM(input) i, SUM(output) o, SUM(cache_read) cr, SUM(cache_create) cc,"+
-			" COUNT(DISTINCT username) u, COUNT(DISTINCT machine) m FROM usage_sessions")
+	sql := "SELECT COUNT(*) n, SUM(input) i, SUM(output) o, SUM(cache_read) cr, SUM(cache_create) cc," +
+		" COUNT(DISTINCT username) u, COUNT(DISTINCT machine) m FROM usage_sessions"
+	where, args := sessionWhere(f)
+	if len(where) > 0 {
+		sql += " WHERE " + strings.Join(where, " AND ")
+	}
+	r, err := d.QueryRow(ctx, sql, args...)
 	if err != nil {
 		return out, err
 	}
@@ -38,15 +58,25 @@ func Totals(ctx context.Context) (TotalsResult, error) {
 // UsageByDay 는 일별 토큰 사용량이다 — 비용 추세.
 // 캐시 읽기를 반드시 따로 돌려준다(합치면 비용이 왜곡된다).
 func UsageByDay(ctx context.Context, days int) ([]DayRow, error) {
+	return UsageByDayWithFilter(ctx, days, Filter{})
+}
+
+// UsageByDayWithFilter 는 필터가 걸린 일별 사용량이다.
+func UsageByDayWithFilter(ctx context.Context, days int, f Filter) ([]DayRow, error) {
 	d, err := conn()
 	if err != nil {
 		return nil, err
 	}
 	lim := clampInt(days, 1, 365, 30)
+	// `started_at IS NOT NULL` 은 필터가 아니라 이 집계의 전제다(날짜 칸이 없는 행은 놓을 자리가
+	// 없다). 그래서 항상 맨 앞에 두고, 필터는 뒤에 AND 로 붙인다.
+	where, args := sessionWhere(f)
+	where = append([]string{"started_at IS NOT NULL"}, where...)
+	args = append(args, lim)
 	rows, err := d.Query(ctx,
 		"SELECT substr(started_at,1,10) d, SUM(input) i, SUM(output) o, SUM(cache_read) cr,"+
 			" SUM(cache_create) cc, COUNT(*) n FROM usage_sessions"+
-			" WHERE started_at IS NOT NULL GROUP BY d ORDER BY d DESC LIMIT ?", lim)
+			" WHERE "+strings.Join(where, " AND ")+" GROUP BY d ORDER BY d DESC LIMIT ?", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -62,14 +92,23 @@ func UsageByDay(ctx context.Context, days int) ([]DayRow, error) {
 
 // UsageByUser 는 사람별 사용량이다 — 좌석·비용 배분의 근거.
 func UsageByUser(ctx context.Context) ([]UserRow, error) {
+	return UsageByUserWithFilter(ctx, Filter{})
+}
+
+// UsageByUserWithFilter 는 필터가 걸린 사람별 사용량이다.
+func UsageByUserWithFilter(ctx context.Context, f Filter) ([]UserRow, error) {
 	d, err := conn()
 	if err != nil {
 		return nil, err
 	}
-	rows, err := d.Query(ctx,
-		"SELECT COALESCE(NULLIF(username,''),'"+UnknownModel+"') u, SUM(input) i, SUM(output) o,"+
-			" SUM(cache_read) cr, SUM(cache_create) cc, SUM(turns) t, COUNT(*) n"+
-			" FROM usage_sessions GROUP BY u ORDER BY o DESC")
+	sql := "SELECT COALESCE(NULLIF(username,''),'" + UnknownModel + "') u, SUM(input) i, SUM(output) o," +
+		" SUM(cache_read) cr, SUM(cache_create) cc, SUM(turns) t, COUNT(*) n" +
+		" FROM usage_sessions"
+	where, args := sessionWhere(f)
+	if len(where) > 0 {
+		sql += " WHERE " + strings.Join(where, " AND ")
+	}
+	rows, err := d.Query(ctx, sql+" GROUP BY u ORDER BY o DESC", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -166,6 +205,17 @@ func addShare(dst *Share, r db.Row) {
 
 // UsageByModel 은 세 경로를 더한 모델별 집계다.
 func UsageByModel(ctx context.Context) ([]ModelRow, error) {
+	return UsageByModelWithFilter(ctx, Filter{})
+}
+
+/*
+ * UsageByModelWithFilter 는 필터가 걸린 모델별 집계다.
+ *
+ * ⚠ **세 경로에 같은 필터를 걸어야 한다.** 한 경로만 걸면 `①+②+③ == Totals` 불변식이 깨져
+ *   모델별만 작아지고, 사람에게는 "유실"로 보인다(이 레포에서 실제로 일어났던 결함).
+ *   ①은 usage_series 라 platform 컬럼이 없으므로 세션으로 되짚는다(platformSessionCond).
+ */
+func UsageByModelWithFilter(ctx context.Context, f Filter) ([]ModelRow, error) {
 	d, err := conn()
 	if err != nil {
 		return nil, err
@@ -176,23 +226,33 @@ func UsageByModel(ctx context.Context) ([]ModelRow, error) {
 	 * 총합이 usage_sessions 를 넘어서 이 화면 안에서 두 카드가 어긋난다. 라이브에 실재하는
 	 * 조건이다(인테이크가 세션 행만 실패하고 버킷은 들어가는 자리).
 	 */
+	exactWhere := []string{"EXISTS (SELECT 1 FROM usage_sessions s WHERE s.session_id = x.session_id)"}
+	var exactArgs []any
+	if cond, cargs := platformSessionCond(f, "x.session_id"); cond != "" {
+		exactWhere = append(exactWhere, cond)
+		exactArgs = append(exactArgs, cargs...)
+	}
 	exact, err := d.Query(ctx,
 		"SELECT COALESCE(NULLIF(x.model,''),'"+UnknownModel+"') m, SUM(x.input) i, SUM(x.output) o,"+
 			" SUM(x.cache_read) cr, SUM(x.cache_create) cc, COUNT(DISTINCT x.session_id) n"+
 			" FROM usage_series x"+
-			" WHERE EXISTS (SELECT 1 FROM usage_sessions s WHERE s.session_id = x.session_id)"+
-			" GROUP BY 1")
+			" WHERE "+strings.Join(exactWhere, " AND ")+
+			" GROUP BY 1", exactArgs...)
 	if err != nil {
 		return nil, err
 	}
 
 	// ② series 가 없는 세션 — 종전 질의 그대로. 이 몫이 곧 "세션 최빈 모델 기준" 이다.
+	sw, sargs := sessionWhereOn(f, "s")
+	fbWhere := append([]string{
+		"NOT EXISTS (SELECT 1 FROM usage_series x WHERE x.session_id = s.session_id)",
+	}, sw...)
 	fallback, err := d.Query(ctx,
 		"SELECT COALESCE(NULLIF(s.model,''),'"+UnknownModel+"') m, SUM(s.input) i, SUM(s.output) o,"+
 			" SUM(s.cache_read) cr, SUM(s.cache_create) cc, COUNT(*) n"+
 			" FROM usage_sessions s"+
-			" WHERE NOT EXISTS (SELECT 1 FROM usage_series x WHERE x.session_id = s.session_id)"+
-			" GROUP BY 1")
+			" WHERE "+strings.Join(fbWhere, " AND ")+
+			" GROUP BY 1", sargs...)
 	if err != nil {
 		return nil, err
 	}
@@ -202,15 +262,17 @@ func UsageByModel(ctx context.Context) ([]ModelRow, error) {
 	 * GREATEST/MAX(a,b) 는 방언이 갈려 쓰지 않는다. 음수가 나오는 세션(series 가 세션 행보다
 	 * 큰 경우)은 정상이 아니므로 UsageModelAxis().OverSessions 로 따로 센다. 조용히 덮지 않는다.
 	 */
-	residual, err := d.Query(ctx,
-		"SELECT COALESCE(NULLIF(s.model,''),'"+UnknownModel+"') m,"+
-			" SUM(CASE WHEN s.input > x.i THEN s.input - x.i ELSE 0 END) i,"+
-			" SUM(CASE WHEN s.output > x.o THEN s.output - x.o ELSE 0 END) o,"+
-			" SUM(CASE WHEN s.cache_read > x.cr THEN s.cache_read - x.cr ELSE 0 END) cr,"+
-			" SUM(CASE WHEN s.cache_create > x.cc THEN s.cache_create - x.cc ELSE 0 END) cc"+
-			" FROM usage_sessions s"+
-			" JOIN ("+seriesPerSession+") x ON x.sid = s.session_id"+
-			" GROUP BY 1")
+	resSQL := "SELECT COALESCE(NULLIF(s.model,''),'" + UnknownModel + "') m," +
+		" SUM(CASE WHEN s.input > x.i THEN s.input - x.i ELSE 0 END) i," +
+		" SUM(CASE WHEN s.output > x.o THEN s.output - x.o ELSE 0 END) o," +
+		" SUM(CASE WHEN s.cache_read > x.cr THEN s.cache_read - x.cr ELSE 0 END) cr," +
+		" SUM(CASE WHEN s.cache_create > x.cc THEN s.cache_create - x.cc ELSE 0 END) cc" +
+		" FROM usage_sessions s" +
+		" JOIN (" + seriesPerSession + ") x ON x.sid = s.session_id"
+	if len(sw) > 0 {
+		resSQL += " WHERE " + strings.Join(sw, " AND ")
+	}
+	residual, err := d.Query(ctx, resSQL+" GROUP BY 1", sargs...)
 	if err != nil {
 		return nil, err
 	}
@@ -278,10 +340,21 @@ func UsageByModel(ctx context.Context) ([]ModelRow, error) {
  * 않아 매핑 후 갈릴 수 있다 — 세션 행을 기준으로 잡아야 그 결함에 오염되지 않는다.
  */
 func UsageModelAxis(ctx context.Context) (ModelAxis, error) {
+	return UsageModelAxisWithFilter(ctx, Filter{})
+}
+
+// UsageModelAxisWithFilter 는 필터가 걸린 모델 축 커버리지다.
+func UsageModelAxisWithFilter(ctx context.Context, f Filter) (ModelAxis, error) {
 	out := ModelAxis{Users: []ModelAxisUser{}}
 	d, err := conn()
 	if err != nil {
 		return out, err
+	}
+	// 커버리지는 **세션 기준**이라 필터도 세션에 건다(x 는 그 세션의 버킷 합일 뿐이다).
+	where, args := sessionWhereOn(f, "s")
+	axisWhere := ""
+	if len(where) > 0 {
+		axisWhere = " WHERE " + strings.Join(where, " AND ")
 	}
 	rows, err := d.Query(ctx,
 		"SELECT COALESCE(NULLIF(s.username,''),'"+UnknownModel+"') u, COUNT(*) n,"+
@@ -298,7 +371,8 @@ func UsageModelAxis(ctx context.Context) (ModelAxis, error) {
 			" SUM(CASE WHEN s.no_ts_turns IS NULL THEN 1 ELSE 0 END) nts_unknown"+
 			" FROM usage_sessions s"+
 			" LEFT JOIN ("+seriesPerSession+") x ON x.sid = s.session_id"+
-			" GROUP BY 1 ORDER BY 2 DESC, 1 DESC")
+			axisWhere+
+			" GROUP BY 1 ORDER BY 2 DESC, 1 DESC", args...)
 	if err != nil {
 		return out, err
 	}
@@ -322,6 +396,18 @@ func UsageModelAxis(ctx context.Context) (ModelAxis, error) {
 
 // TopKeys 는 축별 상위 키다 — 명령·키워드·자산 사용 순위.
 func TopKeys(ctx context.Context, kind string, limit int) ([]KeyRow, error) {
+	return TopKeysWithFilter(ctx, kind, limit, Filter{})
+}
+
+/*
+ * TopKeysWithFilter 는 필터가 걸린 축별 상위 키다.
+ *
+ * ⚠ usage_counters 에는 세션의 축(model·started_at)이 없다. 그래서 이 함수가 보는 것은
+ *   **Filter.Platform 뿐**이고, 그 조건조차 세션 행으로 되짚어 만든다(counterPlatformCond).
+ *   기간·모델까지 여기서 흉내내면 세션 축과 카운터 축에 서로 다른 기간 규칙이 두 벌 생긴다 —
+ *   이 화면(summary)이 기간을 노출하는 자리는 byDay 하나이고 그쪽은 세션 표가 소유한다.
+ */
+func TopKeysWithFilter(ctx context.Context, kind string, limit int, f Filter) ([]KeyRow, error) {
 	d, err := conn()
 	if err != nil {
 		return nil, err
@@ -330,9 +416,15 @@ func TopKeys(ctx context.Context, kind string, limit int) ([]KeyRow, error) {
 		return []KeyRow{}, nil
 	}
 	lim := clampInt(limit, 1, 200, 20)
-	rows, err := d.Query(ctx,
-		"SELECT key, SUM(count) c, COUNT(DISTINCT session_id) s, COUNT(DISTINCT username) u"+
-			" FROM usage_counters WHERE kind=? GROUP BY key ORDER BY c DESC LIMIT ?", kind, lim)
+	sql := "SELECT key, SUM(count) c, COUNT(DISTINCT session_id) s, COUNT(DISTINCT username) u" +
+		" FROM usage_counters WHERE kind=?"
+	args := []any{kind}
+	if cond, cargs := counterPlatformCond(f); cond != "" {
+		sql += " AND " + cond
+		args = append(args, cargs...)
+	}
+	args = append(args, lim)
+	rows, err := d.Query(ctx, sql+" GROUP BY key ORDER BY c DESC LIMIT ?", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -358,6 +450,12 @@ func TopKeys(ctx context.Context, kind string, limit int) ([]KeyRow, error) {
  * 강제하지 않는다 — 보이면 사람이 판단한다.
  */
 func ByUser(ctx context.Context, kind string, limit int) ([]UserKeys, error) {
+	return ByUserWithFilter(ctx, kind, limit, Filter{})
+}
+
+// ByUserWithFilter 는 필터가 걸린 사용자별 축 집계다(dispatch 화면의 근거).
+// TopKeysWithFilter 와 같은 제약 — 카운터 축에서 볼 수 있는 것은 Filter.Platform 뿐이다.
+func ByUserWithFilter(ctx context.Context, kind string, limit int, f Filter) ([]UserKeys, error) {
 	d, err := conn()
 	if err != nil {
 		return nil, err
@@ -366,9 +464,14 @@ func ByUser(ctx context.Context, kind string, limit int) ([]UserKeys, error) {
 		return []UserKeys{}, nil
 	}
 	lim := clampInt(limit, 1, 50, 8)
-	rows, err := d.Query(ctx,
-		"SELECT COALESCE(NULLIF(username,''),'"+UnknownModel+"') u, key, SUM(count) c"+
-			" FROM usage_counters WHERE kind=? GROUP BY 1, key ORDER BY 1, c DESC", kind)
+	sql := "SELECT COALESCE(NULLIF(username,''),'" + UnknownModel + "') u, key, SUM(count) c" +
+		" FROM usage_counters WHERE kind=?"
+	args := []any{kind}
+	if cond, cargs := counterPlatformCond(f); cond != "" {
+		sql += " AND " + cond
+		args = append(args, cargs...)
+	}
+	rows, err := d.Query(ctx, sql+" GROUP BY 1, key ORDER BY 1, c DESC", args...)
 	if err != nil {
 		return nil, err
 	}

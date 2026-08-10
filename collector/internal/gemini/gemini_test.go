@@ -503,3 +503,184 @@ func TestInvalidSessionIDFallsBack(t *testing.T) {
 		t.Fatalf("그룹 키로 떨어져야 한다: %+v", ss)
 	}
 }
+
+// ── LOC(추가/삭제 줄 수) ───────────────────────────────────────────────────────
+//
+// 규율은 Claude 파서(internal/transcript.editUse)와 **같은 모양의 입력, 같은 식**으로 맞춘다:
+//
+//	write_file → args.content    의 줄 수를 **추가**로만 센다(원본이 인자에 없어 삭제는 알 수 없다)
+//	replace    → args.new_string = 추가, args.old_string = 삭제
+//
+// 줄 세는 식도 Claude 와 글자 그대로 같다 — strings.Count(s,"\n")+1, 빈 문자열은 0.
+//
+// **축 두 개의 의미가 다르다**(gemini.go editUse 주석과 같은 말):
+//
+//	linesAdded/Removed     = 제안된 편집 **규모**. 거부·실패분도 포함해 센다(상태로 거르지 않는다).
+//	editsAccepted/Rejected = **결과**. 종료 상태로만 판정한다.
+//
+// 아래 표의 error·cancelled 행이 그 구분을 못박는다 — 줄 수는 세어지고 rejected 로 잡힌다.
+
+// toolCall 은 toolCalls 원소 한 개다.
+func toolCall(id, name, status, args string) string {
+	return `{"id":"` + id + `","name":"` + name + `","args":` + args +
+		`,"status":"` + status + `","timestamp":"2026-01-02T03:10:00.000Z"}`
+}
+
+// withTools 는 과금 턴 하나에 붙일 toolCalls 조각이다.
+func withTools(calls ...string) string {
+	return `"toolCalls":[` + strings.Join(calls, ",") + `]`
+}
+
+func writeArgs(content string) string {
+	return `{"file_path":"/Users/secret/a.go","content":` + jsonStr(content) + `}`
+}
+
+func replaceArgs(oldS, newS string) string {
+	return `{"file_path":"/Users/secret/a.go","old_string":` + jsonStr(oldS) +
+		`,"new_string":` + jsonStr(newS) + `}`
+}
+
+// locOf 는 편집 도구 호출들만 실은 세션 하나를 접어 LOC 네 값을 낸다.
+func locOf(t *testing.T, calls ...string) payload.Session {
+	t.Helper()
+	return parse(t, fixPath,
+		meta(sid),
+		geminiMsg("m1", "2026-01-02T03:10:00.000Z", "gemini-3-pro", 100, 10, 0, 0, withTools(calls...)),
+	)
+}
+
+// 완료조건 5 — 도구별 픽스처와 기대 줄 수의 대조표. -v 로 실제 값을 찍는다.
+func TestLOCFixtureTable(t *testing.T) {
+	cases := []struct {
+		name                               string
+		call                               string
+		wantAdd, wantDel, wantAcc, wantRej int64
+	}{
+		{"write_file 3줄(끝 개행 없음)", toolCall("t1", "write_file", "success", writeArgs("a\nb\nc")), 3, 0, 1, 0},
+		{"write_file 끝 개행 포함", toolCall("t1", "write_file", "success", writeArgs("a\nb\n")), 3, 0, 1, 0},
+		{"write_file 1줄", toolCall("t1", "write_file", "success", writeArgs("a")), 1, 0, 1, 0},
+		{"write_file 빈 내용", toolCall("t1", "write_file", "success", writeArgs("")), 0, 0, 1, 0},
+		{"write_file content 누락", toolCall("t1", "write_file", "success", `{"file_path":"/x/a.go"}`), 0, 0, 1, 0},
+		{"replace 2줄→3줄", toolCall("t1", "replace", "success", replaceArgs("x\ny", "p\nq\nr")), 3, 2, 1, 0},
+		{"replace 신규파일(old 빈값)", toolCall("t1", "replace", "success", replaceArgs("", "p\nq")), 2, 0, 1, 0},
+		{"replace 삭제만(new 빈값)", toolCall("t1", "replace", "success", replaceArgs("x\ny\nz", "")), 0, 3, 1, 0},
+		{"replace 인자 없음", toolCall("t1", "replace", "success", `{}`), 0, 0, 1, 0},
+		// ↓ 규모는 세고 결과만 거부로 잡는 행들. 성공 게이트를 다시 넣으면 여기서 깨진다.
+		{"write_file 실패(error)", toolCall("t1", "write_file", "error", writeArgs("a\nb\nc")), 3, 0, 0, 1},
+		{"replace 사용자 거부(cancelled)", toolCall("t1", "replace", "cancelled", replaceArgs("x\ny", "p")), 1, 2, 0, 1},
+		// ↓ 종료 상태가 아니면 결과는 **모르는 것**이라 어느 쪽도 안 센다. 규모는 그래도 센다.
+		{"종료 상태 아님(executing)", toolCall("t1", "write_file", "executing", writeArgs("a\nb")), 2, 0, 0, 0},
+		{"status 필드 없음", `{"id":"t1","name":"write_file","args":` + writeArgs("a\nb") + `}`, 2, 0, 0, 0},
+		{"편집 도구 아님(read_file)", toolCall("t1", "read_file", "success", `{"path":"/x/a.go","content":"a\nb\nc"}`), 0, 0, 0, 0},
+		{"편집 도구 아님(run_shell_command)", toolCall("t1", "run_shell_command", "success", `{"command":"git apply p.diff"}`), 0, 0, 0, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := locOf(t, c.call)
+			t.Logf("%-34s → linesAdded=%d linesRemoved=%d editsAccepted=%d editsRejected=%d (기대 %d/%d/%d/%d)",
+				c.name, s.LinesAdded, s.LinesRemoved, s.EditsAccepted, s.EditsRejected,
+				c.wantAdd, c.wantDel, c.wantAcc, c.wantRej)
+			if s.LinesAdded != c.wantAdd || s.LinesRemoved != c.wantDel ||
+				s.EditsAccepted != c.wantAcc || s.EditsRejected != c.wantRej {
+				t.Fatalf("불일치: got %d/%d/%d/%d, want %d/%d/%d/%d",
+					s.LinesAdded, s.LinesRemoved, s.EditsAccepted, s.EditsRejected,
+					c.wantAdd, c.wantDel, c.wantAcc, c.wantRej)
+			}
+		})
+	}
+}
+
+// 여러 편집 호출이 한 턴에 붙으면 합산된다. 편집 도구는 tool 축에도 그대로 실린다.
+func TestLOCAccumulatesAndKeepsToolAxis(t *testing.T) {
+	s := locOf(t,
+		toolCall("t1", "write_file", "success", writeArgs("a\nb\nc")),
+		toolCall("t2", "replace", "success", replaceArgs("x", "p\nq")),
+		toolCall("t3", "replace", "error", replaceArgs("zzz\nzzz", "y")),
+	)
+	// t3 는 실패했지만 **규모에는 들어간다**(added +1, removed +2) — 결과 축에서만 거부로 빠진다.
+	if s.LinesAdded != 6 || s.LinesRemoved != 3 {
+		t.Fatalf("linesAdded=%d linesRemoved=%d, 기대 6/3", s.LinesAdded, s.LinesRemoved)
+	}
+	if s.EditsAccepted != 2 || s.EditsRejected != 1 {
+		t.Fatalf("editsAccepted=%d editsRejected=%d, 기대 2/1", s.EditsAccepted, s.EditsRejected)
+	}
+	if s.Counters["tool"]["write_file"] != 1 || s.Counters["tool"]["replace"] != 2 {
+		t.Fatalf("tool 축=%v, 기대 write_file:1 replace:2", s.Counters["tool"])
+	}
+}
+
+// 되돌린($rewindTo) 편집은 세지 않는다 — LOC 도 리플레이 **확정 후**에 접혀야 한다.
+func TestLOCRewoundEditsNotCounted(t *testing.T) {
+	s := parse(t, fixPath,
+		meta(sid),
+		geminiMsg("m1", "2026-01-02T03:10:00.000Z", "gemini-3-pro", 100, 10, 0, 0,
+			withTools(toolCall("t1", "write_file", "success", writeArgs("a\nb\nc")))),
+		geminiMsg("m2", "2026-01-02T03:20:00.000Z", "gemini-3-pro", 100, 10, 0, 0,
+			withTools(toolCall("t2", "write_file", "success", writeArgs("d\ne\nf\ng")))),
+		`{"$rewindTo":"m2"}`,
+	)
+	if s.LinesAdded != 3 || s.EditsAccepted != 1 {
+		t.Fatalf("되돌린 편집이 남았다: linesAdded=%d editsAccepted=%d, 기대 3/1", s.LinesAdded, s.EditsAccepted)
+	}
+}
+
+// 같은 세션의 레거시 .json 과 .jsonl 이 같은 메시지를 들고 있어도 LOC 가 두 배가 되면 안 된다
+// (메시지 id 로 합치는 기존 규율이 LOC 에도 그대로 적용된다).
+func TestLOCNotDoubleCountedAcrossFiles(t *testing.T) {
+	line := geminiMsg("m1", "2026-01-02T03:10:00.000Z", "gemini-3-pro", 100, 10, 0, 0,
+		withTools(toolCall("t1", "replace", "success", replaceArgs("x\ny", "p\nq\nr"))))
+	a := New()
+	for _, p := range []string{
+		"/x/.gemini/tmp/user-usage/chats/session-2026-01-02T03-00-abc12345.json",
+		"/x/.gemini/tmp/user-usage/chats/session-2026-01-02T03-00-abc12345.jsonl",
+	} {
+		if err := a.AddFileAt(p, "session-2026-01-02T03-00-abc12345",
+			strings.NewReader(meta(sid)+"\n"+line+"\n")); err != nil {
+			t.Fatalf("AddFileAt: %v", err)
+		}
+	}
+	ss := a.Sessions()
+	if len(ss) != 1 {
+		t.Fatalf("세션 1개를 기대했는데 %d개다", len(ss))
+	}
+	if ss[0].LinesAdded != 3 || ss[0].LinesRemoved != 2 {
+		t.Fatalf("두 번 세어졌다: linesAdded=%d linesRemoved=%d, 기대 3/2", ss[0].LinesAdded, ss[0].LinesRemoved)
+	}
+}
+
+// 인자 타입이 어긋나도(content 가 객체 등) **그 턴의 토큰이 사라지면 안 된다.**
+// 편집 도구가 아닌 MCP 도구가 content 라는 이름의 객체 인자를 쓰는 일이 흔하다.
+func TestLOCWeirdArgsDoNotDropTurn(t *testing.T) {
+	s := parse(t, fixPath,
+		meta(sid),
+		geminiMsg("m1", "2026-01-02T03:10:00.000Z", "gemini-3-pro", 100, 10, 0, 0,
+			withTools(
+				`{"id":"t1","name":"mcp_srv_put","args":{"content":{"a":1},"command":42},"status":"success","timestamp":"2026-01-02T03:10:00.000Z"}`,
+				`{"id":"t2","name":"write_file","args":"not-an-object","status":"success","timestamp":"2026-01-02T03:10:01.000Z"}`,
+			)),
+	)
+	if s.Input != 100 || s.Output != 10 || s.Turns != 1 {
+		t.Fatalf("이상한 인자 때문에 턴이 통째로 사라졌다: %+v", s)
+	}
+	if s.LinesAdded != 0 || s.LinesRemoved != 0 {
+		t.Fatalf("문자열이 아닌 인자를 세면 안 된다: %d/%d", s.LinesAdded, s.LinesRemoved)
+	}
+	if s.Counters["mcp"]["mcp_srv_put"] != 1 {
+		t.Fatalf("mcp 축=%v", s.Counters["mcp"])
+	}
+}
+
+// 편집이 하나도 없으면 네 필드 모두 0 이고, omitempty 로 본문에서 아예 빠진다
+// (구버전 수집기와 같은 모양 — 0 을 명시해 "관측했고 0"이라고 말하지 않는다).
+func TestLOCAbsentWhenNoEdits(t *testing.T) {
+	s := locOf(t, toolCall("t1", "read_file", "success", `{"path":"/x/a.go"}`))
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, k := range []string{"linesAdded", "linesRemoved", "editsAccepted", "editsRejected"} {
+		if strings.Contains(string(b), k) {
+			t.Fatalf("편집이 없는데 %s 가 본문에 실렸다: %s", k, b)
+		}
+	}
+}

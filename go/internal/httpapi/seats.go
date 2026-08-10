@@ -75,7 +75,13 @@ type seatAcc struct {
 	priced           bool
 }
 
-func (s *server) routeSeats(w http.ResponseWriter, r *http.Request, c *rctx) (bool, error) {
+/*
+ * platform 은 호출부(routeAnalytics)가 이미 검증해 넘긴다 — 빈 문자열이면 조건을 걸지 않는다.
+ *
+ * ⚠ **두 윈도우에 같은 값을 걸어야 한다.** 현재만 거르고 직전을 안 거르면 분모가 전 플랫폼이
+ *   되어 증감률(±%)이 통째로 거짓이 된다. 이 화면에서 델타가 유일한 판단 근거라 가장 비싼 결함이다.
+ */
+func (s *server) routeSeats(w http.ResponseWriter, r *http.Request, c *rctx, platform string) (bool, error) {
 	ctx := r.Context()
 	days := clampInt(int(numOr(c.query.Get("days"), 30)), 1, 3650)
 
@@ -86,11 +92,11 @@ func (s *server) routeSeats(w http.ResponseWriter, r *http.Request, c *rctx) (bo
 	prevTo := shiftDayLocal(from, -1)
 	prevFrom := shiftDayLocal(from, -days)
 
-	cur, curCosts, err := seatWindow(ctx, from, to)
+	cur, curCosts, err := seatWindow(ctx, from, to, platform)
 	if err != nil {
 		return true, err
 	}
-	prev, _, err := seatWindow(ctx, prevFrom, prevTo)
+	prev, _, err := seatWindow(ctx, prevFrom, prevTo, platform)
 	if err != nil {
 		return true, err
 	}
@@ -175,16 +181,22 @@ type teamsResponse struct {
 	Unpriced []string     `json:"unpriced"`
 }
 
-// routeTeams 는 사용자별 집계를 team_members 매핑으로 팀에 롤업한다. 팀 미배정 사용자는
-// "미배정" 그룹으로 모은다(숨기면 총합이 팀 합과 안 맞아 사람이 혼란한다).
-func (s *server) routeTeams(w http.ResponseWriter, r *http.Request, c *rctx) (bool, error) {
+/*
+ * routeTeams 는 사용자별 집계를 team_members 매핑으로 팀에 롤업한다. 팀 미배정 사용자는
+ * "미배정" 그룹으로 모은다(숨기면 총합이 팀 합과 안 맞아 사람이 혼란한다).
+ *
+ * platform 은 **세션 집계 쪽에만** 건다. team_members 는 사람→팀 매핑이라 플랫폼 축이 없고,
+ * 거기에 필터를 흉내내면 "그 플랫폼을 안 쓴 팀원은 팀에서 빠진다"는 다른 사실이 된다.
+ * 그 플랫폼에서 활동이 없는 팀은 롤업에 행이 없는 것으로 충분히 표현된다.
+ */
+func (s *server) routeTeams(w http.ResponseWriter, r *http.Request, c *rctx, platform string) (bool, error) {
 	ctx := r.Context()
 	days := clampInt(int(numOr(c.query.Get("days"), 30)), 1, 3650)
 	today := tz.LocalDay(time.Now().UTC().Format(time.RFC3339), tz.OffsetMin())
 	from := shiftDayLocal(today, -(days - 1))
 	to := today
 
-	rows, costs, err := seatWindow(ctx, from, to)
+	rows, costs, err := seatWindow(ctx, from, to, platform)
 	if err != nil {
 		return true, err
 	}
@@ -250,8 +262,11 @@ func (s *server) routeTeams(w http.ResponseWriter, r *http.Request, c *rctx) (bo
 }
 
 // seatWindow 는 한 기간의 세션 rows 와 그 비용을 돌려준다(leaderboard 와 같은 계산).
-func seatWindow(ctx context.Context, from, to string) ([]store.Session, []cost.Result, error) {
-	rows, err := store.SessionRows(ctx, store.Filter{From: from, To: to, Limit: store.SessionRowsMax})
+// platform 이 빈 문자열이면 store.Filter 가 조건을 만들지 않는다 = 전체(현행 동작).
+func seatWindow(ctx context.Context, from, to, platform string) ([]store.Session, []cost.Result, error) {
+	rows, err := store.SessionRows(ctx, store.Filter{
+		From: from, To: to, Platform: platform, Limit: store.SessionRowsMax,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
