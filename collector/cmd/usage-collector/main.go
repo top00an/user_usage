@@ -21,6 +21,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -359,23 +360,44 @@ var stdinReader io.Reader = os.Stdin
 // 깨지거나 멈추는 게 훨씬 나쁘다. 그래서 무슨 일이 있어도 0 으로 끝내고, 에러는
 // stderr 로만 흘린다(상태줄에는 stdout 만 나간다).
 //
-// 설치(사용자가 직접 한다 — 이 수집기는 남의 설정 파일을 건드리지 않는다):
+// 설치(scripts/install.sh 가 비파괴·멱등으로 한다):
 //
 //	~/.gemini/antigravity-cli/settings.json
 //	{ "statusLine": { "type": "command", "command": "/path/to/usage-collector -antigravity-statusline" } }
+//
+// # 체이닝 — 남의 상태줄을 빼앗지 않는다
+//
+// statusLine 자리는 하나뿐이라 우리가 들어가면 원래 쓰던 상태줄이 사라진다. 그래서 설치기가
+// 기존 명령을 AGY_PREV_STATUSLINE 으로 옮겨 두고, 여기서 **같은 JSON 을 그 명령에 먹여**
+// 표준출력을 그대로 통과시킨다(우리 문구는 덧붙이지 않는다 — 화면은 그들 것이다).
+// 체인이 없거나 실패·타임아웃·자기참조면 우리 요약으로 폴백한다(§ internal/antigravity/chain.go).
 func runStatusLine(opt options, in io.Reader, stdout, stderr *os.File) int {
 	if opt.agyDir == "" {
 		fmt.Fprintln(stdout, "")
 		return 0
 	}
-	s, changed, err := antigravity.RecordStatusLine(opt.agyDir, in, time.Now())
-	if err != nil {
-		// 상태줄은 살려 둔다 — 빈 줄이라도 내보내고 정상 종료한다.
-		fmt.Fprintf(stderr, "antigravity 스풀 기록 실패(무시하고 계속): %v\n", err)
+	// stdin 은 **한 번밖에 못 읽는다.** 스풀 기록과 체인 명령이 같은 바이트를 봐야 하므로
+	// 먼저 통째로 읽어 들고, 양쪽에 각각 먹인다(스트림을 두 번 쓰면 뒤쪽이 빈 입력을 받는다).
+	raw := antigravity.ReadStatusLineInput(in)
+
+	s, changed, recErr := antigravity.RecordStatusLine(opt.agyDir, bytes.NewReader(raw), time.Now())
+	if recErr != nil {
+		// 기록 실패는 상태줄을 죽일 이유가 못 된다 — 진단만 stderr 로 흘리고 계속 간다.
+		fmt.Fprintf(stderr, "antigravity 스풀 기록 실패(무시하고 계속): %v\n", recErr)
+	}
+	_ = changed
+
+	// 기록이 실패했어도 체인은 시도한다 — 사용자 화면은 우리 사정과 무관하다.
+	self, _ := os.Executable()
+	if out, ok := antigravity.ChainPrev(os.Getenv(antigravity.PrevStatusLineEnv), self, raw); ok {
+		stdout.Write(out) //nolint:errcheck // 상태줄에서 쓰기 실패에 할 수 있는 일이 없다
+		return 0
+	}
+
+	if recErr != nil {
 		fmt.Fprintln(stdout, "")
 		return 0
 	}
-	_ = changed
 	fmt.Fprintln(stdout, statusLineText(s))
 	return 0
 }
