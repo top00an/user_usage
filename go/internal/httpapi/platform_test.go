@@ -267,9 +267,26 @@ func TestPlatformFilterRejectsUnknownValue(t *testing.T) {
 		"/api/usage/sessions?platform=claud",
 		"/api/usage/platforms?platform=claud",
 		"/api/usage/quality?platform=CLAUDE", // 필터는 정규화하지 않는다 — 대문자도 오타다
+		"/api/usage/sessions?platform=antigrav",
+		"/api/usage/platforms?platform=Antigravity",
 	} {
 		if rec := do(t, h, http.MethodGet, target, "", withAdmin); rec.Code != http.StatusBadRequest {
 			t.Fatalf("%s: %d (기대 400)", target, rec.Code)
+		}
+	}
+}
+
+// 반대편: 허용목록에 든 값은 400 이 아니다. 위 테스트만 있으면 "전부 400" 도 통과한다.
+func TestPlatformFilterAcceptsAntigravity(t *testing.T) {
+	openDB(t)
+	h := New(testCfg(false))
+	for _, target := range []string{
+		"/api/usage/sessions?platform=antigravity",
+		"/api/usage/platforms?platform=antigravity",
+		"/api/usage/quality?platform=antigravity",
+	} {
+		if rec := do(t, h, http.MethodGet, target, "", withAdmin); rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d (기대 200) %s", target, rec.Code, rec.Body.String())
 		}
 	}
 }

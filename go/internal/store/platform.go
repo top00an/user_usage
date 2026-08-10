@@ -21,9 +21,18 @@ import (
  *   조회 필터일 뿐이므로 권한 판정에 쓰면 안 된다.
  */
 
-// Platforms 는 허용 플랫폼 식별자다. 클라이언트가 보고하는 값이라 서버가 반드시 좁힌다
-// (CounterKinds 와 같은 규율).
-var Platforms = []string{"claude", "codex", "gemini"}
+/*
+ * Platforms 는 허용 플랫폼 식별자다. 클라이언트가 보고하는 값이라 서버가 반드시 좁힌다
+ * (CounterKinds 와 같은 규율).
+ *
+ * ⚠ gemini 와 antigravity 는 **다른 도구다.** 사람들이 "Gemini CLI" 라 부르는 것에는 두 가지가
+ *   섞여 있다: 오픈소스 google-gemini/gemini-cli 와 Google Antigravity CLI(agy). 모델이 같아
+ *   model 로는 갈리지 않지만 **수집 가능 범위가 다르다** — gemini 는 세션 파일에서 도구·MCP·
+ *   subagent·skill·LOC 까지 나오는 반면 antigravity 는 statusLine 의 토큰·모델·세션·프로젝트가
+ *   전부다(훅 protobuf 스키마·대화 DB·transcript 전수 확인 결과 usage 외 축이 없다).
+ *   한 값으로 접으면 화면의 플랫폼별 "미수집/해당 없음" 지원표가 통째로 거짓이 된다.
+ */
+var Platforms = []string{"claude", "codex", "gemini", "antigravity"}
 
 const (
 	/*

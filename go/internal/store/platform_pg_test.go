@@ -62,6 +62,12 @@ func TestPGPlatformAxis(t *testing.T) {
 		{SessionID: tag + "-none", Username: tag, Model: "claude-opus-4-8", Output: 1, StartedAt: day + "T10:00:00.000Z"},
 		{SessionID: tag + "-codex", Username: tag, Platform: "codex", Model: "gpt-5-codex", Output: 2, StartedAt: day + "T11:00:00.000Z"},
 		{SessionID: tag + "-grok", Username: tag, Platform: "grok", Model: "grok-9", Output: 4, StartedAt: day + "T12:00:00.000Z"},
+		/*
+		 * 허용목록에 나중에 더해진 값(antigravity). **마이그레이션 없이** 들어가야 한다는 것이
+		 * 이 줄이 재는 사실이다 — 컬럼은 text 이고 CHECK 제약이 없으므로 값만 늘어난다.
+		 * 제약이 생기는 날 이 줄이 먼저 깨진다(운영에서 인테이크가 통째로 죽는 대신).
+		 */
+		{SessionID: tag + "-agy", Username: tag, Platform: "antigravity", Model: "gemini-3-pro", Output: 8, StartedAt: day + "T13:00:00.000Z"},
 	} {
 		if err := SessionUpsert(ctxA, in); err != nil {
 			t.Fatalf("SessionUpsert(%s): %v", in.SessionID, err)
@@ -81,6 +87,7 @@ func TestPGPlatformAxis(t *testing.T) {
 		tag + "-none":   PlatformDefault,
 		tag + "-codex":  "codex",
 		tag + "-grok":   PlatformOther,
+		tag + "-agy":    "antigravity", // 마이그레이션 없이 저장된다
 	}
 	for id, w := range want {
 		if got[id] != w {
@@ -89,8 +96,8 @@ func TestPGPlatformAxis(t *testing.T) {
 	}
 
 	// ③ 필터 — 미지정은 전체, 지정하면 갈린다.
-	if n := len(rows); n != 4 {
-		t.Fatalf("미지정 필터 행 수 = %d (기대 4)", n)
+	if n := len(rows); n != 5 {
+		t.Fatalf("미지정 필터 행 수 = %d (기대 5)", n)
 	}
 	only, err := SessionRows(ctxA, Filter{Username: tag, Platform: "codex"})
 	if err != nil {
@@ -109,8 +116,17 @@ func TestPGPlatformAxis(t *testing.T) {
 	for _, r := range roll {
 		sum[r.Platform] = r.Sessions
 	}
-	if sum["claude"] != 2 || sum["codex"] != 1 || sum[PlatformOther] != 1 {
+	if sum["claude"] != 2 || sum["codex"] != 1 || sum["antigravity"] != 1 || sum[PlatformOther] != 1 {
 		t.Fatalf("롤업: %+v", roll)
+	}
+
+	// antigravity 도 조회 필터로 갈린다 — 저장만 되고 못 거르면 화면에서 영원히 안 보인다.
+	agy, err := SessionRows(ctxA, Filter{Username: tag, Platform: "antigravity"})
+	if err != nil {
+		t.Fatalf("SessionRows(antigravity): %v", err)
+	}
+	if len(agy) != 1 || agy[0].SessionID != tag+"-agy" {
+		t.Fatalf("platform=antigravity 필터: %+v", agy)
 	}
 
 	/*

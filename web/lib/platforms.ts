@@ -20,13 +20,22 @@
  *
  * ── 근거(2026-08-10 기준) ─────────────────────────────────────────────────
  *   · 필터로 보낼 수 있는 값의 목록 = go/internal/store/platform.go 의
- *     PlatformFilterValues() = Platforms(claude·codex·gemini) + other.
+ *     PlatformFilterValues() = Platforms(claude·codex·gemini·antigravity) + other.
  *     **여기 없는 값을 보내면 서버가 400 을 낸다.** 그래서 UI 는 반드시 이 목록으로 좁힌다.
  *   · codex 의 slash·skill·agent: Codex 세션 로그에 그 개념의 기록 자체가 남지 않는다 →
  *     수집기가 보낼 것이 없다(미수집).
  *   · codex 의 cacheCreate: OpenAI 는 캐시 **쓰기**에 과금하지 않는다 → 청구/토큰 축으로서의
  *     '캐시 생성'이라는 값이 존재하지 않는다(해당 없음). 응답에 0 이 와도 그건 관측이 아니다.
  *   · gemini: 수집기가 아직 없다. 목록에 나타나더라도 값은 올라오지 않는다(준비 중).
+ *   · antigravity: **gemini 와 다른 도구다.** 사람들이 "Gemini CLI" 라 부르는 것에는 오픈소스
+ *     google-gemini/gemini-cli 와 Google Antigravity CLI(agy) 두 가지가 섞여 있다. 모델이 같아
+ *     model 로는 안 갈리지만 수집 가능 범위가 다르다 — gemini 는 세션 파일에서 도구·MCP·
+ *     subagent·skill·LOC 까지 나오는 반면, antigravity 에서 얻을 수 있는 것은 statusLine 의
+ *     토큰·모델·세션·프로젝트가 전부다(훅 protobuf 스키마·대화 DB·transcript 를 전수 확인한
+ *     결과 usage 외의 축이 없다). 그래서 행동 축은 '준비 중'이 아니라 **미수집**이다 —
+ *     수집기를 더 만들면 언젠가 온다는 뜻이 아니라, 그 도구가 기록하지 않아 올 수 없다는 뜻이다.
+ *   · antigravity 의 cacheCreate: Gemini 의 암시적 캐싱에는 캐시 **쓰기** 과금이라는 개념이
+ *     없다 → 값이 존재하지 않는다(해당 없음). codex 와 같은 이유, 다른 근거다.
  *   · other: 허용목록 밖 이름으로 보고된 세션의 자리(서버가 claude 로 접지 않고 남긴다).
  *     무엇을 기록하는 도구인지 우리는 모른다(미상).
  *
@@ -35,7 +44,7 @@
  */
 
 /** 서버가 조회 필터로 받는 값. 이 목록 밖을 보내면 400 이다. */
-export const PLATFORM_FILTER_VALUES = ['claude', 'codex', 'gemini', 'other'] as const;
+export const PLATFORM_FILTER_VALUES = ['claude', 'codex', 'gemini', 'antigravity', 'other'] as const;
 
 export type PlatformId = (typeof PLATFORM_FILTER_VALUES)[number];
 
@@ -163,6 +172,22 @@ const SUPPORT: Record<PlatformId, Record<MetricId, Support>> = {
     },
   },
   gemini: fill('planned', '수집기가 아직 없습니다 — 이 축의 값은 올라오지 않습니다.'),
+  /*
+   * antigravity — 행동 축이 '준비 중'이 아니라 '미수집'인 것이 핵심이다.
+   * 준비 중은 "언젠가 온다"이고 미수집은 "그 도구가 안 남겨서 올 수 없다"다. 여기서 '준비 중'을
+   * 쓰면 우리는 오지 않을 값을 기다리게 하고, 화면은 빈칸의 이유를 틀리게 말한다.
+   */
+  antigravity: {
+    ...fill(
+      'unmeasured',
+      'Antigravity 는 이 축을 기록하지 않습니다 — statusLine 의 사용량(토큰·모델·세션·프로젝트) 외에 '
+      + '수집기가 읽을 수 있는 근거가 없습니다.',
+    ),
+    cacheCreate: {
+      state: 'na',
+      why: 'Gemini 의 암시적 캐싱에는 캐시 쓰기 과금이라는 개념이 없습니다 — 캐시 생성이라는 값 자체가 없습니다(0 이 아닙니다).',
+    },
+  },
   other: fill('unknown', UNKNOWN.why),
 };
 
@@ -193,6 +218,9 @@ const META: Record<PlatformId, Omit<PlatformMeta, 'id'>> = {
   claude: { label: 'Claude', color: 'var(--series-2)', note: '' },
   codex: { label: 'Codex', color: 'var(--series-3)', note: '' },
   gemini: { label: 'Gemini', color: 'var(--series-1)', note: '수집기 준비 중' },
+  // 표시명은 제품명 그대로다. gemini 와 나란히 서는 자리라 색까지 갈라 둔다 —
+  // 같은 색이면 사람은 두 행을 한 도구의 분해로 읽는다.
+  antigravity: { label: 'Antigravity', color: 'var(--series-4)', note: '토큰·비용 축만 기록' },
   other: { label: '기타(미식별)', color: 'var(--series-5)', note: '허용목록 밖 이름으로 보고된 세션' },
 };
 

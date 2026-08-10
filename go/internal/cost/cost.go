@@ -359,6 +359,8 @@ func Seed() Table {
 //	'gpt-5.5-2026-04-23'                    → 'gpt-5.5'                (OpenAI 날짜 스냅샷)
 //	'gemini-2.5-flash-lite-preview-09-2025' → 'gemini-2.5-flash-lite'  (Gemini 프리뷰 스냅샷)
 //	'anthropic.claude-opus-5'               → 'claude-opus-5'          (Bedrock 접두사)
+//	'gemini-3.6-flash-medium'               → 'gemini-3.6-flash'       (변형 접미사)
+//	'claude-opus-4-6-thinking'              → 'claude-opus-4-6'        (변형 접미사)
 //
 // **'-latest' 는 자르지 않는다.** 'chat-latest' · 'gpt-5.3-chat-latest' 는 스냅샷 별칭이 아니라
 // 그 자체가 정식 과금 ID다. 자르면 표에 없는 이름이 되어 비용이 통째로 빠진다.
@@ -375,7 +377,52 @@ func NormalizeModel(model string) string {
 	s = stripBracketSuffix(s) // [1m] 류 접미사
 	s = stripDateSnapshot(s)  // -20251101 류 날짜 스냅샷
 	s = strings.TrimPrefix(s, "anthropic.")
-	return strings.TrimSpace(s)
+	s = strings.TrimSpace(s)
+	return stripVariantSuffix(s) // -medium · -thinking 류 변형 접미사
+}
+
+/*
+ * 변형 접미사 — 같은 과금 ID의 **동작 변형**을 가리키는 꼬리다. 단가는 원본과 같다.
+ *
+ * 실측: Google Antigravity CLI(`agy models`)가 보고하는 ID 는 API 과금 ID 에 추론 강도
+ * (-high/-medium/-low) 또는 사고 모드(-thinking)를 덧붙인 형태다:
+ *
+ *	gemini-3.6-flash-medium    → gemini-3.6-flash
+ *	claude-opus-4-6-thinking   → claude-opus-4-6
+ *
+ * 수집기는 이 원문을 **그대로** 보낸다(무엇이 실제로 보고됐는지 서버가 알 수 있어야 한다).
+ * 벗기는 일은 여기서만 한다. 벗기지 않으면 이 ID 들이 전부 unpriced 로 빠진다.
+ *
+ * ⚠ **정확히 이 넷만 벗긴다.** 목록을 넓히고 싶어지지만 '-lite'(gemini-3.5-flash-lite)·
+ *   '-pro'·'-preview'·'-nano' 는 정식 과금 ID의 일부라 자르면 다른 모델 단가가 붙는다.
+ *   variant_suffix_test.go 가 시드 전체를 훑어 이 넷으로 끝나는 키가 없음을 못 박는다 —
+ *   그런 모델이 등록되는 날 즉시 빨개진다.
+ */
+var variantSuffixes = []string{"-thinking", "-high", "-medium", "-low"}
+
+// stripVariantSuffix 는 변형 접미사를 **한 겹만** 벗긴다.
+//
+// 한 겹인 이유: 반복해서 벗기면 'foo-low-medium' 이 'foo' 가 되어, 존재하지도 않는 매칭이
+// 생긴다. 실제 ID 는 접미사가 하나뿐이므로 두 겹은 이름이 이상하다는 신호이고, 이상한 이름은
+// unpriced 로 나가는 편이 옳다.
+//
+// **원문 우선** — 벗기기 전에 원문이 시드에 있으면 그것을 쓴다. 지금은 해당 키가 없지만,
+// 미래에 '...-thinking' 이 별도 단가의 정식 과금 ID로 등록되면 이 분기가 그 모델을 지킨다.
+func stripVariantSuffix(s string) string { return stripVariantSuffixIn(s, seed) }
+
+// stripVariantSuffixIn 은 "알려진 이름" 집합을 주입받는다 — 테스트가 원문 우선 분기를
+// 실제 시드에 가짜 모델을 심지 않고 검증할 수 있게 한다.
+func stripVariantSuffixIn(s string, known map[string]seedEntry) string {
+	if _, ok := known[s]; ok {
+		return s // 원문이 곧 과금 ID다 — 건드리지 않는다.
+	}
+	for _, suf := range variantSuffixes {
+		// len 이 같으면 접미사만 온 것이다. 잘라 봐야 빈 문자열이라 조회가 불가능해진다.
+		if len(s) > len(suf) && strings.HasSuffix(s, suf) {
+			return s[:len(s)-len(suf)]
+		}
+	}
+	return s
 }
 
 // /\[[^\]]*\]$/ 와 같다.
