@@ -10,12 +10,18 @@ package cost
  *	          Anthropic 처럼 TTL 로 갈리는 축이 아니므로 CacheCreate5m/1h 가 들어와도 $0 이다.
  *
  * ── 계단 요금(≤200K / >200K) ────────────────────────────────────────────────
- * pro 계열은 프롬프트가 200K 토큰을 넘으면 단가가 오른다. priceLong 에 초과 구간 단가를 적어
- * 두되 **계산에는 쓰지 않는다** — 우리가 가진 행은 이미 집계된 값이라, 하루치 합계가 200K 를
- * 넘은 것과 한 요청이 200K 를 넘은 것을 구분할 수 없다.
- * 집계 후 계산이라 계단 판정 불가 — 요청단위 분리 필요(후속).
- * 지금은 기본 구간 단가만 적용한다. 즉 긴 컨텍스트를 많이 쓴 팀은 **과소** 추정된다
- * (최대 2배). LongContextPrice 로 "이 모델은 계단이 있다"는 사실만 화면에 노출한다.
+ * pro 계열은 **요청의 입력 컨텍스트가 200K 토큰을 넘으면** 그 요청의 입력·출력 단가가 함께
+ * 오른다. 공식 문구가 그 범위를 못박는다:
+ *   "If a query input context is longer than 200K tokens, all tokens (input and output)
+ *    are charged at long context rates."
+ * 즉 임계를 넘긴 요청은 출력까지 롱 단가다 — 입력만 올리면 과소가 된다.
+ *
+ * 임계값 판정은 **수집기**가 한다(요청 원문을 보는 유일한 자리다). 서버는 수집기가 분리해
+ * 보내 준 몫(Usage.InputLong/OutputLong/CacheReadLong)에 아래 priceLong 을 곱한다.
+ * 분리분이 없으면(구버전 수집기·기존 데이터) 전부 표준 구간이고 결과는 종전과 같다.
+ *
+ * 캐시 히트의 롱 단가는 표에 따로 적지 않는다 — **롱 입력가 × cacheReadMult** 로 나온다.
+ * (2.5-pro 캐시 0.125 → 0.25 는 입력 1.25 → 2.50 과 같은 0.1 배수다.)
  */
 
 const gemCacheRead = 0.10
@@ -41,7 +47,7 @@ var googleSeed = map[string]seedEntry{
 	// 실체로 박아 둔다(로직이 없으면 로직이 틀릴 일도 없다).
 	"gemini-3-flash": {provider: ProviderGoogle, price: Price{1.5, 9}, cacheReadMult: gemCacheRead},
 
-	// ── pro 계열 (계단 요금 — priceLong 은 정의만, 미적용) ──
+	// ── pro 계열 (계단 요금 — 입력 >200K 이면 그 요청의 입력·출력이 모두 priceLong) ──
 	"gemini-2.5-pro": {
 		provider: ProviderGoogle, price: Price{1.25, 10}, priceLong: Price{2.5, 15},
 		cacheReadMult: gemCacheRead,

@@ -90,6 +90,71 @@ var regressionCases = []regressionCase{
 	},
 }
 
+/*
+ * 계단(롱컨텍스트) 개편(2026-08-10) **이전** 값 — 계단 모델을 롱 분리분 없이 계산했을 때.
+ *
+ * 왜 따로 두는가: 위의 regressionCases 는 Anthropic 뿐이라 priceLong 이 있는 모델을 하나도 안
+ * 지난다. 계단 개편이 건드릴 수 있는 자리는 정확히 **priceLong 이 붙은 모델**이므로, 그쪽에
+ * 분리분 0 을 넣었을 때 종전 값이 그대로 나오는지를 못박아야 게이트가 비지 않는다.
+ *
+ * 기대값은 개편 전 공식(계단 항이 없는 식)을 그대로 옮겨 **따로 돌려** 얻은 값이며, 개편 후
+ * 코드의 출력을 받아 적은 것이 아니다. 그래야 "코드가 낸 값을 코드로 검증"하는 자기충족을
+ * 피한다.
+ */
+var longFlatRegressionCases = []regressionCase{
+	{
+		name: "gemini-2.5-pro/mixed",
+		day:  "2026-08-10",
+		row: Usage{Model: "gemini-2.5-pro", Input: 62082, Output: 15235576,
+			CacheRead: 4468209525, CacheCreate: 135610378},
+		usd: 710.9595531250001,
+		ax:  Axis{Input: 0.0776025, Output: 152.35576, CacheRead: 558.526190625},
+	},
+	{
+		name: "gemini-2.5-pro/small",
+		day:  "2026-08-10",
+		row:  Usage{Model: "gemini-2.5-pro", Input: 1234, Output: 5678, CacheRead: 9876543},
+		usd:  1.292890375,
+		ax:   Axis{Input: 0.0015425, Output: 0.05678, CacheRead: 1.234567875},
+	},
+	{
+		name: "gemini-3.1-pro-preview/small",
+		day:  "2026-08-10",
+		row: Usage{Model: "gemini-3.1-pro-preview", Input: 1234, Output: 5678,
+			CacheRead: 9876543, CacheCreate: 2000000},
+		usd: 2.0459126000000003,
+		ax:  Axis{Input: 0.002468, Output: 0.068136, CacheRead: 1.9753086000000002},
+	},
+	{
+		name: "gpt-5.5/small",
+		day:  "2026-08-10",
+		row: Usage{Model: "gpt-5.5", Input: 1234, Output: 5678,
+			CacheRead: 9876543, CacheCreate: 2000000},
+		usd: 5.1147815,
+		ax:  Axis{Input: 0.00617, Output: 0.17034, CacheRead: 4.9382715},
+	},
+	{
+		// gpt-5.6 계열만 캐시 생성에 과금한다(1.25배) — 계단을 얹어도 그 경로가 그대로여야 한다.
+		name: "gpt-5.6-luna/cacheCreate",
+		day:  "2026-08-10",
+		row: Usage{Model: "gpt-5.6-luna", Input: 1234, Output: 5678,
+			CacheRead: 9876543, CacheCreate: 2000000},
+		usd: 0.7045912599999999,
+		ax: Axis{Input: 0.00024680000000000004, Output: 0.0068135999999999995,
+			CacheRead: 0.19753086, CacheCreate: 0.5},
+	},
+	{
+		// TTL 분해가 들어와도 OpenAI 는 단일 배수라 값이 같아야 한다(공급사 경로가 안 섞였는지).
+		name: "gpt-5.6-luna/ttlSplitIsSameAsTotal",
+		day:  "2026-08-10",
+		row: Usage{Model: "gpt-5.6-luna", Input: 1234, Output: 5678, CacheRead: 9876543,
+			CacheCreate: 2000000, CacheCreate5m: 1500000, CacheCreate1h: 500000},
+		usd: 0.7045912599999999,
+		ax: Axis{Input: 0.00024680000000000004, Output: 0.0068135999999999995,
+			CacheRead: 0.19753086, CacheCreate: 0.5},
+	},
+}
+
 func TestRegression_AnthropicCostIsBitIdentical(t *testing.T) {
 	useConfig(t, `{}`)
 	for _, c := range regressionCases {
@@ -103,6 +168,34 @@ func TestRegression_AnthropicCostIsBitIdentical(t *testing.T) {
 			}
 			if got.ByAxis != c.ax {
 				t.Fatalf("byAxis = %+v, want %+v", got.ByAxis, c.ax)
+			}
+		})
+	}
+}
+
+/*
+ * 계단 모델을 **분리분 없이** 계산하면 계단 개편 전과 비트가 같아야 한다.
+ *
+ * 이것이 무회귀의 핵심 게이트다. 기존 수집기와 이미 저장된 모든 행이 이 경로로 오므로,
+ * 여기가 어긋나면 개편이 과거 데이터의 비용을 통째로 바꾼 것이다.
+ */
+func TestRegression_LongContextModelsUnchangedWithoutSplit(t *testing.T) {
+	useConfig(t, `{}`)
+	for _, c := range longFlatRegressionCases {
+		t.Run(c.name, func(t *testing.T) {
+			got := CostOf(c.row, Pricing(day(c.day)), Mult{})
+			if !got.Priced {
+				t.Fatalf("priced=false — 모델이 표에서 사라졌다")
+			}
+			if got.USD != c.usd {
+				t.Fatalf("usd = %v, want %v (계단 개편 전 값과 비트가 다르다)", got.USD, c.usd)
+			}
+			if got.ByAxis != c.ax {
+				t.Fatalf("byAxis = %+v, want %+v", got.ByAxis, c.ax)
+			}
+			// 분리분이 없으므로 계단은 개입하지 않았다는 사실이 결과에도 남아야 한다.
+			if got.LongPricing != LongPricingNone || got.LongTokens != 0 {
+				t.Fatalf("롱 몫이 없는데 longPricing=%q longTokens=%v", got.LongPricing, got.LongTokens)
 			}
 		})
 	}

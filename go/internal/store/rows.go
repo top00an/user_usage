@@ -23,7 +23,8 @@ import (
  */
 
 const sessionSelectCols = "session_id, machine, username, project, model, platform, input, output, cache_read," +
-	" cache_create, web_search, web_fetch, turns, started_at, ended_at, reported_at"
+	" cache_create, input_long, output_long, cache_read_long," +
+	" web_search, web_fetch, turns, started_at, ended_at, reported_at"
 
 /*
  * sessionWhere 는 usage_sessions 필터를 한곳에서 만든다(SessionRows·PlatformRollup 공용).
@@ -144,12 +145,17 @@ func mapSession(r db.Row) Session {
 		Output:      r.Int("output"),
 		CacheRead:   r.Int("cache_read"),
 		CacheCreate: r.Int("cache_create"),
-		WebSearch:   r.Int("web_search"),
-		WebFetch:    r.Int("web_fetch"),
-		Turns:       r.Int("turns"),
-		StartedAt:   strOrNil(r, "started_at"),
-		EndedAt:     strOrNil(r, "ended_at"),
-		ReportedAt:  strOrNil(r, "reported_at"),
+		// 계단 분리분 — 비용 계산이 이 몫만 상위 단가로 매긴다. 안 올리면 이 화면만 계단을
+		// 안 타고, 그 사실이 어디에도 표시되지 않는다.
+		InputLong:     r.Int("input_long"),
+		OutputLong:    r.Int("output_long"),
+		CacheReadLong: r.Int("cache_read_long"),
+		WebSearch:     r.Int("web_search"),
+		WebFetch:      r.Int("web_fetch"),
+		Turns:         r.Int("turns"),
+		StartedAt:     strOrNil(r, "started_at"),
+		EndedAt:       strOrNil(r, "ended_at"),
+		ReportedAt:    strOrNil(r, "reported_at"),
 	}
 }
 
@@ -200,6 +206,7 @@ func SessionByID(ctx context.Context, sessionID string) (*Session, error) {
 }
 
 const seriesSelectCols = "session_id, hour, model, input, output, cache_read, cache_create," +
+	" input_long, output_long, cache_read_long," +
 	" cc_5m, cc_1h, turns, tool_errors, stop_max_tokens, stop_refusal," +
 	" latency_ms_sum, latency_ms_max, latency_turns, username, machine, project"
 
@@ -215,6 +222,10 @@ func mapBucket(r db.Row) Bucket {
 		// cost 가 기대하는 이름으로 올린다 — TTL 분해가 있으면 그쪽이 정확히 가격을 매긴다.
 		CacheCreate5m: r.Int("cc_5m"),
 		CacheCreate1h: r.Int("cc_1h"),
+		// 계단 분리분 — 시간 뷰의 비용이 이 몫을 상위 단가로 매긴다.
+		InputLong:     r.Int("input_long"),
+		OutputLong:    r.Int("output_long"),
+		CacheReadLong: r.Int("cache_read_long"),
 		Turns:         r.Int("turns"),
 		ToolErrors:    r.Int("tool_errors"),
 		StopMaxTokens: r.Int("stop_max_tokens"),

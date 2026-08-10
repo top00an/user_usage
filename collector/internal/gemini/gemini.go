@@ -234,27 +234,10 @@ func (a *toolArgs) UnmarshalJSON(b []byte) error {
 	a.Command = str("command")
 	a.Name = str("name")
 	a.AgentName = str("agent_name")
-	a.contentLines = lineCount(str("content"))
-	a.oldStringLines = lineCount(str("old_string"))
-	a.newStringLines = lineCount(str("new_string"))
+	a.contentLines = policy.LineCount(str("content"))
+	a.oldStringLines = policy.LineCount(str("old_string"))
+	a.newStringLines = policy.LineCount(str("new_string"))
 	return nil
-}
-
-// lineCount 는 문자열의 줄 수를 센다(빈 문자열은 0).
-//
-// **Claude 파서(internal/transcript.lineCount)와 글자 그대로 같은 식이다:** `Count(s,"\n")+1`.
-// 끝 개행 뒤의 빈 줄도 한 줄로 센다("a\nb\n" → 3).
-//
-// 왜 Codex 쪽(끝 개행을 먼저 떼는 식)이 아니라 Claude 에 맞추나 — Gemini 의 `write_file.content`·
-// `replace.old_string/new_string` 은 Claude 의 `Write.content`·`Edit.old_string/new_string` 과
-// **같은 자리에서 온 같은 모양의 원문 텍스트**다. 같은 입력을 다른 규칙으로 세면 두 플랫폼의
-// 같은 열이 비교 불가능해진다. (Codex 는 unified diff 를 세는 다른 모양이라 규칙이 다른 것
-// 자체는 문제가 아니다.)
-func lineCount(s string) int64 {
-	if s == "" {
-		return 0
-	}
-	return int64(strings.Count(s, "\n") + 1)
 }
 
 type messageRec struct {

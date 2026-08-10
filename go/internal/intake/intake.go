@@ -69,6 +69,23 @@ type Counter struct {
 	Count int64
 }
 
+/*
+ * ── 계단(롱컨텍스트) 분리분 ─────────────────────────────────────────────────
+ *
+ * 일부 모델은 **한 요청의 입력 길이가 임계값을 넘으면** 그 요청의 입력·출력 단가가 함께 오른다
+ * (Google >200K · OpenAI >272K). 서버는 집계된 값만 보므로 그 판정을 할 수 없다 — 요청 원문을
+ * 보는 수집기만 할 수 있고, 그 결과가 아래 세 필드다.
+ *
+ * 값은 **총량 중 롱 구간 요청에서 발생한 몫**이다. 총량 필드(Input·Output·CacheRead)는 의미가
+ * 바뀌지 않는다 — 여전히 전체 합계이고, 표준 구간 몫은 `총량 − Long` 이다.
+ *
+ * **없으면 0 = 전부 표준 구간**(현행 동작). 구버전 수집기가 안 보내는 것이 정상이다.
+ *
+ * 불변식은 `0 <= Long <= 해당 총량` 이고, 위반은 **조용히 접지 않는다** — 접되 접었다는 사실을
+ * LongClamped 로 세어 올린다. 조용히 접으면 수집기의 계산 버그가 서버에서 정상값으로 둔갑해
+ * 아무도 모르는 채로 비용이 틀린다.
+ */
+
 // Bucket 은 시간 × 모델 버킷이다.
 type Bucket struct {
 	Hour  string
@@ -80,6 +97,13 @@ type Bucket struct {
 	CacheCreate int64
 	CC5m        int64
 	CC1h        int64
+
+	// 롱 구간 몫(총량의 부분집합). 상단 주석이 계약의 단일 출처다.
+	InputLong     int64
+	OutputLong    int64
+	CacheReadLong int64
+	// LongClamped 는 이 버킷에서 불변식을 위반해 접은 필드 수다.
+	LongClamped int
 
 	Turns         int64
 	ToolErrors    int64
@@ -117,6 +141,15 @@ type Session struct {
 	WebFetch    int64
 	Turns       int64
 
+	// 롱 구간 몫(총량의 부분집합). Bucket 위의 주석이 계약의 단일 출처다.
+	InputLong     int64
+	OutputLong    int64
+	CacheReadLong int64
+	// LongClamped 는 불변식(0 <= long <= 총량)을 위반해 접은 필드 수다 —
+	// **이 세션 자신과 딸린 버킷 전부를 합친 값**이다. 0 이 아니면 수집기가 잘못 센 것이므로
+	// 호출부(httpapi)가 로그로 남긴다. 저장 대상이 아니라 관측 축이다.
+	LongClamped int
+
 	// NoTsTurns 는 시각이 없어 시계열(series)에 올릴 자리가 없던 턴 수다. **관측 축이다.**
 	//
 	// 왜 필요한가(2026-08-05): series 버킷은 시각 파싱이 성공할 때만 만들어진다. 세션 합계는
@@ -140,6 +173,9 @@ type Session struct {
 // Payload 는 보고 본문 하나에서 살아남은 세션들이다.
 type Payload struct {
 	Sessions []Session
+	// LongClamped 는 이 본문 전체에서 롱 불변식을 위반해 접은 필드 수다(세션 + 버킷).
+	// 0 이 아니면 보내는 쪽 계산이 깨진 것이다 — 호출부가 로그로 올린다.
+	LongClamped int
 }
 
 // Ctx 는 페이로드 수준의 귀속 정보다. 세션이 자기 값을 갖고 있으면 그쪽이 이긴다.
@@ -284,6 +320,14 @@ func NormSession(raw map[string]any, ctx ...Ctx) (Session, bool) {
 		return Session{}, false
 	}
 
+	// 롱 분리분은 **총량을 읽은 뒤** 그 값을 상한으로 받는다. 순서가 계약이다 —
+	// 총량보다 먼저 읽으면 상한을 알 수 없어 검증이 통째로 빠진다.
+	in, out := nat(raw["input"]), nat(raw["output"])
+	cr := nat(raw["cacheRead"])
+	inLong, c1 := longNat(raw["inputLong"], in)
+	outLong, c2 := longNat(raw["outputLong"], out)
+	crLong, c3 := longNat(raw["cacheReadLong"], cr)
+
 	s := Session{
 		SessionID: sessionID,
 		Username:  nilIfEmpty(clip(firstTruthyString(raw["username"], c.Username), 200)),
@@ -294,9 +338,13 @@ func NormSession(raw map[string]any, ctx ...Ctx) (Session, bool) {
 		Model:     nilIfEmpty(clip(jsString(raw["model"]), 120)),
 		// 40자로 자른다 — 식별자 하나이고, 길면 어차피 저장 계층이 other 로 접는다.
 		Platform:      nilIfEmpty(clip(jsString(raw["platform"]), 40)),
-		Input:         nat(raw["input"]),
-		Output:        nat(raw["output"]),
-		CacheRead:     nat(raw["cacheRead"]),
+		Input:         in,
+		Output:        out,
+		CacheRead:     cr,
+		InputLong:     inLong,
+		OutputLong:    outLong,
+		CacheReadLong: crLong,
+		LongClamped:   countTrue(c1, c2, c3),
 		CacheCreate:   nat(raw["cacheCreate"]),
 		WebSearch:     nat(raw["webSearch"]),
 		WebFetch:      nat(raw["webFetch"]),
@@ -315,6 +363,11 @@ func NormSession(raw map[string]any, ctx ...Ctx) (Session, bool) {
 
 	s.Series = normSeries(raw["series"])
 	s.Counters = normCounters(raw["counters"])
+	// 버킷의 위반도 세션 카운트에 합친다 — 로그를 세션 단위로 내므로 여기서 모으지 않으면
+	// 버킷 위반이 어디에도 안 남는다.
+	for _, b := range s.Series {
+		s.LongClamped += b.LongClamped
+	}
 	return s, true
 }
 
@@ -353,11 +406,20 @@ func normSeries(v any) []Bucket {
 		}
 		seen[key] = struct{}{}
 
+		// 세션과 같은 순서 계약 — 총량을 먼저 읽고, 그 값을 롱 몫의 상한으로 준다.
+		bin, bout := nat(b["input"]), nat(b["output"])
+		bcr := nat(b["cacheRead"])
+		binLong, c1 := longNat(b["inputLong"], bin)
+		boutLong, c2 := longNat(b["outputLong"], bout)
+		bcrLong, c3 := longNat(b["cacheReadLong"], bcr)
+
 		out = append(out, Bucket{
 			Hour: hour, Model: model,
-			Input: nat(b["input"]), Output: nat(b["output"]),
-			CacheRead: nat(b["cacheRead"]), CacheCreate: nat(b["cacheCreate"]),
-			CC5m: nat(b["cc5m"]), CC1h: nat(b["cc1h"]),
+			Input: bin, Output: bout,
+			CacheRead: bcr, CacheCreate: nat(b["cacheCreate"]),
+			InputLong: binLong, OutputLong: boutLong, CacheReadLong: bcrLong,
+			LongClamped: countTrue(c1, c2, c3),
+			CC5m:        nat(b["cc5m"]), CC1h: nat(b["cc1h"]),
 			Turns: nat(b["turns"]), ToolErrors: nat(b["toolErrors"]),
 			StopMaxTokens: nat(b["stopMaxTokens"]), StopRefusal: nat(b["stopRefusal"]),
 			LatencyMsSum: nat(b["latencyMsSum"]), LatencyMsMax: nat(b["latencyMsMax"]),
@@ -491,6 +553,7 @@ func NormPayload(raw []byte) (Payload, error) {
 		}
 		if s, ok := NormSession(m, ctx); ok {
 			out.Sessions = append(out.Sessions, s)
+			out.LongClamped += s.LongClamped
 		}
 	}
 	return out, nil
@@ -530,6 +593,53 @@ func nat(v any) int64 {
 		return math.MaxInt64
 	}
 	return int64(f)
+}
+
+/*
+ * longNat 은 계단 분리분 하나를 읽는다. 두 번째 반환값은 **불변식을 위반해 접었는가**다.
+ *
+ * 규칙:
+ *   값 없음·비수치   → (0, false). 위반이 아니다. 구버전 수집기가 안 보내는 것이 정상이고,
+ *                      여기서 위반으로 세면 로그가 정상 트래픽으로 가득 차 신호가 죽는다.
+ *   음수             → (0, true).  롱 몫이 음수인 보고는 계산이 깨진 것이다.
+ *   총량 초과        → (총량, true). 표준 몫이 음수가 되지 않게 접되, 접었다는 사실을 남긴다.
+ *   그 밖            → (내림한 값, false).
+ *
+ * nat 을 재사용하지 않는 이유: nat 은 0 을 "값 없음"과 같이 취급해 음수를 조용히 0 으로 만든다.
+ * 그 조용함이 여기서는 정확히 금지된 동작이다 — 이 축에서는 0 이 정당한 값이고, 음수는 사고다.
+ */
+func longNat(v any, total int64) (int64, bool) {
+	n, ok := jsNumber(v)
+	if !ok || math.IsNaN(n) || math.IsInf(n, 0) {
+		return 0, false
+	}
+	f := math.Floor(n)
+	if f < 0 {
+		return 0, true
+	}
+	if f > float64(total) {
+		return nonNegTotal(total), true
+	}
+	return int64(f), false
+}
+
+// nonNegTotal 은 상한 자신이 음수인 경우를 막는다(총량은 nat 을 지나 오므로 실제로는 0 이상이다).
+func nonNegTotal(total int64) int64 {
+	if total < 0 {
+		return 0
+	}
+	return total
+}
+
+// countTrue 는 위반 플래그를 센다 — "몇 개 필드가 접혔는가"가 로그에 나가는 숫자다.
+func countTrue(flags ...bool) int {
+	n := 0
+	for _, f := range flags {
+		if f {
+			n++
+		}
+	}
+	return n
 }
 
 // jsNumber 는 JS 의 Number() 중 **여기서 의미가 있는 것만** 옮긴다.

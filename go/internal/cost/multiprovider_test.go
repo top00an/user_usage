@@ -23,8 +23,12 @@ type modelSpec struct {
 }
 
 // developers.openai.com/api/docs/pricing · 검증일 2026-08-10
+//
+// long 은 계단 요금(입력 >272K)의 초과 구간 단가다 — 공식 배수는 **입력 2배 · 출력 1.5배**이고,
+// 그 계열은 gpt-5.5 와 gpt-5.6-* 뿐이다. 나머지는 공식 표에 롱 항목이 없어 제로값으로 둔다
+// (이름이 비슷하다고 빌려 오지 않는다 — seed_openai.go 주석).
 var wantOpenAI = map[string]modelSpec{
-	"gpt-5.5":       {in: 5, out: 30, readMult: 0.1},
+	"gpt-5.5":       {in: 5, out: 30, readMult: 0.1, long: Price{10, 45}},
 	"gpt-5.4-mini":  {in: 0.75, out: 4.5, readMult: 0.1},
 	"gpt-5.4":       {in: 2.5, out: 15, readMult: 0.1},
 	"gpt-5.4-nano":  {in: 0.2, out: 1.25, readMult: 0.1},
@@ -36,10 +40,10 @@ var wantOpenAI = map[string]modelSpec{
 	"gpt-5.3-codex": {in: 1.75, out: 14, readMult: 0.1},
 	"gpt-5.5-cyber": {in: 12.5, out: 75, readMult: 0.1},
 
-	// GPT-5.6 계열만 캐시 생성에 과금한다.
-	"gpt-5.6-sol":   {in: 5, out: 30, readMult: 0.1, writeMult: 1.25},
-	"gpt-5.6-terra": {in: 2, out: 12, readMult: 0.1, writeMult: 1.25},
-	"gpt-5.6-luna":  {in: 0.2, out: 1.2, readMult: 0.1, writeMult: 1.25},
+	// GPT-5.6 계열만 캐시 생성에 과금한다. 계단도 이 계열에 있다.
+	"gpt-5.6-sol":   {in: 5, out: 30, readMult: 0.1, writeMult: 1.25, long: Price{10, 45}},
+	"gpt-5.6-terra": {in: 2, out: 12, readMult: 0.1, writeMult: 1.25, long: Price{4, 18}},
+	"gpt-5.6-luna":  {in: 0.2, out: 1.2, readMult: 0.1, writeMult: 1.25, long: Price{0.4, 1.8}},
 
 	// *-pro 는 캐시 할인이 없다(1.0).
 	"gpt-5.5-pro": {in: 30, out: 180, readMult: 1.0},

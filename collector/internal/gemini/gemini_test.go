@@ -511,7 +511,8 @@ func TestInvalidSessionIDFallsBack(t *testing.T) {
 //	write_file → args.content    의 줄 수를 **추가**로만 센다(원본이 인자에 없어 삭제는 알 수 없다)
 //	replace    → args.new_string = 추가, args.old_string = 삭제
 //
-// 줄 세는 식도 Claude 와 글자 그대로 같다 — strings.Count(s,"\n")+1, 빈 문자열은 0.
+// 줄 세는 식은 **세 파서 공용**인 policy.LineCount 하나뿐이다 — 끝 개행을 한 개만 떼고
+// 개행 수 + 1, 빈 문자열은 0. 표의 기대값도 그 규칙을 따른다("a\nb\n" 은 2줄이다).
 //
 // **축 두 개의 의미가 다르다**(gemini.go editUse 주석과 같은 말):
 //
@@ -557,7 +558,10 @@ func TestLOCFixtureTable(t *testing.T) {
 		wantAdd, wantDel, wantAcc, wantRej int64
 	}{
 		{"write_file 3줄(끝 개행 없음)", toolCall("t1", "write_file", "success", writeArgs("a\nb\nc")), 3, 0, 1, 0},
-		{"write_file 끝 개행 포함", toolCall("t1", "write_file", "success", writeArgs("a\nb\n")), 3, 0, 1, 0},
+		// 끝 개행은 줄 구분자일 뿐이라 줄을 만들지 않는다(policy.LineCount). 예전엔 3 을 기대했다.
+		{"write_file 끝 개행 포함", toolCall("t1", "write_file", "success", writeArgs("a\nb\n")), 2, 0, 1, 0},
+		// 반대로 **의도적** 빈 줄(개행 두 개)은 살아 있어야 한다.
+		{"write_file 끝 빈 줄(의도적)", toolCall("t1", "write_file", "success", writeArgs("a\nb\n\n")), 3, 0, 1, 0},
 		{"write_file 1줄", toolCall("t1", "write_file", "success", writeArgs("a")), 1, 0, 1, 0},
 		{"write_file 빈 내용", toolCall("t1", "write_file", "success", writeArgs("")), 0, 0, 1, 0},
 		{"write_file content 누락", toolCall("t1", "write_file", "success", `{"file_path":"/x/a.go"}`), 0, 0, 1, 0},
