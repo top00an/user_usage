@@ -208,7 +208,7 @@ Go 바이너리는 **독립 실행 서비스**입니다. 통합은 HTTP 로 합�
 (인테이크 토큰) 로 올리고, 조회는 `/api/usage/*`(관리·열람 토큰) 로 읽습니다. 수집 클라이언트는
 `collector/`(jsonl → POST) 이며, 실시간 경로로 Claude Code 훅을 병행할 수 있습니다.
 
-> SaaS 로의 멀티테넌트 인제스트(OTLP 호환·훅·온보딩) 설계는
+> SaaS 로의 멀티테넌트 인제스트(퍼스트파티 수집·훅·온보딩) 설계는
 > [`docs/PLAN-saas-ingestion.md`](docs/PLAN-saas-ingestion.md) 를 보십시오.
 
 ---
