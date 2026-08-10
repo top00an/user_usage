@@ -63,6 +63,50 @@ func TestIssueResolveRevoke(t *testing.T) {
 	}
 }
 
+/*
+ * 발급 경로는 **반드시** KeyPrefix 로만 평문을 만든다.
+ *
+ * 왜 이걸 따로 못박는가: 게이트(httpapi/server.go)가 "접두사가 없는 Bearer 는 키가 아니다"로
+ * 판단해 DB 해석을 건너뛴다(무인증 브루트포스가 DB 를 때리지 못하게). 그 최적화는 이 불변식
+ * 하나에 통째로 얹혀 있다 — 접두사 없이 발급되는 경로가 하나라도 생기면 **유효한 키인데 401**
+ * 이 조용히 생기고, 증상은 게이트가 아니라 발급부에서 나온다. 이 테스트가 그 유일한 안전장치다.
+ *
+ * 발급 진입점이 늘어나면 여기에 같이 넣는다.
+ */
+func TestIssuedKeysAlwaysCarryPrefix(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	o, err := CreateOrg(ctx, d, "Acme")
+	if err != nil {
+		t.Fatalf("CreateOrg: %v", err)
+	}
+
+	issuers := map[string]func() (string, error){
+		"IssueKey": func() (string, error) { return IssueKey(ctx, d, o.ID) },
+		"IssueForTenant": func() (string, error) {
+			k, err := IssueForTenant(ctx, "tenant-a", "Tenant A")
+			return k.Plain, err
+		},
+	}
+	// 무작위 재료라 1회 통과가 우연일 수 있다 — 발급 경로마다 여러 번 돌려 못박는다.
+	for name, issue := range issuers {
+		for i := 0; i < 16; i++ {
+			key, err := issue()
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if !strings.HasPrefix(key, KeyPrefix) {
+				t.Fatalf("%s 가 접두사 %q 없이 발급했다: %q — 게이트가 이 키를 401 로 접는다",
+					name, KeyPrefix, key)
+			}
+			// 접두사만 있고 무작위 몸통이 없으면 그것도 결함이다.
+			if len(key) <= len(KeyPrefix) {
+				t.Fatalf("%s 가 접두사뿐인 키를 발급했다: %q", name, key)
+			}
+		}
+	}
+}
+
 // 잘못된 키·빈 키는 err 이 아니라 ok=false.
 func TestResolveRejectsUnknown(t *testing.T) {
 	ctx := context.Background()

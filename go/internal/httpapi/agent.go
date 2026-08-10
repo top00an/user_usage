@@ -106,11 +106,25 @@ func (s *server) serveCollector(w http.ResponseWriter, r *http.Request) {
 			authorized = true
 		}
 	}
-	// org.Resolve 는 전역 핸들로 키를 해석한다(게이트의 인테이크 해석과 같은 함수). err 은 조회
-	// 자체 실패(또는 미초기화)이고, !ok 는 미지·해지 키다 — 둘 다 401 로 접는다(서버 상태를
-	// 무인증 부트스트랩 경로로 흘리지 않는다). err 은 stderr 로만 남긴다.
-	if !authorized {
-		_, _, ok, err := org.Resolve(r.Context(), key)
+	/*
+	 * resolveIngestKey 는 전역 핸들로 키를 해석한다(게이트의 인테이크 해석과 **같은 지점**).
+	 * err 은 조회 자체 실패(또는 미초기화)이고, !ok 는 미지·해지 키다 — 둘 다 401 로 접는다
+	 * (서버 상태를 무인증 부트스트랩 경로로 흘리지 않는다). err 은 stderr 로만 남긴다.
+	 *
+	 * ⚠ 게이트(server.go)와 **같은 접두사 조건**을 건다: org.KeyPrefix 로 시작하지 않는 자격은
+	 *   해석하지 않는다. 여기는 게이트보다 조건이 나쁘다 — **무인증**(게이트 앞) 경로이고 자격을
+	 *   `?key=` 쿼리로도 받아 브루트포스를 스크립팅하기가 더 쉽다. 게이트만 막고 여기를 두면
+	 *   같은 증폭 표면이 반쪽 남는다.
+	 *
+	 *   접두사 판정은 **응답을 가르지 않는다.** 통과 못 하면 authorized 가 false 로 남아 아래
+	 *   같은 401·같은 문구로 접힌다. 메시지가 갈리면 그 차이가 "이 접두사가 맞다"는 신호가 되어,
+	 *   무인증 경로로 서버 상태를 흘리지 않는다는 이 함수의 규율이 깨진다.
+	 *
+	 *   이 조건도 "발급된 모든 키가 KeyPrefix 를 갖는다"는 불변식에 얹혀 있다
+	 *   (org.TestIssuedKeysAlwaysCarryPrefix 가 못박는다).
+	 */
+	if !authorized && hasPrefix(key, org.KeyPrefix) {
+		_, _, ok, err := resolveIngestKey(r.Context(), key)
 		if err != nil {
 			logf("collector 인제스트 키 해석 실패: %v", err)
 		}
