@@ -136,6 +136,14 @@ USAGE_DATA_DIR=./data ./go/usage-server user add \
 `-password` 로 직접 줄 수도 있지만, 그러면 셸 히스토리에 남습니다. 프롬프트를 권합니다.
 역할은 `admin` | `member` 입니다.
 
+**비밀번호는 최소 8자(룬 수)입니다 — API 와 같은 규칙이고, CLI 도 예외가 아닙니다.** 짧으면
+계정이 만들어지지 않고 종료코드가 1 입니다:
+
+```
+$ ./go/usage-server user add -tenant default -username ops-admin -role admin -password a
+user add 실패: store: 비밀번호는 최소 8자여야 합니다
+```
+
 ### 로그인 확인
 
 ```bash
@@ -165,9 +173,14 @@ curl -s -b /tmp/ck.txt http://127.0.0.1:4191/api/auth/me
 
 | 메서드 | 경로 | 결과 |
 |---|---|---|
-| `POST` | `/api/admin/keys` | `{"key":"uu_ing_…","id":…,"createdAt":…}` — **평문은 이 응답에서 1회만** |
-| `GET` | `/api/admin/keys` | 목록(마스크만, 평문 없음) |
+| `POST` | `/api/admin/keys` | `{"key":"uu_ing_…","id":…,"createdAt":…,"username":…}` — **평문은 이 응답에서 1회만** |
+| `GET` | `/api/admin/keys` | **전체** 키 현황(마스크 + 소유자, 평문 없음) |
 | `POST` | `/api/admin/keys/revoke` | `{"id":"…"}` → 204 |
+
+본문에 `{"username":"amy"}` 를 실으면 **그 사람에게 묶인 키**를 대리발급합니다(없는 계정이면
+404). 본문을 비우면 종전과 같은 org 공용 키입니다. 키를 사람에게 묶으면 그 키로 들어온 보고가
+**키 주인으로 귀속**됩니다 — 자세한 것은 [§9](#9-사용자-관리--셀프서비스-인제스트-키) 입니다.
+사용자가 스스로 발급하는 경로도 §9 에 있습니다.
 
 ### 3-2. CLI 에서 (서버 호스트)
 
@@ -192,6 +205,58 @@ USAGE_DATA_DIR=./data ./go/usage-server key revoke --key uu_ing_…
 CLI 는 서버와 **같은 env** 를 봅니다(`USAGE_DB_MODE`·`DATABASE_URL`·`USAGE_DATA_DIR`).
 관리자 토큰 게이트가 없는 이유는 이것이 배포 호스트에서 운영자가 직접 부르는 명령이고,
 **DB 접근 자체가 권한**이기 때문입니다.
+
+#### 키를 사람에게 묶기 (`--user`)
+
+`--user` 를 주면 그 키로 들어온 보고가 **키 주인으로 귀속**됩니다(귀속 우선순위 ① —
+[§9](#9-사용자-관리--셀프서비스-인제스트-키)). 화면·API 의 대리발급(§3-1)과 같은 일을 CLI 에서
+합니다. **`--user` 를 생략하면 종전과 완전히 같은 org 공용 키**이므로, 지금 쓰는 명령·스크립트는
+그대로 둬도 됩니다.
+
+묶을 사람은 **그 org 의 tenant 에 실재하는 계정**이어야 합니다(`org create` 는 org id 를 그대로
+tenant id 로 씁니다 — 위 출력의 `tenant=…`):
+
+```bash
+# 그 org 의 tenant 에 계정을 먼저 만든다 (§2 의 user add 와 같은 명령)
+USAGE_DATA_DIR=./data ./go/usage-server \
+  user add -tenant org_ca02e173c51bf68e -username amy -role member -password '********'
+# → 사용자 생성됨: tenant=org_ca02e173c51bf68e username=amy role=member
+
+# amy 에게 묶인 키 — 평문은 여기서 1회만
+USAGE_DATA_DIR=./data ./go/usage-server key issue --org org_ca02e173c51bf68e --user amy
+# → uu_ing_7a52397dd4c80eb6b36d123856346b2574946161e3769592
+```
+
+**없는 사용자에 묶으려 하면 거부합니다**(exit 1, 키를 만들지 않습니다):
+
+```bash
+USAGE_DATA_DIR=./data ./go/usage-server key issue --org org_ca02e173c51bf68e --user amyy
+# → key issue: 사용자 "amyy" 가 tenant "org_ca02e173c51bf68e" 에 없다 — 오타이거나 계정이 아직 없다.
+#     먼저 계정을 만들고 다시 발급해라:
+#       usage-server user add -tenant org_ca02e173c51bf68e -username amyy -role member
+#     (없는 이름에 묶은 키의 보고는 영영 아무에게도 귀속되지 않는다)
+```
+
+조용히 만들지 않는 이유: 평문 키는 다시 볼 수 없어 **잘못 발급했다는 사실을 알아채는 시점이
+"그 사람 데이터가 화면에 안 보인다"** 뿐입니다. 그때는 이미 오타 이름으로 쌓인 보고가 유령
+사용자로 남고, 되돌리는 길은 해지 후 재발급밖에 없습니다.
+
+실측 — `--user amy` 로 발급한 키로 `user=mallory` 를 주장해 보고했을 때:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer uu_ing_7a52…" -H 'Content-Type: application/json' \
+  -d '{"user":"mallory","machine":"pc-mallory","sessions":[{"id":"sess-bound-01",
+       "model":"claude-sonnet-4","output":1234,"startedAt":"2026-08-11T09:00:00.000Z"}]}' \
+  http://127.0.0.1:4297/api/usage
+# → {"ok":true,"sessions":1,"counters":0,"buckets":0}
+
+curl -s -b /tmp/admin.ck 'http://127.0.0.1:4297/api/usage/sessions?days=365'
+# → {"sessions":[{"sessionId":"sess-bound-01","machine":"pc-mallory","username":"amy",…
+#                                                                   ^^^^^^^^^^^^^^^^^
+```
+
+같은 주장을 **`--user` 없이 발급한 키**로 보내면 종전대로 `username:"mallory"` 입니다
+(하위호환 — 이미 배포된 키의 귀속은 이 변경으로 하나도 바뀌지 않습니다).
 
 ### 3-3. 키 회전
 
@@ -598,3 +663,315 @@ totals   정리 전후 동일 (sessions 3 · input 6050 · output 9060 · cacheR
 
 숫자가 움직이지 않는 작업이라 되돌릴 실익은 사실상 라벨뿐입니다. 그래도 되돌릴 수 없다는
 사실은 먼저 말해 두는 편이 맞습니다.
+
+---
+
+## 9. 사용자 관리 · 셀프서비스 인제스트 키
+
+§2 가 **최초** 관리자를 만드는 방법이라면, 여기는 그 뒤의 일상 운영입니다 — 사람을 더 만들고,
+역할을 바꾸고, 내보내고, 각자가 자기 인제스트 키를 갖게 하는 절차.
+
+아래 명령은 전부 실제로 실행해 출력을 확인한 것입니다(local·sqlite, `USAGE_PORT=4292`).
+`$B` 는 서버 주소이고, 관리자 세션 쿠키를 `/tmp/admin.ck` 에 받아 씁니다.
+
+```bash
+B=http://127.0.0.1:4292
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"ops-admin","password":"…"}' $B/api/auth/login -c /tmp/admin.ck
+# → {"ok":true,"user":{"username":"ops-admin","role":"admin","tenant":"default"}}
+```
+
+### 9-1. 왜 키를 사람에게 묶는가
+
+**지금까지 귀속은 PC 가 주장하는 이름이었습니다.** 수집기는 OS 계정명을 `payload.user` 로,
+호스트명을 `machine` 으로 보냅니다. 인제스트 키는 org 에만 묶여 있었으므로, **키 사본을 가진
+누구나 남의 이름으로 보고할 수 있었습니다.** 한 org 키가 팀원 수만큼 복제되어 각자 디스크에
+놓이므로 누가 실제로 보고했는지 가릴 방법이 없었고, 화면은 그것을 사실로 표시했습니다.
+
+키에 사람을 묶으면 그 구멍이 닫힙니다. 귀속 우선순위는 이렇습니다:
+
+| | 근거 | 언제 |
+|---|---|---|
+| ① | **키에 묶인 username** | 있으면 무조건 이깁니다 — "그 사용자의 키를 실제로 갖고 있음"이 증명된 사실입니다 |
+| ② | `machine → username` 매핑 | 관리자가 손으로 고친 값(§5-3 의 귀속 교정) |
+| ③ | `payload.user` | 클라이언트 주장 — 최후 |
+
+**①이 설 때 ②는 아예 조회되지 않습니다.** 매핑을 조용히 덮어쓰는 것이 아닙니다.
+
+**하위호환:** 지금 배포된 키는 전부 `username` 이 비어 있으므로 종전대로 ②→③ 을 탑니다.
+이 변경으로 기존 배포의 귀속은 **하나도 바뀌지 않습니다.** 사람에게 묶고 싶으면 새 키를
+발급해 배포하면 됩니다(§3-3 의 회전 절차 그대로).
+
+실측 — amy 에게 묶인 키로 `user=mallory`, `machine=pc-mallory` 를 주장해 보고했을 때:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $PLAIN" -H 'Content-Type: application/json' \
+  -d '{"user":"mallory","machine":"pc-mallory","sessions":[{"id":"sess-live-01",
+       "model":"claude-sonnet-4","output":1234,"startedAt":"2026-08-11T09:00:00.000Z"}]}' \
+  $B/api/usage
+# → {"ok":true,"sessions":1,"counters":1,"buckets":1}
+
+curl -s -b /tmp/admin.ck "$B/api/usage/sessions?days=365"
+# → {"sessions":[{"sessionId":"sess-live-01","machine":"pc-mallory","username":"amy",…
+#                                                                  ^^^^^^^^^^^^^^^^^
+```
+
+`machine` 은 보고된 값 그대로 남고 **귀속만** 키 주인으로 갑니다 — 어느 PC 에서 왔는지는
+여전히 보입니다.
+
+### 9-2. 사용자 관리 API (관리자 전용)
+
+| 메서드 | 경로 | 본문 | 결과 |
+|---|---|---|---|
+| `GET` | `/api/admin/users` | — | `{"users":[{username, role, createdAt, team}]}` |
+| `POST` | `/api/admin/users` | `{username, password, role?}` | 생성. `role` 기본은 `member` |
+| `POST` | `/api/admin/users/role` | `{username, role}` | 역할 변경 |
+| `POST` | `/api/admin/users/password` | `{username, password}` | 비밀번호 재설정 |
+| `POST` | `/api/admin/users/team` | `{username, team}` | 팀 배정 |
+| `POST` | `/api/admin/users/delete` | `{username}` | 삭제 |
+
+```bash
+# 생성 — 비밀번호는 최소 8자(룬 수). 평문은 요청 본문에만 존재하고 응답·로그에 남지 않습니다.
+curl -s -X POST -b /tmp/admin.ck -H 'Content-Type: application/json' \
+  -d '{"username":"amy","password":"amy-password-1","role":"member"}' $B/api/admin/users
+# → {"ok":true,"user":{"username":"amy","role":"member","createdAt":"2026-08-11T04:42:00Z","team":null},"sessionsRevoked":false}
+
+# 목록
+curl -s -b /tmp/admin.ck $B/api/admin/users
+# → {"users":[{"username":"amy","role":"member","createdAt":"2026-08-11T04:42:00Z","team":null},
+#             {"username":"ops-admin","role":"admin","createdAt":"2026-08-11T04:41:46Z","team":null}]}
+
+# 팀 배정 (기존 team_members 를 그대로 씁니다 — 팀별 롤업 화면의 근거)
+curl -s -X POST -b /tmp/admin.ck -H 'Content-Type: application/json' \
+  -d '{"username":"amy","team":"플랫폼"}' $B/api/admin/users/team
+# → {"ok":true,"user":{…,"team":"플랫폼"},"sessionsRevoked":false}
+
+# 역할 변경
+curl -s -X POST -b /tmp/admin.ck -H 'Content-Type: application/json' \
+  -d '{"username":"amy","role":"admin"}' $B/api/admin/users/role
+# → {"ok":true,"user":{…,"role":"admin"},"sessionsRevoked":false}
+
+# 비밀번호 재설정 — 그 사용자의 세션이 **전부** 끊깁니다.
+# activeKeys 는 "이 사람에게 아직 살아 있는 인제스트 키가 몇 개인가"입니다(재설정은 키를 거두지
+# 않습니다 — 아래 설명 참조).
+curl -s -X POST -b /tmp/admin.ck -H 'Content-Type: application/json' \
+  -d '{"username":"amy","password":"amy-password-2"}' $B/api/admin/users/password
+# → {"ok":true,"user":{…},"sessionsRevoked":true,"activeKeys":1}
+
+# 삭제 — 세션과 **인제스트 키를 함께** 거둡니다
+curl -s -X POST -b /tmp/admin.ck -H 'Content-Type: application/json' \
+  -d '{"username":"bob"}' $B/api/admin/users/delete
+# → {"ok":true,"username":"bob","sessionsRevoked":true,"keysRevoked":1}
+```
+
+**`sessionsRevoked` 와 `keysRevoked` 를 읽으세요.** "그 변경으로 그 사람의 자격을 실제로 거뒀는가"
+입니다. 안 거뒀다면 강등된 사람이 세션 만료까지 옛 권한을 그대로 들고 있거나, 지워진 사람의
+수집기가 계속 보고하는데, 요청은 200 이고 화면에는 아무 증상이 없습니다 — 이 두 응답 필드가
+그 침묵을 깨는 유일한 신호입니다.
+
+#### 삭제(퇴사 처리)가 실제로 거두는 것
+
+계정 삭제는 **세 가지를 한 번에** 처리합니다. 셋 다 응답에 값으로 나타납니다:
+
+| 거두는 것 | 응답 필드 | 안 거두면 무슨 일이 |
+|---|---|---|
+| 계정 (`auth_users`) | — (`ok:true`) | 로그인이 계속 됩니다 |
+| 세션 (`auth_sessions`) | `sessionsRevoked` | 세션 만료(12h)까지 옛 권한으로 삽니다 |
+| 결속 인제스트 키 | `keysRevoked` | **삭제된 이름으로 사용량이 계속 쌓입니다** |
+
+`keysRevoked` 가 0 이면 "거둘 키가 없었다"는 뜻이지 "안 봤다"가 아닙니다. 실측:
+
+```bash
+# 1) leaver 에게 결속 키를 발급하고, 그 키로 보고가 통하는 것을 먼저 확인합니다
+KEY=$(curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+        -d '{"username":"leaver"}' $B/api/admin/keys | sed 's/.*"key":"\([^"]*\)".*/\1/')
+curl -s -w ' [%{http_code}]\n' -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"user":"leaver","machine":"pc-leaver","sessions":[{"id":"sess-before-off",
+       "model":"claude-sonnet-4","output":10,"startedAt":"2026-08-03T09:00:00.000Z"}]}' $B/api/usage
+# → {"ok":true,"sessions":1,"counters":0,"buckets":0} [200]
+
+# 2) 퇴사 처리
+curl -s -w ' [%{http_code}]\n' -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"username":"leaver"}' $B/api/admin/users/delete
+# → {"ok":true,"username":"leaver","sessionsRevoked":true,"keysRevoked":1} [200]
+
+# 3) ★ 같은 키로 다시 보고 — 이제 거부됩니다
+curl -s -w ' [%{http_code}]\n' -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"user":"leaver","machine":"pc-leaver","sessions":[{"id":"sess-after-off",
+       "model":"claude-sonnet-4","output":10,"startedAt":"2026-08-03T09:00:00.000Z"}]}' $B/api/usage
+# → {"error":"unauthorized"} [401]
+```
+
+거두는 범위는 **그 사람에게 묶인 키만**입니다. org 공용(레거시) 키와 남의 키는 건드리지 않습니다 —
+퇴사자 한 명이 팀 전체의 수집기를 멈추면 안 되기 때문입니다.
+
+#### 비밀번호 재설정은 키를 거두지 않습니다 (의도)
+
+재설정 이유의 절반은 단순 분실입니다. 거기서 키까지 조용히 죽이면 그 사람의 수집기가 **아무 신호
+없이** 멈추고, 아무도 그것이 재설정 때문이라는 것을 모릅니다. 그래서 재설정은 세션만 끊고,
+살아 있는 키 개수를 `activeKeys` 로 알려 줍니다.
+
+**침해가 의심되어 재설정한 것이라면 `activeKeys` 가 0 이 아닐 때 키도 함께 회전하세요** —
+그 키는 비밀번호와 무관하게 계속 보고할 수 있는 쓰기 자격입니다:
+
+```bash
+# 그 사람의 키 목록에서 id 를 찾아 해지합니다(9-4 의 관리자 현황과 같은 표)
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" $B/api/admin/keys
+curl -s -w ' [%{http_code}]\n' -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"id":"<key id>"}' $B/api/admin/keys/revoke
+# → [204]
+```
+
+### 9-3. 서버가 거부하는 것 (실측)
+
+화면에서 버튼을 숨기는 것은 방어가 아닙니다. 아래는 **서버가** 내는 응답입니다:
+
+| 시도 | 응답 |
+|---|---|
+| 마지막 관리자 강등·삭제 | **409** `마지막 관리자는 강등·삭제할 수 없습니다 — 먼저 다른 관리자를 만드세요` |
+| 자기 자신 강등·삭제 | **409** `자기 자신은 강등할 수 없습니다 — 다른 관리자에게 요청하세요` |
+| member 가 `/api/admin/users` | **403** `개인 열람 토큰은 자기 데이터만 볼 수 있습니다 — …` |
+| 레거시 `usage_tok` 쿠키로 상태변경 | **403** `쿠키 인증으로는 상태변경을 할 수 없습니다 — Authorization: Bearer 를 사용하세요` |
+| 없는 사용자 대상 | **404** `사용자를 찾을 수 없습니다` |
+| 중복 사용자 생성 | **409** `이미 있는 사용자입니다` |
+| 8자 미만 비밀번호 | **400** `store: 비밀번호는 최소 8자여야 합니다` |
+
+```bash
+# 마지막 관리자 강등 시도
+curl -s -w ' [%{http_code}]\n' -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"ops-admin","role":"member"}' $B/api/admin/users/role
+# → {"error":"마지막 관리자는 강등·삭제할 수 없습니다 — 먼저 다른 관리자를 만드세요"} [409]
+
+# 강등된 사용자의 세션은 즉시 죽습니다
+curl -s -w ' [%{http_code}]\n' -b /tmp/amy.ck $B/api/auth/me
+# → {"error":"unauthorized"} [401]
+
+# 레거시 쿠키로 사용자 생성
+curl -s -w ' [%{http_code}]\n' -X POST -H "Cookie: usage_tok=$ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"mallory","password":"mallory-password-1","role":"admin"}' $B/api/admin/users
+# → {"error":"쿠키 인증으로는 상태변경을 할 수 없습니다 — …"} [403]
+```
+
+**마지막 관리자 보호는 동시 요청에서도 섭니다.** 판정("지금 관리자가 몇 명인가")과 변경(강등·삭제)이
+**한 트랜잭션**에서 일어납니다. 두 관리자를 동시에 강등·삭제하려 해도 하나만 통과하고 나머지는
+409 입니다 — 예전에는 둘 다 세고 둘 다 바꿔 **관리자 0명**이 될 수 있었고, 그때 두 응답 모두 200
+이라 화면·감사 로그 어디에도 사고로 보이지 않았습니다.
+
+```bash
+# 관리자 2명(a1·a2)일 때 두 요청을 동시에 보냅니다
+curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"username":"a1"}' $B/api/admin/users/delete &
+curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"username":"a2"}' $B/api/admin/users/delete &
+wait
+# → {"ok":true,"username":"a1","sessionsRevoked":true,"keysRevoked":0}
+# → {"error":"마지막 관리자는 강등·삭제할 수 없습니다 — 먼저 다른 관리자를 만드세요"}
+#   남은 관리자 수: 1   (어느 쪽이 통과할지는 경쟁이지만, 남는 수는 항상 1 입니다)
+```
+
+> **잠겼다면.** 마지막 관리자 보호를 API 로 우회할 방법은 없습니다(그것이 목적입니다) — 순차든
+> 동시든 마지막 한 명은 남습니다. 그래도 잠겼다면(예: DB 를 직접 손댔거나 마이그레이션 사고)
+> 서버 호스트에서 §2 방법 B(`user add`)로 관리자를 하나 더 만드세요 — DB 접근 자체가 권한입니다.
+> 그 명령도 비밀번호 최소 8자를 강제합니다(복구 자리에 약한 관리자 비밀번호가 들어가면 안 됩니다):
+>
+> ```
+> $ usage-server user add -tenant default -username okcli -role admin -password a
+> user add 실패: store: 비밀번호는 최소 8자여야 합니다        # rc=1
+> $ usage-server user add -tenant default -username okcli -role admin -password eight888
+> 사용자 생성됨: tenant=default username=okcli role=admin      # rc=0
+> ```
+
+### 9-4. 셀프서비스 인제스트 키 (`member` 포함)
+
+로그인한 사람은 누구나 **자기** 키를 발급·조회·해지할 수 있습니다. 남의 키는 보이지도, 해지되지도
+않습니다.
+
+| 메서드 | 경로 | 결과 |
+|---|---|---|
+| `POST` | `/api/me/keys` | 자기 이름에 묶인 키 발급 — **평문은 이 응답에서 1회만** |
+| `GET` | `/api/me/keys` | 자기 키 목록(마스크만) |
+| `POST` | `/api/me/keys/revoke` | `{"id":"…"}` → 204 |
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"amy","password":"amy-password-2"}' $B/api/auth/login -c /tmp/amy.ck
+
+curl -s -X POST -b /tmp/amy.ck $B/api/me/keys
+# → {"key":"uu_ing_176c7b32…","id":"195cbbae4c41…","createdAt":"2026-08-11T04:42:11Z","username":"amy"}
+
+curl -s -b /tmp/amy.ck $B/api/me/keys
+# → {"keys":[{"id":"195cbbae4c41…","masked":"uu_ing_…e358","createdAt":"…","revokedAt":null,"username":"amy"}]}
+
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -b /tmp/amy.ck \
+  -H 'Content-Type: application/json' -d '{"id":"195cbbae4c41…"}' $B/api/me/keys/revoke
+# → 204
+```
+
+경계도 실측했습니다:
+
+```bash
+# 남의 키 해지 시도와 없는 키는 **같은 404·같은 문구**입니다 —
+# 갈라 주면 그 차이가 곧 "그 키는 존재한다"는 신호가 됩니다.
+curl -s -w ' [%{http_code}]\n' -X POST -b /tmp/bob.ck \
+  -H 'Content-Type: application/json' -d '{"id":"<amy 의 키 id>"}' $B/api/me/keys/revoke
+# → {"error":"키를 찾을 수 없습니다"} [404]
+curl -s -w ' [%{http_code}]\n' -X POST -b /tmp/bob.ck \
+  -H 'Content-Type: application/json' -d '{"id":"nosuchkey"}' $B/api/me/keys/revoke
+# → {"error":"키를 찾을 수 없습니다"} [404]
+
+# 남의 목록에는 아예 안 나옵니다
+curl -s -b /tmp/bob.ck $B/api/me/keys
+# → {"keys":[]}
+```
+
+두 가지 자격 규칙이 더 있습니다:
+
+- **개인 열람 토큰(`Bearer uu_mem_…`)으로는 발급·해지가 안 됩니다(403).** 이름 그대로 조회
+  자격이고, 거기에 키 발급 권한을 얹으면 나눠 준 조회 토큰이 보고 자격을 찍어 냅니다. 조회
+  (`GET /api/me/keys`)는 됩니다.
+- **`USAGE_ADMIN_TOKEN` 으로도 안 됩니다(403).** 그 토큰에는 사람 신원이 없어 "누구의 키"인지
+  정할 수 없습니다. 관리자가 대신 발급하려면 §3-1 의 `{"username":"…"}` 대리발급을 쓰세요.
+
+### 9-5. 스키마 (`ingest_keys.username`)
+
+| 방언 | 소유자 |
+|---|---|
+| PostgreSQL | [`migrations/pg/0038_ingest_key_user.sql`](../migrations/pg/0038_ingest_key_user.sql) |
+| sqlite | `go/internal/org/org.go` 의 `Init`(멱등 DDL + 컬럼 보강) |
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/pg/0038_ingest_key_user.sql
+# → BEGIN / ALTER TABLE / CREATE INDEX / COMMENT / COMMIT
+# 두 번째 실행은 NOTICE("already exists, skipping") 뒤 같은 결과 — 멱등입니다.
+```
+
+`nullable` 이 하위호환의 전부입니다. **기존 행을 한 줄도 건드리지 않습니다** — `NOT NULL` 이나
+`DEFAULT` 를 걸면 이미 배포된 모든 키의 귀속이 그날로 바뀝니다.
+
+되돌리기:
+
+```sql
+ALTER TABLE ingest_keys DROP COLUMN IF EXISTS username;
+-- 결속이 사라지고 귀속은 ②→③ 으로 돌아갑니다(잃는 것은 결속 정보뿐입니다).
+```
+
+> sqlite 는 `CREATE TABLE IF NOT EXISTS` 가 **기존 표에 컬럼을 넣지 않습니다.** 그래서
+> `org.Init` 이 `PRAGMA table_info` 로 확인하고 `ALTER TABLE ADD COLUMN` 을 겁니다 —
+> 이 보강이 없으면 옛 DB 로 뜬 서버에서 키 해석 질의가 통째로 실패하고, 증상은
+> **전 팀원의 보고가 401** 입니다. 원인이 인증처럼 보이는 자리라 특히 조심할 곳입니다.
+
+### 9-6. 감사 로그
+
+사용자 생성·역할 변경·비밀번호 재설정·팀 배정·삭제와 키 발급·해지는 전부 `usage_audit` 에
+남습니다(`identity.AuditLog`). `actor` 는 로그인 사용자명이고, 관리자 토큰처럼 사람 신원이 없는
+자격이면 `usage-admin` 입니다.
+
+| action | target |
+|---|---|
+| `admin.user.create` · `admin.user.role` · `admin.user.password` · `admin.user.team` · `admin.user.delete` | username |
+| `admin.key.issue` · `admin.key.revoke` | key id(=key_hash) |
+| `me.key.issue` · `me.key.revoke` | key id |
+
+**비밀번호는 어디에도 남지 않습니다** — `detail` 에는 `role`·`team`·`sessionsRevoked` 만 들어갑니다.
