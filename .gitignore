@@ -17,11 +17,19 @@
 /web/out/
 /web/next-env.d.ts
 
+# Next 가 스스로 만드는 에이전트 안내 파일(node_modules/next/.../generate-agent-files.js 가
+# `next dev`·build 마다 재생성한다). 우리 소스가 아니라 툴 산출물이라 제외한다 — 커밋하면
+# next 버전이 올라갈 때마다 내용이 바뀌어 무관한 diff 가 PR 에 섞인다.
+/web/AGENTS.md
+/web/CLAUDE.md
+
 # 로컬 데이터 — sqlite 파일과 WAL/SHM 동반 파일.
 # 이 안에 팀원별 사용량과 프롬프트 토큰이 들어간다. 절대 커밋하지 않는다.
 /data/
 # 개발용 시드 DB(contract/fixtures.mjs 를 넣어 화면을 붙여 보는 자리). 위와 같은 이유로 제외한다.
 /data-dev/
+# 스키마가 바뀔 때 옆으로 치워 둔 옛 시드 DB. 이름에 날짜가 붙어 /data-dev/ 규칙에 안 걸린다.
+/data-dev.bak-*/
 
 # 로컬 설정 — 단가 오버라이드 등. 예시는 config.example.json 이 담당한다.
 /config.json
