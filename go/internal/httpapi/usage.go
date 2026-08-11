@@ -70,26 +70,42 @@ func (s *server) routeIntake(w http.ResponseWriter, r *http.Request, c *rctx) (b
 			payload.LongClamped, len(payload.Sessions))
 	}
 
-	resp := s.storeSessions(r.Context(), payload.Sessions)
+	resp := s.storeSessions(r.Context(), payload.Sessions, c.keyUser)
 	writeJSON(w, http.StatusOK, resp, nil)
 	return true, nil
 }
 
-// storeSessions 는 정규화된 세션들을 store 에 쓴다(서버 권위 귀속·멱등 포함). 퍼스트파티
-// 인테이크(`POST /api/usage`)가 유일한 호출부다 — 수집 경로가 하나라 저장 규율도 한 벌이다.
-func (s *server) storeSessions(ctx context.Context, sessions []intake.Session) intakeResponse {
+/*
+ * storeSessions 는 정규화된 세션들을 store 에 쓴다(서버 권위 귀속·멱등 포함). 퍼스트파티
+ * 인테이크(`POST /api/usage`)가 유일한 호출부다 — 수집 경로가 하나라 저장 규율도 한 벌이다.
+ *
+ * keyUser 는 **이 요청을 인증한 인제스트 키에 묶인 사용자**다(게이트가 정한다). 비어 있지
+ * 않으면 귀속에서 무조건 이긴다 — 아래 주석 참조.
+ */
+func (s *server) storeSessions(ctx context.Context, sessions []intake.Session, keyUser string) intakeResponse {
 	stored, counters, buckets := 0, 0, 0
 	for _, sess := range sessions {
 		/*
-		 * 서버 권위 귀속 — 머신 매핑이 걸려 있으면 클라이언트가 보낸 사용자명을 **덮어쓴다.**
+		 * 서버 권위 귀속 — 우선순위가 계약이다(동결 ①):
 		 *
+		 *   ① 키에 묶인 username   ← 있으면 무조건 이긴다
+		 *   ② machine_identity 매핑 ← 관리자가 손으로 고친 값
+		 *   ③ payload.user          ← 클라이언트 주장(최후)
+		 *
+		 * ①이 ②를 이기는 근거: ①은 "그 사용자에게 발급된 키를 실제로 갖고 있음"이 증명된
+		 * 사실이고, ②는 사용자에 묶이지 않은 키(레거시·org 공용)를 관리자가 뒤늦게 교정하는
+		 * 수단이다. 증명된 사실이 교정보다 약할 이유가 없다. **①이 설 때 ②는 아예 타지 않는다** —
+		 * 매핑을 조용히 덮어쓰는 것이 아니라 애초에 조회하지 않는다.
+		 *
+		 * 하위호환: username 이 없는 기존 키는 keyUser 가 빈 문자열이라 종전대로 ②→③ 을 탄다.
 		 * 클라이언트가 보고하는 이름은 기본이 OS 계정명이라 팀 계정명과 어긋날 수 있고, 그것을
-		 * 수집기 재배포로 고치는 방식은 반복 비용이 크다. 인테이크가 유일한 진입점이라 여기서
-		 * 덮으면 클라이언트 경로가 몇 개든 결과가 하나로 모인다.
+		 * 수집기 재배포로 고치는 방식은 반복 비용이 크다 — ②가 그 자리다.
 		 */
 		username := deref(sess.Username)
 		machine := deref(sess.Machine)
-		if mapped, err := identity.Resolve(ctx, machine, username); err == nil {
+		if keyUser != "" {
+			username = keyUser
+		} else if mapped, err := identity.Resolve(ctx, machine, username); err == nil {
 			username = mapped
 		}
 
