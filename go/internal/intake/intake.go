@@ -62,6 +62,50 @@ var (
 	hourRe      = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}$`)
 )
 
+/*
+ * ── 모델 이름 자리의 자리표시자 ───────────────────────────────────────────────
+ *
+ * Claude Code 는 중단·오류처럼 **모델이 관여하지 않은 턴**의 model 자리에 `<synthetic>` 을
+ * 직접 쓴다(그 턴의 usage 는 전부 0):
+ *
+ *	{"type":"assistant","model":"<synthetic>","usage":{...전부 0}}
+ *
+ * 이건 모델 이름이 아니라 "이름이 없다"는 표시다. 그런데 걸러내는 자리가 없어서 그대로
+ * 저장됐고, 대시보드 "모델별 토큰 분포"에 **모델 행으로 떴다.** 숫자는 0 이라 총합은 멀쩡한데
+ * 화면에 정체불명 행이 하나 생긴다 — 이 도구는 "이 숫자를 믿어도 되나"에 답하는 화면이라,
+ * 그 행 하나가 답을 흐린다. (실측 2026-08-11: 이 머신 트랜스크립트 1,304개 중 56개에 존재,
+ * 그중 22개는 그 세션의 **유일한** 모델이었다.)
+ *
+ * 판정을 `<synthetic>` 한 값이 아니라 **꺾쇠로 감싼 값 전체**로 두는 이유: 실제 과금 ID 에는
+ * `<`·`>` 가 없다(어느 공급사도 쓰지 않는다). 그래서 이 모양은 전부 자리표시자이고, 도구가
+ * 다음에 `<none>`·`<unknown>` 을 쓰기 시작해도 같이 잡힌다. 값을 하나씩 쫓아다니면 그때마다
+ * 다시 샌다. 꺾쇠가 **일부만** 있는 값(`a<b>c`)은 접지 않는다 — 그건 자리표시자 모양이 아니다.
+ *
+ * 여기가 맞는 자리인 이유: 수집기가 먼저 거른다는 전제이지만 신뢰하지 않는다(패키지 주석).
+ * 수집기는 팀원 PC 에서 도는 별도 프로세스라 서버보다 낡을 수 있고, 한 번 저장되면 지우는
+ * 비용이 훨씬 크다. 인테이크가 유일한 진입점이라 여기서 접으면 빠뜨릴 자리가 없다.
+ *
+ * cost.NormalizeModel 은 이 일을 하는 자리가 **아니다.** 그쪽은 단가표 조회 직전의 변환이라
+ * 저장되는 값을 바꾸지 못하고(DB 에는 여전히 `<synthetic>` 이 남는다), 모델 축은 단가표를
+ * 지나지 않는 경로로도 화면에 간다.
+ */
+var placeholderModelRe = regexp.MustCompile(`^<[^<>]*>$`)
+
+// normModel 은 모델 이름 자리를 정규화한다. 자리표시자는 **빈 값**으로 접는다 —
+// 버리는 것이 아니라 "모른다"로 되돌리는 것이다. 빈 값의 표시 규칙(세션은 NULL, 버킷은
+// '(미상)')은 이미 이 레포에 한 벌씩만 있고, 그 자리로 합류시킨다.
+//
+// 세션·버킷 자체는 **버리지 않는다.** 그 턴의 토큰이 0 이라도 세션은 실재하는 사용이고,
+// 버킷은 그 시각의 턴 수·도구 오류를 들고 있다. 모델 축에서 빼는 것과 데이터를 버리는 것은
+// 다른 일이다.
+func normModel(v any) string {
+	m := clip(v, 120)
+	if placeholderModelRe.MatchString(m) {
+		return ""
+	}
+	return m
+}
+
 // Counter 는 한 축의 키 하나와 그 횟수다.
 type Counter struct {
 	Kind  string
@@ -335,7 +379,7 @@ func NormSession(raw map[string]any, ctx ...Ctx) (Session, bool) {
 		StartedAt: nilIfEmpty(clip(jsString(raw["startedAt"]), 40)),
 		EndedAt:   nilIfEmpty(clip(jsString(raw["endedAt"]), 40)),
 		Project:   nilIfEmpty(clip(jsString(raw["project"]), 200)),
-		Model:     nilIfEmpty(clip(jsString(raw["model"]), 120)),
+		Model:     nilIfEmpty(normModel(raw["model"])),
 		// 40자로 자른다 — 식별자 하나이고, 길면 어차피 저장 계층이 other 로 접는다.
 		Platform:      nilIfEmpty(clip(jsString(raw["platform"]), 40)),
 		Input:         in,
@@ -395,7 +439,10 @@ func normSeries(v any) []Bucket {
 		if !hourRe.MatchString(hour) {
 			continue
 		}
-		model := clip(jsString(b["model"]), 120)
+		// 자리표시자는 빈 값으로 접힌 뒤 '(미상)' 으로 합류한다 — 버킷 자체는 남는다.
+		// 정규화를 **중복 키 계산 전에** 한다: 라벨이 바뀐 뒤의 값으로 묶어야 같은 시각의
+		// 같은 모델이 두 행으로 갈라지지 않는다.
+		model := normModel(b["model"])
 		if model == "" {
 			model = "(미상)"
 		}

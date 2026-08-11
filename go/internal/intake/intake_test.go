@@ -578,3 +578,94 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+/*
+ * ── 모델 이름 자리의 자리표시자 ───────────────────────────────────────────────
+ *
+ * Claude Code 는 중단·오류처럼 **모델이 관여하지 않은 턴**의 model 자리에 `<synthetic>` 을
+ * 직접 쓴다(usage 는 전부 0). 이름이 아니라 "이름이 없다"는 표시인데, 걸러내는 코드가 없어서
+ * 그대로 저장되고 대시보드 "모델별 토큰 분포"에 **모델 행으로 떴다**(실측 2026-08-11).
+ *
+ * 이 테스트가 못 박는 것은 둘이고, 둘을 갈라 두는 것이 요점이다:
+ *   ① 모델 축에서는 사라진다 — 이름이 아니므로.
+ *   ② 세션·턴·카운터는 살아 있다 — 그 사용은 실재하므로.
+ * 하나로 뭉뚱그려 "세션을 버린다"로 고치면 ②를 잃는다.
+ */
+
+func TestNormSession_SyntheticIsNotAModelName(t *testing.T) {
+	s, ok := NormSession(map[string]any{
+		"id":     sid,
+		"model":  "<synthetic>",
+		"turns":  3,
+		"output": 0,
+		"series": []any{
+			map[string]any{
+				"hour": "2026-08-03T09", "model": "<synthetic>",
+				"turns": 3, "toolErrors": 1,
+			},
+		},
+		"counters": map[string]any{"tool": map[string]any{"Bash": 2}},
+	})
+	if !ok {
+		t.Fatal("세션이 통째로 거절됐다 — 모델 축에서 빼는 것과 세션을 버리는 것은 다른 일이다")
+	}
+
+	// ① 모델 축에서 사라진다. 세션 모델은 NULL(=nil), 버킷은 이 레포의 단일 표기 '(미상)'.
+	if s.Model != nil {
+		t.Fatalf("세션 모델 = %q — 자리표시자가 모델 이름으로 남았다", deref(s.Model))
+	}
+	if len(s.Series) != 1 {
+		t.Fatalf("series = %+v, want 1행 (버킷을 버리면 그 시각의 턴·도구오류가 사라진다)", s.Series)
+	}
+	if s.Series[0].Model != "(미상)" {
+		t.Fatalf("버킷 모델 = %q, want %q", s.Series[0].Model, "(미상)")
+	}
+
+	// ② 실재하는 사용은 그대로 살아 있다.
+	if s.Turns != 3 {
+		t.Fatalf("세션 turns = %d, want 3", s.Turns)
+	}
+	if s.Series[0].Turns != 3 || s.Series[0].ToolErrors != 1 {
+		t.Fatalf("버킷 turns/toolErrors = %d/%d, want 3/1", s.Series[0].Turns, s.Series[0].ToolErrors)
+	}
+	if len(s.Counters) != 1 || s.Counters[0].Key != "Bash" || s.Counters[0].Count != 2 {
+		t.Fatalf("counters = %+v — 도구 카운터가 함께 버려졌다", s.Counters)
+	}
+}
+
+// 판정을 `<synthetic>` 한 값이 아니라 **꺾쇠로 감싼 값 전체**로 두는 계약.
+// 실제 과금 ID 에는 `<`·`>` 가 없으므로 이 모양은 전부 자리표시자다 — 값을 하나씩
+// 쫓아다니면 도구가 `<none>` 을 쓰기 시작하는 날 같은 결함이 다시 샌다.
+func TestNormSession_ModelPlaceholderShape(t *testing.T) {
+	fold := []string{"<synthetic>", "<SYNTHETIC>", "<none>", "<unknown>", " <synthetic> ", "<>"}
+	for _, m := range fold {
+		s, ok := NormSession(map[string]any{"id": sid, "model": m})
+		if !ok || s.Model != nil {
+			t.Fatalf("model=%q 가 접히지 않았다: ok=%v model=%q", m, ok, deref(s.Model))
+		}
+		b, _ := NormSession(map[string]any{"id": sid,
+			"series": []any{map[string]any{"hour": "2026-08-03T09", "model": m}}})
+		if len(b.Series) != 1 || b.Series[0].Model != "(미상)" {
+			t.Fatalf("버킷 model=%q → %+v", m, b.Series)
+		}
+	}
+
+	// 음성 대조 — 실재하는 모델 ID 와 꺾쇠가 **일부만** 있는 값은 건드리지 않는다.
+	// (실측 히스토그램에 나온 이름들 + 부분 꺾쇠.)
+	keep := []string{
+		"claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-haiku-4-5-20251001",
+		"nvidia/nemotron-3-ultra-550b-a55b", "gpt-5.5-2026-04-23", "claude-opus-5[1m]",
+		"a<b>c", "<partial", "partial>", "<a><b>",
+	}
+	for _, m := range keep {
+		s, ok := NormSession(map[string]any{"id": sid, "model": m})
+		if !ok || deref(s.Model) != m {
+			t.Fatalf("정상 모델 %q 가 접혔다: ok=%v model=%q", m, ok, deref(s.Model))
+		}
+		b, _ := NormSession(map[string]any{"id": sid,
+			"series": []any{map[string]any{"hour": "2026-08-03T09", "model": m}}})
+		if len(b.Series) != 1 || b.Series[0].Model != m {
+			t.Fatalf("정상 버킷 모델 %q → %+v", m, b.Series)
+		}
+	}
+}
