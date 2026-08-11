@@ -37,7 +37,7 @@ func main() {
 	// 프로비저닝 서브커맨드(멀티테넌트 운영 CLI). 없으면 서버를 띄운다.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "org", "key", "team", "member", "user":
+		case "org", "key", "team", "member", "user", "cleanup":
 			os.Exit(provision(os.Args[1:]))
 		}
 	}
@@ -74,6 +74,29 @@ func bootstrapAdmin(ctx context.Context, cfg config.Config) error {
 	// 비밀번호는 절대 찍지 않는다.
 	fmt.Printf("  · 최초 관리자 생성: tenant=%s username=%s role=admin\n", cfg.BootstrapTenant, cfg.BootstrapAdminUser)
 	return nil
+}
+
+/*
+ * 화면 진입 안내 한 줄. 인증 방식(ID/PW)과 **로그인할 계정이 있는지**만 말한다.
+ *
+ * 계정 유무를 여기서 묻는 이유: 계정이 없으면 화면이 뜨는데 로그인이 안 되고(401), 그때
+ * 운영자에게 보이는 것은 "비밀번호가 틀렸나"뿐이다. 서버는 답을 알고 있으므로 말해 준다.
+ *
+ * 조회 실패로 기동을 흔들지 않는다 — 이건 안내문이고, DB 가 이상하면 그 사실은 다른 경로가
+ * 이미 드러낸다. 여기서는 단정만 피한다.
+ */
+func printLoginHint(ctx context.Context, cfg config.Config) {
+	has, err := store.HasAnyUser(tenant.With(ctx, cfg.Tenant))
+	switch {
+	case err != nil:
+		fmt.Println("  · 브라우저에서 열고 ID/PW 로 로그인한다(계정 유무는 확인하지 못했다).")
+	case has:
+		fmt.Println("  · 브라우저에서 열고 ID/PW 로 로그인한다.")
+	default:
+		fmt.Printf("  ⚠ tenant=%s 에 사용자가 없다 — 화면은 뜨지만 로그인이 되지 않는다(401).\n", cfg.Tenant)
+		fmt.Println("    USAGE_BOOTSTRAP_ADMIN_USER·USAGE_BOOTSTRAP_ADMIN_PASSWORD 로 재기동하거나, " +
+			"`usage-server user add -tenant <t> -username <u> -role admin` 으로 만들라.")
+	}
 }
 
 func run() int {
@@ -214,7 +237,15 @@ func run() int {
 	 * **토큰은 절대 찍지 않는다.**
 	 */
 	fmt.Printf("usage-dashboard: http://%s  (mode=%s, tenant=%s)\n", addr, cfg.Mode, cfg.Tenant)
-	fmt.Println("  · 브라우저에서 열고 토큰을 입력하면 두 탭(사용 추적·사용 관측)이 뜬다.")
+	/*
+	 * 화면 진입 안내. **탭 이름을 열거하지 않는다.**
+	 *
+	 * 이 줄의 앞 판본은 "토큰을 입력하면 두 탭이 뜬다" 였고, 로그인이 ID/PW 로 바뀌고 탭이
+	 * 다섯이 된 뒤에도 그대로 남아 **운영자가 처음 보는 안내문이 틀린 방식을 지시**했다.
+	 * 낡은 이유는 문구를 안 고쳐서가 아니라, 서버가 소유하지 않은 UI 사실(탭 구성)을 찍었기
+	 * 때문이다. 그러니 서버가 아는 것만 찍는다 — 인증 방식과 **로그인할 계정이 있는지**.
+	 */
+	printLoginHint(ctx, cfg)
 	// ⚠ cwd 가 레포 루트가 아니면 단가가 조용히 시드로 떨어진다. 어느 파일을 봤는지 남긴다.
 	fmt.Printf("  · 단가표: %s (없으면 시드 단가표를 쓴다)\n", cfg.ConfigPath)
 	if !cfg.ReadOnly {

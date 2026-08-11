@@ -32,7 +32,8 @@ const provisionUsage = `usage-server 프로비저닝:
   member issue --user <u>        개인 열람 토큰 발급(자기 데이터만·평문 1회 출력)
   member list                    개인 토큰 목록
   member revoke --token <t>      개인 토큰 해지
-  user add -tenant <t> -username <u> -role <admin|member> [-password <p>]  사람 계정(ID/PW 로그인) 생성`
+  user add -tenant <t> -username <u> -role <admin|member> [-password <p>]  사람 계정(ID/PW 로그인) 생성
+  cleanup placeholder-models [--apply]  저장된 자리표시자 모델 라벨(<synthetic> 등) 정리(기본 dry-run)`
 
 func provision(args []string) int {
 	if len(args) == 0 {
@@ -64,6 +65,10 @@ func provision(args []string) int {
 	case "user":
 		// 사람 계정(ID/PW). -tenant 플래그로 테넌트를 직접 정하므로 provision 의 기본 ctx 를 쓰지 않는다.
 		return userCmd(d, os.Stdout, args[1:])
+	case "cleanup":
+		// 저장된 데이터 정리. **자동 실행 경로가 아니다** — 사람이 명시적으로 부르는 자리이고,
+		// 기본값은 dry-run 이다(maintenance.go).
+		return cleanupCmd(ctx, d, os.Stdout, args[1:])
 	default:
 		fmt.Fprintln(os.Stderr, provisionUsage)
 		return 2

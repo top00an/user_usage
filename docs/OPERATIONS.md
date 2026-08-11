@@ -33,14 +33,28 @@ USAGE_PORT=4191 \
 ```
   · 키워드 보존 정리: 90일
 usage-dashboard: http://127.0.0.1:4191  (mode=local, tenant=default)
-  · 브라우저에서 열고 토큰을 입력하면 두 탭(사용 추적·사용 관측)이 뜬다.
+  · 브라우저에서 열고 ID/PW 로 로그인한다.
   · 단가표: config.json (없으면 시드 단가표를 쓴다)
   · 인테이크 자격: USAGE_INTAKE_TOKEN(보고 전용 — 조회 불가)
 ```
 
-> 위 블록은 서버가 실제로 찍는 문구 그대로입니다. `두 탭(사용 추적·사용 관측)` 은 **기동
-> 메시지가 낡은 것**이고, 실제 화면 탭은 다섯입니다 — 대시보드 · 사용 추적 · 사용 관측 ·
-> 연동 · 아키텍처.
+> 위 블록은 서버가 실제로 찍는 문구 그대로입니다(실측 2026-08-11).
+
+**로그인할 계정이 없으면 그 줄이 경고로 바뀝니다.** 서버가 부팅에서 직접 확인합니다:
+
+```
+  ⚠ tenant=default 에 사용자가 없다 — 화면은 뜨지만 로그인이 되지 않는다(401).
+    USAGE_BOOTSTRAP_ADMIN_USER·USAGE_BOOTSTRAP_ADMIN_PASSWORD 로 재기동하거나,
+    `usage-server user add -tenant <t> -username <u> -role admin` 으로 만들라.
+```
+
+계정이 없으면 화면은 정상으로 뜨는데 로그인만 401 이고, 그때 운영자에게 보이는 단서는
+"비밀번호가 틀렸나"뿐입니다. 서버는 답을 알고 있으므로 기동에서 말해 줍니다(§2 로 이어집니다).
+
+> ⚠ **이 줄은 탭 이름을 열거하지 않습니다.** 앞 판본이 `두 탭(사용 추적·사용 관측)` 이었고,
+> 로그인이 ID/PW 로 바뀌고 탭이 다섯이 된 뒤에도 그대로 남아 **운영자가 처음 보는 안내문이
+> 틀린 방식을 지시**했습니다. 낡은 원인은 문구를 안 고쳐서가 아니라 서버가 소유하지 않은
+> 사실(UI 탭 구성)을 찍었기 때문입니다 — 화면 구성은 [`../README.md`](../README.md) 가 소유합니다.
 
 **마지막 줄을 반드시 읽으십시오.** `USAGE_INTAKE_TOKEN` 을 안 걸면 대신 이렇게 나옵니다:
 
@@ -420,3 +434,167 @@ cd go        && go test ./... && go vet ./...
 cd collector && go test ./... && go vet ./...
 cd web       && npm test
 ```
+
+---
+
+## 8. 저장된 자리표시자 모델 라벨 정리 (`<synthetic>`)
+
+### 8-1. 언제 필요한가
+
+모델 축(비용·모델별 화면)에 **`<synthetic>` 같은 행이 보일 때**입니다. Claude Code 는 중단·오류
+메시지 같은 턴에 모델 이름 대신 그 자리표시자를 쓰고, 그것이 그대로 저장돼 있던 것입니다.
+
+인테이크는 **이제 그 값을 접습니다**(`go/internal/intake/intake.go` 의 `normModel`). 그래서
+**앞으로 들어오는 보고에는 생기지 않습니다.** 그러나 그 수정 이전에 저장된 행은 그대로 남으므로,
+이미 쌓인 데이터를 되돌리려면 아래를 한 번 돌리십시오.
+
+> **숫자는 움직이지 않습니다.** 자리표시자 턴의 토큰은 전부 0 입니다. 세션·버킷·턴·품질 카운터를
+> 하나도 버리지 않고 **모델 라벨만** 바꿉니다. 아래 8-4 가 그 실측입니다.
+
+**한 번만 돌리면 됩니다.** 정기 점검(§7)에 넣을 일이 아니고, 자동 실행 경로에도 올라가 있지
+않습니다 — 되돌리기 어려운 작업은 사람이 명시적으로 돌립니다.
+
+### 8-2. local (sqlite) — CLI
+
+CLI 는 서버와 **같은 env** 를 봅니다(`USAGE_DB_MODE`·`DATABASE_URL`·`USAGE_DATA_DIR`).
+**기본값은 dry-run** 이라 그냥 부르면 아무것도 바꾸지 않고 몇 행이 바뀔지만 보여 줍니다.
+
+```bash
+# ① 먼저 무엇이 바뀌는지 본다 (아무것도 바꾸지 않는다)
+USAGE_DB_MODE=local USAGE_DATA_DIR=./data ./go/usage-server cleanup placeholder-models
+```
+
+```
+cleanup placeholder-models (dry-run · 아무것도 바꾸지 않았다)
+  · usage_sessions : 2행 → model=NULL
+  · usage_series   : 3행 → model=(미상) (개명 1 · 기존 버킷과 합산 병합 2)
+  · 자리표시자 값  : <none>(2) <synthetic>(3)
+  · 토큰 합계는 움직이지 않는다 — 자리표시자 턴의 토큰은 0 이고, 라벨만 바꾼다.
+  · 실제로 바꾸려면 --apply 를 붙여라.
+```
+
+```bash
+# ② 그 계획이 맞으면 실제로 바꾼다
+USAGE_DB_MODE=local USAGE_DATA_DIR=./data ./go/usage-server cleanup placeholder-models --apply
+```
+
+```
+cleanup placeholder-models (--apply · 실제로 바꿨다)
+  · usage_sessions : 2행 → model=NULL
+  · usage_series   : 3행 → model=(미상) (개명 1 · 기존 버킷과 합산 병합 2)
+  · 자리표시자 값  : <none>(2) <synthetic>(3)
+  · 토큰 합계는 움직이지 않는다 — 자리표시자 턴의 토큰은 0 이고, 라벨만 바꾼다.
+```
+
+```bash
+# ③ 멱등 확인 — 두 번째는 0행이다
+USAGE_DB_MODE=local USAGE_DATA_DIR=./data ./go/usage-server cleanup placeholder-models
+```
+
+```
+cleanup placeholder-models (dry-run · 아무것도 바꾸지 않았다)
+  · 정리할 행이 없다.
+```
+
+> 서버를 멈추지 않아도 됩니다(같은 sqlite 파일을 열 뿐입니다). 다만 화면은 캐시 없이 매번
+> 질의하므로, 새로고침하면 곧 반영됩니다.
+
+### 8-3. remote (PostgreSQL) — 마이그레이션
+
+`migrations/pg/0037_placeholder_model_cleanup.sql` 을 §2-4 ②와 **같은 절차·같은 자격**으로
+번호 순서대로 적용하십시오(마스터 롤 = 표 소유자).
+
+```bash
+PGPASSWORD='<master-password>' psql \
+  "host=$RDS_HOST port=5432 dbname=usage user=usage_admin sslmode=require" \
+  -v ON_ERROR_STOP=1 -f migrations/pg/0037_placeholder_model_cleanup.sql
+```
+
+```
+BEGIN
+ALTER TABLE
+ALTER TABLE
+UPDATE 3
+INSERT 0 3
+ALTER TABLE
+ALTER TABLE
+COMMIT
+```
+
+두 번째 실행은 `UPDATE 0` / `INSERT 0 0` 입니다(멱등).
+
+⚠ **주의 두 가지.**
+
+- **테이블 잠금이 걸립니다.** 이 파일은 `usage_sessions`·`usage_series` 의 `FORCE ROW LEVEL
+  SECURITY` 를 트랜잭션 안에서만 잠시 풀고(끝에서 되돌립니다) 그 사이 ACCESS EXCLUSIVE 락을
+  잡습니다 — 그동안 인테이크가 대기합니다. **트래픽이 낮을 때 돌리십시오.**
+  FORCE 를 푸는 이유: 마이그레이션은 `app.tenant_id` GUC 없이 돌기 때문에, 풀지 않으면 소유자
+  에게도 한 행이 보이지 않아 **오류 없이 0행을 고치고 끝납니다**(조용한 미적용).
+  앱 롤 `usage_app` 의 테넌트 격리는 내내 그대로입니다(`ENABLE` 은 건드리지 않습니다).
+- **`ALTER TABLE` 이 실패하면** 그 롤이 표 소유자가 아닙니다. 앱 롤(`usage_app`)로 돌리지
+  마십시오 — §2-4 ①의 마스터 자격으로 돌려야 합니다.
+
+적용 후 확인(마스터 자격):
+
+```sql
+SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
+ WHERE relname IN ('usage_sessions','usage_series');   -- 둘 다 t | t 여야 합니다
+```
+
+**psql 을 쓸 수 없다면 CLI 도 됩니다** — 8-2 와 같은 명령이 `USAGE_DB_MODE=remote` 에서도
+그대로 듣습니다. 이쪽은 앱 롤(`usage_app`)로 붙어도 되고 테이블 잠금도 걸지 않습니다. 대신
+RLS 가 한 번에 한 테넌트만 보여 주므로 **테넌트마다 한 번씩** 돌려야 합니다:
+
+```bash
+USAGE_DB_MODE=remote DATABASE_URL='postgres://usage_app:<PW>@host:5432/usage?sslmode=require' \
+  ./go/usage-server cleanup placeholder-models --tenant <tenant-id> --apply
+```
+
+단일테넌트 배포라면 `--tenant` 를 생략하십시오(기본 테넌트 `default`).
+
+### 8-4. 무엇이 보존되는지 (실측)
+
+`usage_series` 는 `model` 이 PK 의 일부라, 라벨만 바꾸면 같은 시각의 기존 버킷과 충돌합니다.
+그래서 **합산 병합**합니다 — 컬럼마다 결합 방식이 다릅니다.
+
+| 컬럼 | 결합 |
+|---|---|
+| `input`·`output`·`cache_read`·`cache_create`·`cc_5m`·`cc_1h`·`*_long` | 합 |
+| `turns`·`tool_errors`·`stop_max_tokens`·`stop_refusal`·`latency_ms_sum`·`latency_turns` | 합 |
+| `latency_ms_max` | **`MAX`**(합이 아닙니다) |
+| `username`·`machine`·`project` | 기존 값 유지(비었을 때만 채웁니다) |
+
+sqlite 실측 — 정리 전후 `/api/usage/quality` 응답이 **바이트 동일**했습니다:
+
+```
+정리 전: {"turns":49,"toolErrors":7,"stopMaxTokens":3,"stopRefusal":4,"latencyMaxMs":4321,"latencyTurns":9,…}
+정리 후: {"turns":49,"toolErrors":7,"stopMaxTokens":3,"stopRefusal":4,"latencyMaxMs":4321,"latencyTurns":9,…}
+```
+
+`/api/usage/summary` 의 `①+②+③ == Totals` 불변식도 정리 전후 모두 성립했고, 모델 축에서만
+자리표시자가 사라졌습니다:
+
+```
+정리 전  byModel: claude-opus-4-8 · a<b>c · (미상) · <none> · <synthetic>
+정리 후  byModel: claude-opus-4-8 · a<b>c · (미상)          ← 두 자리표시자가 (미상)으로 합류
+totals   정리 전후 동일 (sessions 3 · input 6050 · output 9060 · cacheRead 300 · cacheCreate 400)
+```
+
+> `a<b>c` 는 **건드리지 않습니다.** 자리표시자는 꺾쇠로 감싼 값 **전체**(`<…>`)만이고, 꺾쇠가
+> 일부만 있는 값은 실제 모델명일 수 있습니다. 판정 규칙의 단일 출처는
+> `go/internal/intake/intake.go` 의 `placeholderModelRe` 입니다.
+
+### 8-5. 되돌리기
+
+**전용 되돌리기 명령은 없습니다** — §6-2 와 같습니다. 이 작업은 자리표시자 라벨을 "모른다"로
+접는 것이고, 어느 행이 원래 `<synthetic>` 이었는지는 남지 않습니다(그 값을 남기는 것이 이
+작업의 목적에 반합니다). 되돌려야 한다면 **스냅샷/PITR 복구가 유일한 수단**입니다.
+
+그래서 순서가 이렇습니다:
+
+1. `--apply` 없이 먼저 돌려 계획을 확인한다(8-2 ①).
+2. pg 는 **적용 전에 백업/스냅샷을 확인한다**(§6-2 와 같은 규율).
+3. 그다음 `--apply` / `psql -f` 를 돌린다.
+
+숫자가 움직이지 않는 작업이라 되돌릴 실익은 사실상 라벨뿐입니다. 그래도 되돌릴 수 없다는
+사실은 먼저 말해 두는 편이 맞습니다.
