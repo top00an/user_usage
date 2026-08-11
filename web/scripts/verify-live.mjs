@@ -28,6 +28,8 @@
  * 환경:
  *   VERIFY_LIBS   크로미움 공유 라이브러리 디렉터리(기본 /tmp/pwlibs/root/usr/lib/x86_64-linux-gnu).
  *                 sudo 없이 푼 libnspr4·libnss3·libasound2 가 있으면 LD_LIBRARY_PATH 에 얹는다.
+ *   VERIFY_BIN    검증할 서버 바이너리(기본 go/usage-server). webroot/ 를 건드리지 않고 자기
+ *                 사본으로 빌드한 바이너리를 재고 싶을 때 쓴다 — 아래 BIN 주석 참고.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -47,12 +49,32 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.resolve(HERE, '..');
 const REPO = path.resolve(WEB, '..');
 const SHOTS = path.join(WEB, '.verify');
-const BIN = path.join(REPO, 'go', 'usage-server');
+/*
+ * 검증할 서버 바이너리. 기본은 `scripts/build.sh` 산출물이다.
+ *
+ * `VERIFY_BIN` 은 **다른 곳에서 만든 바이너리**를 재게 한다. 이 레포는 정적 산출물을 go:embed
+ * 하므로 화면을 고친 사람은 webroot/ 를 다시 채워야 실물을 볼 수 있는데, 그 트리는 팀 작업에서
+ * 여러 오너가 동시에 덮어쓰면 서로를 지운다(그래서 build.sh 는 한 번만, 한 사람이 돌린다).
+ * 그동안 화면 오너가 **자기 사본으로 빌드해 실물을 확인**할 길이 있어야 한다 — 없으면 실물
+ * 검증은 빌드 담당자를 기다리는 동안 아무것도 재지 못한다.
+ */
+const BIN = process.env.VERIFY_BIN || path.join(REPO, 'go', 'usage-server');
 
-/* 로그인 전에는 못 여는 탭이 있다. 이 집합이 화면과 어긋나면(빠지든 늘어나든) 빨간불이다. */
-const ADMIN_TABS = ['overview', 'usage', 'usageobs', 'onboarding', 'architecture'];
-const ADMIN_ONLY_TABS = ['onboarding', 'architecture'];
+/*
+ * 로그인 전에는 못 여는 탭이 있다. 이 집합이 화면과 어긋나면(빠지든 늘어나든) 빨간불이다.
+ *
+ * ⚠ **탭이 바뀌면 이 파일도 같이 고쳐야 한다.** 여기 상수를 두는 이유는 이 스크립트가
+ *   `web/components/**` 를 읽지 않기로 했기 때문이다(화면과 검증이 같은 값을 공유하면 화면이
+ *   틀렸을 때 검증도 같이 틀린다). 대가로 이 상수는 손으로 맞춰야 하고, 안 맞추면 즉시 빨간불이다.
+ *
+ * 2026-08-11: 탭이 5개 → 6개가 되고(관리) `onboarding` 이 셀프서비스로 열렸다(동결 ②) —
+ * 연동 탭은 이제 member 의 것이고, 관리자 전용은 아키텍처·관리 둘이다.
+ */
+const ADMIN_TABS = ['overview', 'usage', 'usageobs', 'onboarding', 'architecture', 'admin'];
+const ADMIN_ONLY_TABS = ['architecture', 'admin'];
 const MEMBER_TABS = ADMIN_TABS.filter((t) => !ADMIN_ONLY_TABS.includes(t));
+/** 관리 탭은 사이드바 **맨 뒤**다 — 되돌릴 수 없는 버튼이 있는 화면은 오조작 거리를 벌린다. */
+const LAST_TAB = 'admin';
 
 /*
  * 빈 껍데기 판별 기준. 실측(시드 8세션)에서 가장 얇은 탭이 요소 48개 · 글자 530자 · 높이 462px
@@ -127,7 +149,7 @@ function reDate(reports) {
   }));
 }
 
-async function seedServer(base, { intake, admin }) {
+async function seedServer(base, { intake, admin, member }) {
   const post = async (payload) => {
     const r = await fetch(`${base}/api/usage`, {
       // 보고는 인테이크 토큰으로 넣는다 — 수집기가 실제로 쓰는 자격이다.
@@ -148,6 +170,20 @@ async function seedServer(base, { intake, admin }) {
     body: JSON.stringify(IDENTITY),
   });
   if (!r.ok) throw new Error(`귀속 교정 실패 ${r.status}: ${(await r.text()).slice(0, 200)}`);
+
+  /*
+   * 인제스트 키 두 개를 **실제 API 로** 만든다. 하나는 사람에게 묶고 하나는 묶지 않는다 —
+   * 관리 탭의 "⚠ 미결속 키" 표기를 재려면 결속 없는 키가 실제로 있어야 한다. 픽스처로 만들면
+   * 화면과 다른 세상을 재게 되므로 서버에 넣는다(빈 본문 = 종전과 같은 org 공용 키).
+   */
+  for (const body of [{ username: member }, {}]) {
+    const k = await fetch(`${base}/api/admin/keys`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${admin}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!k.ok) throw new Error(`키 발급 실패 ${k.status}: ${(await k.text()).slice(0, 200)}`);
+  }
 }
 
 async function startOwnServer() {
@@ -192,7 +228,7 @@ async function startOwnServer() {
   };
   try {
     await waitFor(`${base}/healthz`);
-    await seedServer(base, { intake, admin: token });
+    await seedServer(base, { intake, admin: token, member: member.user });
   } catch (e) {
     // 여기서 접지 않으면 서버 프로세스와 임시 DB 가 남는다.
     await stop();
@@ -246,9 +282,13 @@ function instrument(page, base, sink) {
 function captureApi(page, store) {
   page.on('response', async (r) => {
     const u = r.url();
-    if (!u.includes('/api/usage/')) return;
     if (r.status() !== 200) return;
-    const key = u.includes('/api/usage/summary') ? 'summary' : u.includes('/api/usage/sessions?') ? 'sessions' : null;
+    const key = u.includes('/api/usage/summary') ? 'summary'
+      : u.includes('/api/usage/sessions?') ? 'sessions'
+      /* 관리 탭도 같은 규율로 잰다: 시드 이름을 박지 않고 화면이 방금 받은 응답과 대조한다. */
+      : u.includes('/api/admin/users') ? 'adminUsers'
+      : u.includes('/api/admin/keys') ? 'adminKeys'
+      : null;
     if (!key) return;
     try { store[key] = await r.json(); } catch { /* 본문이 아니면 무시 */ }
   });
@@ -351,10 +391,18 @@ try {
   check('http 로컬에서는 Secure 가 붙지 않는다(기동이 성립해야 한다)', sess?.secure === false,
     BASE.startsWith('https') ? 'https 대상이면 이 항목은 반대여야 한다' : '');
   const adminTabs = await tabIds(page);
-  check('관리자에게 탭 5개가 전부 보인다', JSON.stringify(adminTabs) === JSON.stringify([...ADMIN_TABS].sort()),
+  check(`관리자에게 탭 ${ADMIN_TABS.length}개가 전부 보인다`, JSON.stringify(adminTabs) === JSON.stringify([...ADMIN_TABS].sort()),
     `[${adminTabs.join(' ')}]`);
+  /*
+   * 순서까지 잰다. tabIds() 는 정렬해 돌려주므로 집합만으로는 "관리가 맨 뒤"를 못 본다 —
+   * 파괴적 화면이 자주 쓰는 탭 사이로 올라오면 오조작 거리가 0 이 되고, 그건 조용한 회귀다.
+   */
+  const tabOrder = await page.evaluate(() =>
+    [...document.querySelectorAll('[role=tab]')].map((b) => b.id.replace(/^shelltab-/, '')));
+  check(`관리 탭이 사이드바 맨 뒤다(#${LAST_TAB})`, tabOrder[tabOrder.length - 1] === LAST_TAB,
+    `순서=[${tabOrder.join(' ')}]`);
 
-  head('④ 탭 5개 — 딥링크로 열고 각각 실제로 그려지는지');
+  head(`④ 탭 ${ADMIN_TABS.length}개 — 딥링크로 열고 각각 실제로 그려지는지`);
   for (const id of ADMIN_TABS) {
     await page.goto(`${BASE}/#/${id}`, { waitUntil: 'networkidle' });
     await page.waitForTimeout(2000);
@@ -408,7 +456,148 @@ try {
       hidden.length ? `화면에 없는 모델: ${hidden.join(', ')}` : `${unpriced.length}개 대조: ${unpriced.join(', ')}`);
   }
 
-  head('⑥ 관리자 전용 탭이 member 에게 닫히는가');
+  /*
+   * ── ⑥ 관리 탭 ────────────────────────────────────────────────────────
+   *
+   * 이 탭에만 되돌릴 수 없는 버튼이 있다. 그래서 여기서 재는 것은 "그려졌는가"가 아니라
+   * **사람이 잘못 누르는 것을 무엇이 막는가**다. 단정은 여전히 구조와 API 응답에 건다 —
+   * 이름을 박지 않고 화면이 방금 받은 응답과 대조한다(실데이터 서버에서도 성립).
+   *
+   * ⚠ 파괴 버튼을 **실제로 누르지 않는다.** 외부 서버(VERIFY_BASE)에 붙었을 때 사람의 계정이
+   *   사라진다. 여기서는 "게이트가 닫혀 있는가"까지만 잰다.
+   */
+  head('⑥ 관리 탭 — 표가 API 와 일치하는가 · 위험 동작의 게이트');
+  await page.goto(`${BASE}/#/admin`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(2000);
+  const adm = await panelStats(page);
+  check('#/admin 이 빈 껍데기가 아니다', substantive(adm),
+    adm.missing ? '#tabpanel 자체가 없다' : `요소 ${adm.els} · ${adm.textLen}자 · ${adm.height}px`);
+  await page.screenshot({ path: path.join(SHOTS, '05-admin.png'), fullPage: true });
+
+  const admUsers = api.adminUsers?.users ?? [];
+  if (!api.adminUsers) {
+    check('화면이 사용자 목록 API 를 부른다', false, '/api/admin/users 응답을 한 번도 받지 못했다');
+  } else if (!admUsers.length) {
+    // 로그인해 있는 본인이 최소 한 명이다 — 비었다면 응답이나 화면이 잘못됐다.
+    check('사용자 목록에 최소 본인이 있다', false, 'users 가 빈 배열이다');
+  } else {
+    const missing = admUsers.map((u) => u.username).filter((name) => !adm.text.includes(name));
+    check('사용자 표의 이름이 API 응답과 일치한다', missing.length === 0,
+      missing.length ? `화면에 없는 이름: ${missing.join(', ')}` : `${admUsers.length}명 대조: ${admUsers.map((u) => u.username).join(', ')}`);
+    const admins = admUsers.filter((u) => u.role === 'admin').length;
+    const tally = `전체 ${admUsers.length}명 · 관리자 ${admins}명`;
+    check('카드가 전체 수와 관리자 수를 밝힌다', adm.text.includes(tally), tally);
+
+    const rows = page.locator('#tabpanel tr[role=button]');
+    const nested = await page.locator('#tabpanel tr[role=button] button').count();
+    check('행이 곧 버튼이고 그 안에 버튼을 중첩하지 않는다',
+      await rows.count() === admUsers.length && nested === 0,
+      `행 ${await rows.count()}개 · 중첩된 버튼 ${nested}개`);
+
+    /* 키보드 왕복 — Tab 으로 닿고, Enter 로 열고, Esc 로 닫고, 포커스가 그 행으로 돌아온다. */
+    const first = rows.first();
+    const firstLabel = await first.getAttribute('aria-label');
+    await first.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(500);
+    check('행을 Enter 로 누르면 사용자 시트가 열린다', await page.locator('[role=dialog]').count() === 1);
+    check('시트가 열리면 첫 포커스가 시트 안이다',
+      await page.evaluate(() => !!(document.activeElement && document.activeElement.closest('[role=dialog]'))));
+    await page.screenshot({ path: path.join(SHOTS, '06-admin-sheet.png'), fullPage: true });
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(500);
+    check('Esc 로 시트가 닫힌다', await page.locator('[role=dialog]').count() === 0);
+    const restored = await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? null);
+    check('닫으면 포커스가 원래 행으로 복원된다', restored === firstLabel, `복원된 포커스=${restored}`);
+
+    /*
+     * 사전 거부 — 마지막 관리자·본인 계정. **숨기지 않고 비활성 + 보이는 이유**다.
+     * 이유가 `title` 툴팁이면 키보드·터치·스크린리더에 닿지 않으므로, 시트의 innerText 에
+     * 실제로 있는지를 본다.
+     */
+    const lockedName = admins === 1
+      ? admUsers.find((u) => u.role === 'admin')?.username
+      : server.admin.user; // 관리자가 여럿이면 '본인 계정' 규칙으로 잰다
+    if (!lockedName || !admUsers.some((u) => u.username === lockedName)) {
+      skip('강등·삭제가 막힌 대상에 이유가 보이는 글자로 붙는다', '그 대상을 목록에서 찾지 못했다');
+    } else {
+      await page.locator(`#tabpanel tr[aria-label="${lockedName} 관리"]`).click();
+      await page.waitForTimeout(500);
+      const dlg = page.locator('[role=dialog]');
+      const roleBtn = dlg.getByRole('button', { name: '역할 변경', exact: true });
+      const delBtn = dlg.getByRole('button', { name: '사용자 삭제', exact: true });
+      check(`${lockedName} 은 역할 변경이 비활성이다`, await roleBtn.isDisabled());
+      check(`${lockedName} 은 삭제가 비활성이다`, await delBtn.isDisabled());
+      const dlgText = (await dlg.innerText()).replace(/\s+/g, ' ');
+      check('왜 막혔는지가 보이는 글자로 있다(툴팁이 아니다)',
+        /(마지막 관리자입니다|본인 계정입니다)/.test(dlgText),
+        dlgText.match(/[^.]*(마지막 관리자입니다|본인 계정입니다)[^.]*/)?.[0]?.trim().slice(0, 70));
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+    }
+
+    /* 재입력 게이트 — 이름이 정확히 일치할 때까지 삭제 버튼이 눌리지 않는다. 누르지는 않는다. */
+    const victim = admUsers.find((u) => u.username !== server.admin.user && u.role !== 'admin');
+    if (!victim) {
+      skip('삭제는 이름 재입력 없이는 눌리지 않는다', '지울 수 있는 대상(본인·관리자 아닌 사용자)이 없다');
+    } else {
+      await page.locator(`#tabpanel tr[aria-label="${victim.username} 관리"]`).click();
+      await page.waitForTimeout(500);
+      const dlg = page.locator('[role=dialog]');
+      await dlg.getByRole('button', { name: '사용자 삭제', exact: true }).click();
+      await page.waitForTimeout(300);
+      const echo = dlg.getByLabel('확인하려면 사용자 이름을 그대로 입력하세요');
+      const confirm = dlg.getByRole('button', { name: `${victim.username} 삭제`, exact: true });
+      check('확인 블록이 열리면 입력칸으로 포커스가 간다',
+        await page.evaluate(() => document.activeElement?.id ?? '') === await echo.getAttribute('id'));
+      check('이름을 입력하기 전에는 삭제가 눌리지 않는다', await confirm.isDisabled());
+      await echo.fill(`${victim.username}x`);
+      check('이름이 다르면 여전히 눌리지 않는다', await confirm.isDisabled());
+      await echo.fill(victim.username);
+      check('정확히 일치할 때 비로소 눌린다', await confirm.isEnabled());
+      // 여기서 멈춘다 — 실제로 지우면 이 뒤의 항목이 다른 세상을 재게 된다.
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+    }
+  }
+
+  /*
+   * 결속 없는 키 — 이 레포의 규율("근사를 정확값으로 위장하지 않는다")이 걸리는 자리다.
+   * ⚠ 가 사라지면 그 키의 사용량이 사람 이름으로 잡히는 것처럼 보인다.
+   */
+  const admKeys = api.adminKeys?.keys ?? [];
+  if (!api.adminKeys) {
+    check('화면이 전체 키 API 를 부른다', false, '/api/admin/keys 응답을 한 번도 받지 못했다');
+  } else {
+    const active = admKeys.filter((k) => k.revokedAt === null);
+    const unbound = active.filter((k) => !k.username);
+    const num = (x) => Number(x).toLocaleString('ko-KR');
+    const line = unbound.length
+      ? `활성 ${num(active.length)} · 해지 ${num(admKeys.length - active.length)} · ⚠ 미결속 ${num(unbound.length)}`
+      : `활성 ${num(active.length)} · 해지 ${num(admKeys.length - active.length)}`;
+    check('키 현황 집계가 API 응답과 일치한다', admKeys.length === 0 || adm.text.includes(line), line);
+    if (!unbound.length) {
+      skip('결속 없는 키가 ⚠ 로 드러난다', '이 서버에 결속 없는 활성 키가 없다(API 가 전부 username 을 준다)');
+    } else {
+      check('결속 없는 키가 ⚠ 로 드러난다 — 그 사용량은 PC 이름으로 잡힌다',
+        adm.text.includes('⚠ PC 이름'), `미결속 활성 키 ${unbound.length}개`);
+    }
+    const owners = [...new Set(active.map((k) => k.username).filter(Boolean))];
+    if (!owners.length) skip('결속된 키의 주인이 표에 드러난다', '이 서버에 사람에게 묶인 활성 키가 없다');
+    else {
+      const hidden = owners.filter((o) => !adm.text.includes(o));
+      check('결속된 키의 주인이 표에 드러난다', hidden.length === 0,
+        hidden.length ? `화면에 없는 주인: ${hidden.join(', ')}` : `${owners.length}명 대조: ${owners.join(', ')}`);
+    }
+    /*
+     * 평문 키는 발급 응답 1회뿐이다 — 목록 화면에 평문이 있으면 그것만으로 사고다.
+     * 마스크는 `uu_ing_…` + 4자라 접두사 뒤에 hex 가 길게 이어지는 것은 평문뿐이다.
+     */
+    check('키 표에 평문이 없다 — 마스킹된 값뿐이다', !/uu_ing_[0-9a-f]{8,}/.test(adm.text),
+      adm.text.match(/uu_ing_[0-9a-f]{8,}/)?.[0]?.slice(0, 14));
+  }
+
+  head('⑦ 권한 경계 — member 에게 무엇이 닫히고 무엇이 열리는가');
   if (!server.member) {
     skip('member 에게 관리자 전용 탭이 보이지 않는다', 'VERIFY_MEMBER_USER·VERIFY_MEMBER_PASS 가 없다');
   } else {
@@ -420,6 +609,12 @@ try {
     const mTabs = await tabIds(mpage);
     check('member 에게는 관리자 전용 탭이 보이지 않는다',
       JSON.stringify(mTabs) === JSON.stringify([...MEMBER_TABS].sort()), `[${mTabs.join(' ')}]`);
+    /*
+     * 동결 ②로 연동 탭이 member 의 것이 됐다. 집합 대조가 이미 그것을 재지만, 이 항목은
+     * **의도**를 이름으로 남긴다 — 다음 사람이 그 탭을 다시 관리자 전용으로 되돌리면 여기가
+     * "member 는 자기 머신을 연동할 수 없다"고 말해 준다.
+     */
+    check('member 에게 연동 탭이 열려 있다(셀프서비스)', mTabs.includes('onboarding'));
     for (const id of ADMIN_ONLY_TABS) {
       // 버튼만 감추고 딥링크로는 열리면 가린 것이지 닫은 것이 아니다.
       await mpage.goto(`${BASE}/#/${id}`, { waitUntil: 'networkidle' });
@@ -427,11 +622,40 @@ try {
       const s = await panelStats(mpage);
       check(`member 가 #/${id} 로 직접 들어가도 그 탭이 열리지 않는다`, s.selected !== id, `선택된 탭=${s.selected}`);
     }
+    /* member 의 연동 탭은 **빈 껍데기가 아니어야** 한다 — 열어 줬는데 아무것도 없으면 못 연 것과 같다. */
+    await mpage.goto(`${BASE}/#/onboarding`, { waitUntil: 'networkidle' });
+    await mpage.waitForTimeout(2000);
+    const mOn = await panelStats(mpage);
+    check('member 의 연동 탭이 실제로 그려진다(자기 키 화면)',
+      mOn.selected === 'onboarding' && substantive(mOn),
+      mOn.missing ? '#tabpanel 자체가 없다' : `선택된 탭=${mOn.selected} · 요소 ${mOn.els} · ${mOn.textLen}자`);
+
+    /*
+     * ★ **UI 숨김은 방어가 아니다**(동결 ③-1). 탭을 감춘 것과 서버가 막는 것은 다른 사건이므로,
+     *   member 의 브라우저에서 관리 API 를 직접 불러 상태코드로 단정한다. 화면 문구에 의존하지
+     *   않는 단정이라 문구가 바뀌어도 이 항목은 계속 유효하다.
+     */
+    const codes = await mpage.evaluate(async () => {
+      const status = async (p) => {
+        try { return (await fetch(p, { credentials: 'include' })).status; } catch { return 0; }
+      };
+      return {
+        adminUsers: await status('/api/admin/users'),
+        adminKeys: await status('/api/admin/keys'),
+        myKeys: await status('/api/me/keys'),
+      };
+    });
+    check('member 는 관리 API 가 서버에서 막힌다(403) — 탭을 감춘 것과 별개다',
+      codes.adminUsers === 403 && codes.adminKeys === 403,
+      `/api/admin/users=${codes.adminUsers} · /api/admin/keys=${codes.adminKeys}`);
+    check('member 는 자기 키 API 가 열려 있다(200) — 연동 탭이 셀프서비스다',
+      codes.myKeys === 200, `/api/me/keys=${codes.myKeys}`);
+
     await mpage.screenshot({ path: path.join(SHOTS, '03-member.png'), fullPage: true });
     await mctx.close();
   }
 
-  head('⑦ 로그아웃');
+  head('⑧ 로그아웃');
   await page.goto(`${BASE}/#/overview`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(1200);
   const signout = page.locator('#signout');
@@ -446,7 +670,7 @@ try {
     check('로그아웃 버튼(#signout)이 있다', false);
   }
 
-  head('⑧ CSP · 콘솔 · 정적 응답');
+  head('⑨ CSP · 콘솔 · 정적 응답');
   check("CSP(script-src 'self') 위반이 없다", sink.csp.length === 0, `${sink.csp.length}건`);
   sink.csp.slice(0, 3).forEach((v) => console.log(`      ${v}`));
   check('콘솔 오류가 없다(의도된 401 제외)', sink.console.length === 0, `${sink.console.length}건`);
@@ -454,19 +678,38 @@ try {
   check('정적 요청에 4xx/5xx 가 없다 = 누락된 청크가 없다', sink.static.length === 0, `${sink.static.length}건`);
   sink.static.slice(0, 5).forEach((v) => console.log(`      ${v}`));
 
-  head('⑨ 좁은 화면(390px)');
+  head('⑩ 좁은 화면(390px)');
   await login(page, BASE, server.admin.user, server.admin.pass);
   await page.waitForSelector('[role=tab]', { timeout: 20000 });
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(`${BASE}/#/usage`, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(1500);
-  const m = await page.evaluate(() => ({
-    scrollW: document.documentElement.scrollWidth,
-    clientW: document.documentElement.clientWidth,
-  }));
-  check('390px 에서 본문이 가로로 밀리지 않는다', m.scrollW <= m.clientW + 1,
-    `scrollW=${m.scrollW} clientW=${m.clientW}`);
-  await page.screenshot({ path: path.join(SHOTS, '04-mobile.png'), fullPage: true });
+  /*
+   * 넓은 것(표)은 **자기 안에서** 가로 스크롤한다 — 본문이 밀리면 사람은 오른쪽 열이 있는 줄도
+   * 모른다. 관리 탭은 표가 둘이고 열이 여섯·일곱이라 이 규율이 가장 먼저 깨지는 자리다.
+   */
+  for (const id of ['usage', 'admin']) {
+    await page.goto(`${BASE}/#/${id}`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1800);
+    const m = await page.evaluate(() => ({
+      scrollW: document.documentElement.scrollWidth,
+      clientW: document.documentElement.clientWidth,
+    }));
+    check(`390px 에서 #/${id} 본문이 가로로 밀리지 않는다`, m.scrollW <= m.clientW + 1,
+      `scrollW=${m.scrollW} clientW=${m.clientW}`);
+    await page.screenshot({ path: path.join(SHOTS, `04-mobile-${id}.png`), fullPage: true });
+  }
+  /* 좁은 화면에서도 시트가 열리고 위험 구역까지 스크롤로 닿는다(모달이 max-height:85vh 다). */
+  const narrowRow = page.locator('#tabpanel tr[role=button]').first();
+  if (await narrowRow.count()) {
+    await narrowRow.click();
+    await page.waitForTimeout(600);
+    check('390px 에서도 사용자 시트가 열린다', await page.locator('[role=dialog]').count() === 1);
+    const danger = page.locator('[role=dialog]').getByRole('heading', { name: '위험 구역', exact: true });
+    check('위험 구역이 시트 맨 아래에 있고 스크롤로 닿는다', await danger.count() === 1);
+    await page.screenshot({ path: path.join(SHOTS, '07-mobile-sheet.png'), fullPage: true });
+    await page.keyboard.press('Escape');
+  } else {
+    skip('390px 에서도 사용자 시트가 열린다', '관리 탭에 사용자 행이 없다');
+  }
 } catch (e) {
   check('검증 스크립트가 끝까지 돌았다', false, String(e && e.message));
   await page.screenshot({ path: path.join(SHOTS, '99-failure.png'), fullPage: true }).catch(() => {});

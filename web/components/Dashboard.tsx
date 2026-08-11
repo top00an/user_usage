@@ -9,6 +9,7 @@ import UsageTrackTab from '@/components/usagetrack/UsageTrackTab';
 import UsageObsTab from '@/components/usageobs/UsageObsTab';
 import Onboarding from '@/components/Onboarding';
 import Architecture from '@/components/Architecture';
+import AdminTab from '@/components/admin/AdminTab';
 
 /*
  * 셸 — 필요한 것은 넷뿐이다:
@@ -50,10 +51,29 @@ const TABS = [
     desc: '작동 방식 — 인제스트 키로 데이터가 수집 · 연동 · 수신되는 구성도와 흐름 설명',
     icon: 'M4 5h6v6H4V5Zm10 8h6v6h-6v-6ZM7 11v2m0 0h10m0 0v2M7 13H7', // 노드-연결 도식
   },
+  /*
+   * 관리는 **맨 뒤**다. 좌측 레일은 자주 → 드물게 순이고, 이 탭은 하루에 한 번도 안 여는
+   * 화면인데 여기에만 되돌릴 수 없는 버튼이 있다 — 자주 쓰는 탭 사이에 끼우면 오조작 거리가
+   * 0 이 된다. 위로 올리지 말 것.
+   */
+  {
+    id: 'admin',
+    label: '관리',
+    desc: '사용자 · 역할 · 팀 · 전체 인제스트 키 현황',
+    icon: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8m11 10v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75', // 사람들
+  },
 ] as const;
 
-/** 관리자 전용 탭 — member 는 목록에서 숨기고, 딥링크로도 열리지 않게 렌더에서도 막는다. */
-const ADMIN_ONLY_TABS = new Set<TabId>(['onboarding', 'architecture']);
+/*
+ * 관리자 전용 탭 — member 는 목록에서 숨기고, 딥링크로도 열리지 않게 렌더에서도 막는다.
+ * (UI 숨김은 방어가 아니다 — 서버가 `/api/admin/*` 에서 403 을 낸다. 이건 클릭 낭비를 줄이는
+ * 규율이고, 서버 게이트와 별개다.)
+ *
+ * ⚠ `onboarding` 은 여기 **없다.** 연동 탭은 셀프서비스라 member 에게 온전히 자기 것이다 —
+ *   자기 키 발급·목록·해지(`/api/me/keys`). 남의 키는 서버가 목록에 담지 않는다.
+ *   그 탭을 다시 관리자 전용으로 되돌리면 member 는 자기 머신을 연동할 방법이 없어진다.
+ */
+const ADMIN_ONLY_TABS = new Set<TabId>(['architecture', 'admin']);
 
 type TabId = (typeof TABS)[number]['id'];
 
@@ -142,7 +162,7 @@ export default function Dashboard() {
   const { user } = auth;
   const isAdmin = user.role === 'admin';
   const roleLabel = isAdmin ? '관리자' : '구성원';
-  // 관리자 전용 탭은 member 목록에서 뺀다. 딥링크로 #/onboarding 에 온 member 는 여기 없어
+  // 관리자 전용 탭은 member 목록에서 뺀다. 딥링크로 #/admin 에 온 member 는 여기 없어
   // active 가 첫 탭으로 접히고, 아래 패널도 렌더되지 않는다(이중 방어).
   const visibleTabs = TABS.filter((t) => isAdmin || !ADMIN_ONLY_TABS.has(t.id));
   const active = visibleTabs.find((t) => t.id === tab) ?? visibleTabs[0]!;
@@ -220,8 +240,13 @@ export default function Dashboard() {
             {active.id === 'overview' && <GrafanaDash key="overview" />}
             {active.id === 'usage' && <UsageTrackTab key="usage" />}
             {active.id === 'usageobs' && <UsageObsTab key="usageobs" />}
-            {active.id === 'onboarding' && <Onboarding key="onboarding" />}
+            {active.id === 'onboarding' && <Onboarding key="onboarding" self={user.username} isAdmin={isAdmin} />}
             {active.id === 'architecture' && <Architecture key="architecture" />}
+            {/*
+              `self` 는 **서버가 준 신원**이다(getMe). 화면이 목록에서 추측하지 않는다 —
+              "본인 계정은 스스로 강등·삭제할 수 없다"의 판정 근거가 그 이름 하나다.
+            */}
+            {active.id === 'admin' && <AdminTab key="admin" self={user.username} />}
           </div>
         </main>
       </div>

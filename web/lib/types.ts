@@ -396,6 +396,49 @@ export interface SeriesResponse {
   coverage?: { sessionsTotal: number; sessionsWithSeries: number };
 }
 
+/* ── 관리(사용자) — /api/admin/users* ────────────────────────────────────
+ *
+ * 백엔드가 동결한 shape 그대로다(api-admin 보고서 ⑤-A). 화면이 요구했던 `lastLoginAt`·
+ * `activeKeys`·`adminCount`·`self` 는 **이 응답에 없다** — 없는 필드를 타입에 적어 두면
+ * 화면은 `undefined` 를 "0" 이나 "없음"으로 그리게 되고, 그게 이 레포에서 가장 비싼 사고
+ * 유형(조용한 오표시)이다. 그래서 타입은 서버가 실제로 주는 것만 담고,
+ * 파생값(활성 키 수·관리자 수)은 components/admin/derive.ts 가 **명시적으로** 계산한다.
+ */
+
+export type UserRole = 'admin' | 'member';
+
+export interface AdminUser {
+  username: string;
+  role: UserRole;
+  /** RFC3339 Zulu. */
+  createdAt: string;
+  /** 미배정이면 null — 빈 문자열과 "배정 없음"은 다르다. */
+  team: string | null;
+}
+
+export interface AdminUsers {
+  users: AdminUser[];
+}
+
+/**
+ * 생성·역할변경·비밀번호재설정·팀배정의 공통 응답.
+ *
+ * `sessionsRevoked` 는 "이 변경으로 그 사용자의 세션을 끊었는가"다. **화면이 이것을 읽어야
+ * 한다** — 강등·삭제·비밀번호 재설정에서 `false` 면 그 사람은 세션 만료까지 옛 권한으로
+ * 남아 있다. 요청은 200 이고 아무 증상이 없으므로, 화면이 말하지 않으면 아무도 모른다.
+ */
+export interface UserMutation {
+  ok: boolean;
+  user: AdminUser;
+  sessionsRevoked: boolean;
+}
+
+export interface UserDeletion {
+  ok: boolean;
+  username: string;
+  sessionsRevoked: boolean;
+}
+
 /* ── 서버 오류 본문 ─────────────────────────────────────────────────── */
 
 export interface ErrorBody {
