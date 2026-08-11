@@ -117,10 +117,41 @@ export function gaugeOption(value: number, color: string): EChartsCoreOption {
   };
 }
 
+/*
+ * ── 그릴 값이 있는가 ────────────────────────────────────────────────────
+ *
+ * 렌더러의 기본값이 관측처럼 보이는 자리를 막는다. echarts 의 pie 는 **합계가 0 이면 균등
+ * 분할로 그린다** — 수락 0 · 거부 0 인 패널이 화면에서는 "수락 50% · 거부 50%"가 되고, 사람은
+ * 그것을 실제 비율로 읽는다. 값이 하나도 없으면 차트가 아니라 **안내**를 띄우는 것이 정답이므로,
+ * 호출부는 그리기 전에 이 함수로 먼저 판정한다.
+ *
+ * 개별 0 은 걸러내지 않는다 — 합계가 0 이 아닌데 한 항목만 0 인 것(수락 279 · 거부 0)은
+ * **관측된 사실**이고, 그것을 숨기면 화면이 아는 것을 감추는 반대 방향의 사고가 된다.
+ */
+export function hasValues(rows: { value: number }[] | null | undefined): boolean {
+  return sum((rows ?? []).map((r) => r.value)) > 0;
+}
+
+/** 위와 같은 판정을 시계열(다중 계열)에 적용한다. 날짜가 없거나 전 계열이 0 이면 값이 없다. */
+export function hasSeriesValues(series: { data: number[] }[] | null | undefined): boolean {
+  return sum((series ?? []).flatMap((s) => s.data)) > 0;
+}
+
+/** 유한한 값만 더한다 — NaN·Infinity 하나가 판정을 뒤집지 않게. */
+function sum(values: number[]): number {
+  return values.reduce((a, v) => a + (Number.isFinite(v) ? v : 0), 0);
+}
+
 /* 도넛(pie) — 카테고리 구성비. */
 export function donutOption(
   rows: { name: string; value: number }[],
 ): EChartsCoreOption {
+  /*
+   * 마지막 방어선. 호출부가 hasValues 판정을 잊어도 **가짜 비율은 그리지 않는다** —
+   * 계열 자체를 두지 않으므로 균등 분할도, 빈 회색 링도 나오지 않는다.
+   * (그래도 이 자리는 안내가 없는 빈 패널이다. 안내는 호출부가 Empty 로 띄운다.)
+   */
+  if (!hasValues(rows)) return { backgroundColor: 'transparent', series: [] };
   return {
     backgroundColor: 'transparent',
     color: PALETTE,
