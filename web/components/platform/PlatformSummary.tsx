@@ -4,7 +4,7 @@
  * ── 플랫폼 요약 ───────────────────────────────────────────────────────────
  *
  * 운영자가 답하고 싶은 질문은 둘이다: "어느 도구를 얼마나 쓰나", "그게 얼마짜리인가".
- * 그래서 이 섹션은 세 덩어리로 되어 있다.
+ * 그래서 이 섹션은 두 덩어리로 되어 있다.
  *
  *   ① 카드     플랫폼마다 한 장. 세션·토큰 네 축·환산 비용·최근 수집.
  *   ② 공통 코어 비교 표
@@ -13,8 +13,11 @@
  *              그 표를 근거로 "Codex 는 서브에이전트를 안 쓴다" 같은 없는 결론이 나온다.
  *              (합계 토큰 열을 두지 않는 이유는 usagetrack/labels.ts 와 같다 — 성질이 다른
  *              축을 한 이름으로 더하면 산술적으로 맞고 의미로는 거짓말이다.)
- *   ③ 지원 표   "그 플랫폼이 이 지표를 기록하는가"의 사실표. ②가 왜 그 축들만 쓰는지의 근거이고,
- *              카드의 회색 배지가 버그가 아니라는 증거다.
+ *
+ * ⚠ 전체 지원표(지표 × 플랫폼)는 **여기 없다.** 카드와 비교표의 배지는 인라인으로 사유를
+ *   달고 있고(MetricValue → SupportBadge), 그 배지가 왜 붙었는지의 사실표는 **아키텍처 탭**이
+ *   소유한다(components/Architecture.tsx 의 수집 범위 표). 판정 자체는 두 화면 모두
+ *   lib/platforms.ts 의 supportOf() 하나를 부른다 — 표를 옮겨도 판정이 갈리지 않는 이유다.
  *
  * 기간: /api/usage/platforms 는 전체 기간 누적이다(lib/api.ts 의 getPlatforms 주석 참고).
  * 화면도 그렇게 말하고, 실제 구간은 firstSeen~lastSeen 으로 밝힌다.
@@ -22,13 +25,11 @@
 
 import type { PlatformRow } from '@/lib/types';
 import { fmtTime, n, shortTokens, usd } from '@/lib/format';
-import {
-  COMMON_CORE, METRICS, METRIC_LABEL, platformMeta, supportOf, type MetricId,
-} from '@/lib/platforms';
+import { COMMON_CORE, METRIC_LABEL, platformMeta, type MetricId } from '@/lib/platforms';
 import { COST_DISCLAIMER, COST_LABEL, COST_LABEL_SHORT, COST_WHY } from '@/lib/costLabels';
 import { usePlatformFilter } from '@/lib/platformFilter';
 import { TableWrap } from '@/components/ui';
-import { MetricValue, SupportBadge } from './SupportBadge';
+import { MetricValue } from './SupportBadge';
 
 /** 카드·표가 쓰는 값 한 칸. 지원되지 않는 축은 숫자 대신 배지가 된다. */
 function Cell({ row, metric }: { row: PlatformRow; metric: MetricId }) {
@@ -138,9 +139,6 @@ export default function PlatformSummary({ rows }: { rows: PlatformRow[] | null }
       {/* ② 공통 코어 비교 */}
       <TableWrap>
         <table className="mt">
-          <caption className="help" style={{ captionSide: 'top', textAlign: 'left', paddingBottom: 4 }}>
-            공통 코어 비교 — 모든 플랫폼이 같은 방식으로 기록하는 축만 세웁니다(공정한 비교의 조건).
-          </caption>
           <thead>
             <tr>
               <th>플랫폼</th>
@@ -168,47 +166,6 @@ export default function PlatformSummary({ rows }: { rows: PlatformRow[] | null }
           </tbody>
         </table>
       </TableWrap>
-
-      {/*
-        ③ 지원 표 — 빈칸을 0 으로 그리지 않기 위한 근거.
-        접어 둔다: 사람이 읽는 값은 위의 카드·비교표이고 거기에는 배지가 **인라인으로** 붙어 있다.
-        이 표는 "그 배지가 왜 붙었나"를 확인하러 오는 자리라 항상 펼쳐 둘 필요가 없다
-        (15행이 대시보드 첫 화면을 통째로 밀어낸다).
-      */}
-      <details className="pf-details mt">
-        <summary>플랫폼별 수집 가능 지표 — 무엇이 <b>미수집</b>이고 무엇이 <b>해당 없음</b>인가</summary>
-      <TableWrap>
-        <table className="mt-sm">
-          <caption className="help" style={{ captionSide: 'top', textAlign: 'left', paddingBottom: 4 }}>
-            <b>미수집</b>은 그 도구가 기록하지 않아 모르는 것이고,
-            <b> 해당 없음</b>은 개념 자체가 없는 것입니다. 둘 다 0 이 아닙니다.
-          </caption>
-          <thead>
-            <tr>
-              <th>지표</th>
-              {rows.map((r) => <th key={r.platform}>{platformMeta(r.platform).label}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {METRICS.map((m) => (
-              <tr key={m}>
-                <th scope="row">{METRIC_LABEL[m]}</th>
-                {rows.map((r) => {
-                  const s = supportOf(r.platform, m);
-                  return (
-                    <td key={r.platform}>
-                      {s.state === 'yes'
-                        ? <span className="ok" title={s.why}>수집됨</span>
-                        : <SupportBadge support={s} />}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </TableWrap>
-      </details>
     </section>
   );
 }

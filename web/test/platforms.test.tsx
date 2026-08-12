@@ -279,23 +279,15 @@ describe('플랫폼 요약 — 실제 0 · 미수집 · 해당 없음을 갈라 
   });
 
   /*
-   * 예전에는 slash·skill·agent 셋이라고 적혀 있었다. 수집기를 확인해 보니 codex 는 skill·agent
-   * 를 실제로 보낸다(codex.go:589,:540) — 표가 낡아 **올라온 값을 미수집이라 부르고 있었다.**
-   * 그래서 이 테스트는 "몇 개인가"가 아니라 **어느 축인가**를 못박는다.
+   * ⚠ 지원표(지표 × 플랫폼)가 이 섹션에서 제거되면서 **'미수집' 표기도 함께 사라졌다.**
+   * 카드와 비교표는 값 축(세션·토큰 네 축·비용)만 세우는데, 그 축들은 네 플랫폼 모두
+   * 수집되므로 미수집 배지가 붙을 자리가 없다. 남는 것은 '해당 없음'뿐이다(캐시생성).
+   *
+   * 그래서 '미수집'의 렌더 검증은 이 파일이 더는 지지 않는다. 두 곳이 대신 진다:
+   *   · 아키텍처 탭의 수집 범위 표 — architecture.test.tsx
+   *   · 사용 추적 탭의 축 패널   — 이 파일 아래 "Codex · 미수집"
+   * 판정 자체(어느 축이 미수집인가)는 이 파일 위쪽의 lib/platforms.ts 단위 테스트가 못박는다.
    */
-  it('codex 에서 "미수집" 배지가 붙는 축은 슬래시 하나뿐이다', async () => {
-    render(<Dashboard />);
-    await screen.findByRole('heading', { name: '플랫폼별 사용량' });
-    expect(supportCellText('슬래시 명령', 'Codex')).toBe('미수집');
-    for (const m of ['스킬', '서브에이전트', '내장 도구', 'MCP 도구', 'LOC(추가·삭제)']) {
-      expect(supportCellText(m, 'Codex')).toBe('수집됨');
-    }
-    // 배지만 있고 사유가 없으면 사람은 그걸 버그로 읽는다.
-    const badges = screen.getAllByText('미수집').filter((el) => el.classList.contains('badge'));
-    for (const b of badges) {
-      expect(b).toHaveAttribute('title', expect.stringContaining('기록'));
-    }
-  });
 
   it('공통 코어 비교 표는 합계 토큰 열을 두지 않는다 (성질이 다른 축을 한 이름으로 더하지 않는다)', async () => {
     render(<Dashboard />);
@@ -321,16 +313,6 @@ function withAntigravity(): [string, Parameters<typeof mockFetch>[0][number][1]]
   return [['/api/usage/platforms', { body: { platforms: [...PLATFORMS_FIXTURE.platforms, AG_ROW] } }]];
 }
 
-/** 지원표에서 (지표 행 × 플랫폼 열) 한 칸의 글자를 읽는다. */
-function supportCellText(metricLabel: string, platformLabel: string): string {
-  // 지원표만 행 머리(rowheader)를 갖는다 — 공통 코어 표는 tbody 가 전부 td 다.
-  const row = screen.getByRole('rowheader', { name: metricLabel }).closest('tr')!;
-  const headers = within(row.closest('table')!).getAllByRole('columnheader').map((h) => h.textContent);
-  const col = headers.indexOf(platformLabel);
-  expect(col).toBeGreaterThan(0); // 0번은 '지표' 열이다
-  return within(row).getAllByRole('cell')[col - 1]!.textContent ?? '';
-}
-
 describe('antigravity — 응답에 뜨면 코드 변경 없이 1급으로 붙는다', () => {
   beforeEach(() => {
     location.hash = '#/overview';
@@ -354,28 +336,6 @@ describe('antigravity — 응답에 뜨면 코드 변경 없이 1급으로 붙�
     const row = within(card).getByText('캐시생성').closest('.pf-kv-row') as HTMLElement;
     expect(within(row).getByText('해당 없음')).toBeInTheDocument();
     expect(row.textContent).not.toMatch(/(^|\D)0(\D|$)/);
-  });
-
-  it('지원표에서 도구·LOC·MCP 는 미수집, 슬래시·키워드는 조건부, 세션·캐시읽기는 수집됨으로 갈린다', async () => {
-    render(<Dashboard />);
-    await screen.findByRole('heading', { name: '플랫폼별 사용량' });
-    for (const m of ['내장 도구', 'MCP 도구', 'LOC(추가·삭제)', '스킬', '서브에이전트']) {
-      expect(supportCellText(m, 'Antigravity')).toBe('미수집');
-    }
-    /*
-     * 슬래시·키워드는 미수집이 아니다 — history.jsonl 이 있는 대화형 세션에서는 실제로 올라온다
-     * (spool.go:456 AddHistory). '미수집'이라고 쓰면 그 값을 화면이 숨기게 된다.
-     */
-    for (const m of ['슬래시 명령', '키워드']) {
-      expect(supportCellText(m, 'Antigravity')).toBe('조건부 수집');
-    }
-    expect(supportCellText('캐시생성', 'Antigravity')).toBe('해당 없음');
-    expect(supportCellText('세션', 'Antigravity')).toBe('수집됨');
-    expect(supportCellText('캐시읽기', 'Antigravity')).toBe('수집됨');
-    // 옆 열(기존 플랫폼).
-    expect(supportCellText('내장 도구', 'Claude')).toBe('수집됨');
-    expect(supportCellText('슬래시 명령', 'Codex')).toBe('미수집');
-    expect(supportCellText('스킬', 'Codex')).toBe('수집됨');
   });
 
   it('플랫폼 필터에 코드 변경 없이 선택지로 붙고, 고르면 질의로 나간다', async () => {
