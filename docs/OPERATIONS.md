@@ -328,6 +328,80 @@ Antigravity CLI 가 설치돼 있으면 `⑤ Antigravity CLI 연동` 단계가 �
 이미 존재하면 설치기는 **덮지 않고 멈춥니다.** 손상 JSON 이어도 마찬가지로 한 바이트도
 건드리지 않습니다 — 남의 설정을 깨뜨리느니 설치를 포기하는 쪽입니다.
 
+### 연동 해제 (원커맨드)
+
+**같은 스크립트가 반대도 합니다.** 설치기가 넣은 것만 정확히 걷어냅니다:
+
+```sh
+curl -fsSL $SERVER/install.sh | sh -s -- --uninstall
+# 서버가 이미 내려갔거나 키가 해지됐다면 받아 둔 스크립트로도 됩니다:
+sh install.sh --uninstall
+```
+
+`--key`·`--server` 는 **필요 없습니다** — 제거에 필요한 값(설치 경로·보관해 둔 원래 상태줄)은
+`config.env` 에 이미 있습니다. 설치와 제거가 한 파일에 있는 이유도 이것입니다: 제거는 설치가
+무엇을 어떤 키로 넣었는지 알아야 하는데, 그 지식이 두 파일로 갈리면 한쪽만 고쳐진 채 어긋납니다.
+
+정상 실행 출력(실측 2026-08-11 — 남의 훅·남의 상태줄이 있던 HOME 에서):
+
+```
+▶ 연동 제거 (--uninstall)
+▶ ① Claude Code SessionEnd 훅 제거
+  백업: ~/.claude/settings.json.bak
+  훅 제거: ~/.claude/settings.json (usage-collector 를 참조하는 그룹)
+▶ ② Antigravity CLI 연동 해제
+  백업: ~/.gemini/antigravity-cli/settings.json.bak
+  statusLine 복원: my-own-statusline --fancy
+  백업: ~/.gemini/config/hooks.json.bak
+  Stop 훅 제거: ~/.gemini/config/hooks.json [claude-usage]
+▶ ③ 설정·바이너리 제거
+  삭제: ~/.local/bin/usage-collector (수집기 바이너리)
+  삭제: ~/.config/claude-usage/config.env (SERVER·KEY·COLLECTOR_BIN — 키 폐기)
+  삭제: ~/.config/claude-usage/antigravity (Antigravity 스풀)
+  삭제: ~/.claude/usage-collector-state.json (증분 체크포인트)
+연동 제거 완료 ✓ — 7개 항목
+  .bak 백업은 지우지 않았다(되돌릴 근거) — 필요 없어지면 직접 지워라.
+  서버에서 키도 해지하려면(제거만으로는 그 키가 계속 살아 있다):
+    usage-server key revoke --key <인제스트키>   ·   또는 대시보드 「연동」 탭에서 해지
+```
+
+Antigravity 를 안 쓰면 `②` 단계가 통째로 조용히 빠집니다(설치와 같은 스킵 규율).
+아무것도 설치돼 있지 않으면 `제거할 것이 없다 ✓` 를 찍고 **아무 파일도 만들지 않고** 끝납니다.
+
+**제거가 하지 않는 일이 하나 있습니다 — 서버의 키 해지.** 그건 운영자 자격이 필요한 서버 쪽
+작업이라 개발자 PC 의 스크립트가 대신할 수 없습니다. 위 출력의 마지막 두 줄이 그 방법을
+안내합니다(§3 의 `key revoke`). **퇴사·이탈이면 반드시 해지까지 하십시오** — 제거는 그 PC 에서
+보고를 멈출 뿐, 유출된 키는 다른 곳에서 그대로 씁니다.
+
+#### 검증된 성질 (제거)
+
+| 성질 | 확인 방법 | 결과 |
+|---|---|---|
+| 남의 훅·설정 보존 | 다른 `SessionEnd` 훅 + `theme` + `PreToolUse` 가 있는 `settings.json` 에서 제거 | 셋 다 그대로 남음 |
+| **statusLine 체이닝 복원** | 설치 전 상태줄(`my-own-statusline --fancy`)이 있던 HOME 에서 제거 | 그 명령으로 **되살아남**(형제 키 `padding` 도 보존) |
+| 남의 네임스페이스 보존 | `hooks.json` 에 `orca-status` 가 있는 상태에서 제거 | `claude-usage` 만 빠짐 |
+| 멱등 (2회) | 같은 명령 2회 실행 | 2회차는 **한 바이트도 안 바꿈**(md5·mtime 동일, `.bak` 도 새로 안 생김) |
+| 멱등 (미설치) | 빈 HOME 에서 제거 | exit 0, **파일을 만들지 않음** |
+| 키 잔존 | 제거 후 HOME 전체에서 키 문자열 검색 | **0건** |
+| JSON 도구 없음 | `jq`·`python3`·`node` 없는 PATH 로 제거 | 중단(exit 1) · 파일 md5 동일 · `.bak` 안 생김 |
+| 손상 JSON | 깨진 `settings.json` 으로 제거 | 중단(exit 1) · 원본 그대로 · **바이너리·키도 안 지움** |
+| 세 도구 모두 | `jq`·`python3`·`node` 각각만 있는 PATH 로 왕복 | 세 경로 모두 같은 결과 |
+
+> 제거를 두 번 돌리면 두 번째는 `statusLine 이 우리 것이 아니다 — 건드리지 않았다` 를 찍습니다.
+> 복원된 남의 상태줄을 보고 하는 말이므로 **정상**입니다.
+
+이 왕복은 `go/internal/httpapi/agent_test.go` 의 `TestInstallScriptRoundTrip` 이 CI 에서
+매번 다시 돌립니다(임시 HOME + 가짜 수집기로 실제 설치→제거).
+
+#### 제거가 남기는 것
+
+- **`.bak` 파일들** — 되돌릴 근거라 일부러 남깁니다. ⚠ `.bak` 은 "최초 원본"이 아니라 "직전
+  상태"입니다(§6-1).
+- **빈 `{}` 가 된 설정 파일** — 우리 것만 빼다 보니 다른 내용이 없으면 `{}` 가 됩니다.
+  `hooks`·`SessionEnd`·`statusLine` 키는 비면 **키째로 지우므로** 흔적이 남지 않습니다.
+- **서버에 이미 올라간 사용량** — 제거는 개발자 PC 만 정리합니다. 서버 쪽 데이터 삭제는 별개의
+  운영자 작업입니다(§6-2·§8).
+
 ---
 
 ## 5. 문제 해결
@@ -502,9 +576,21 @@ cd web       && npm test
 
 ---
 
-## 8. 저장된 자리표시자 모델 라벨 정리 (`<synthetic>`)
+## 8. 저장된 데이터 정리 (`cleanup`)
 
-### 8-1. 언제 필요한가
+`usage-server cleanup` 아래에 두 명령이 있습니다. **둘 다 기본값이 dry-run 이고, 자동 실행 경로에
+올라가 있지 않습니다** — 되돌리기 어려운 작업은 사람이 대상을 지목해 명시적으로 돌립니다.
+
+| 명령 | 무엇을 하는가 | 숫자가 움직이나 | 되돌릴 수 있나 |
+|---|---|---|---|
+| `cleanup placeholder-models` (8-1 ~ 8-5) | 저장된 자리표시자 모델 라벨(`<synthetic>` 등)을 `(미상)`으로 접습니다 | **아니오** — 라벨만 바꿉니다 | 아니오 (8-5) |
+| `cleanup usage-rows` (8-6 ~ 8-10) | 지목한 사용자·머신의 **사용량 행을 지웁니다** | 예 — 줄어듭니다 | 아니오 (8-10) |
+
+두 명령 모두 서버와 **같은 env** 를 봅니다(`USAGE_DB_MODE`·`DATABASE_URL`·`USAGE_DATA_DIR`).
+관리자 토큰 게이트가 없는 이유는 이것이 배포 호스트에서 운영자가 직접 부르는 명령이고,
+**DB 접근 자체가 권한**이기 때문입니다(§3-2 와 같은 규율).
+
+### 8-1. 언제 필요한가 (`placeholder-models`)
 
 모델 축(비용·모델별 화면)에 **`<synthetic>` 같은 행이 보일 때**입니다. Claude Code 는 중단·오류
 메시지 같은 턴에 모델 이름 대신 그 자리표시자를 쓰고, 그것이 그대로 저장돼 있던 것입니다.
@@ -663,6 +749,227 @@ totals   정리 전후 동일 (sessions 3 · input 6050 · output 9060 · cacheR
 
 숫자가 움직이지 않는 작업이라 되돌릴 실익은 사실상 라벨뿐입니다. 그래도 되돌릴 수 없다는
 사실은 먼저 말해 두는 편이 맞습니다.
+
+### 8-6. 사용량 행 삭제 (`usage-rows`) — 언제 필요한가
+
+**퇴사·삭제 요청에 답할 때**입니다. §9 의 사용자 삭제는 계정과 인제스트 키를 거두지만
+**그 사람의 사용량 행은 남깁니다** — 그래서 삭제 뒤에도 화면에 계정명·머신명·프로젝트명이
+계속 보입니다. 이 명령이 그 행을 지웁니다.
+
+README 가 이 상황을 예상해 두었습니다:
+
+> 지우는 것은 `keyword` 축 하나뿐입니다. 나머지는 **무기한 보관하기로 결정한 것**이지 빠뜨린
+> 것이 아니(…) 지워야 할 사정이 생기면 보존 정리기를 늘리는 것이 아니라 (a) 귀속 교정으로
+> 이름을 바꾸거나 **(b) 해당 행을 직접 지우는** 쪽이 맞습니다.
+
+이 명령은 **(b)** 입니다. **보존 정리기가 아닙니다** — 기한으로 자동 삭제하는 경로를 만들지
+않았고, 부팅·`store.Init` 어디에도 걸려 있지 않습니다.
+
+```
+usage-server cleanup usage-rows (--user <u> | --machine <m>) [--apply] [--tenant <t>]
+```
+
+대상은 **정확히 하나**입니다. 없거나 둘 다면 거부합니다(exit 2, 아무것도 지우지 않습니다) —
+빈 대상을 통과시키면 그 순간 "전부 삭제"가 되고, 그것이 기본 동작인 명령은 언젠가 반드시
+사고를 냅니다.
+
+```bash
+USAGE_DB_MODE=local USAGE_DATA_DIR=./data ./go/usage-server cleanup usage-rows
+# → cleanup usage-rows: --user 또는 --machine 중 **하나**가 필요하다(둘 다는 안 된다)   [exit 2]
+USAGE_DB_MODE=local USAGE_DATA_DIR=./data ./go/usage-server cleanup usage-rows --user amy --machine pc-amy
+# → 같은 문구, exit 2   (공백만 있는 값도 같습니다)
+```
+
+#### 왜 머신 축(`--machine`)도 있나
+
+계정이 붙지 않은 보고가 실재합니다. 수집기가 `user` 를 보내지 않고 머신 매핑도 없으면
+`username` 이 NULL 로 저장되는데, 그 행에는 **`--user` 로 잡을 손잡이가 없습니다.** 공용·반납·
+폐기 PC 가 그 경우입니다. 실측:
+
+```bash
+./go/usage-server cleanup usage-rows --user pc-kiosk     # → 지울 행이 없다  (귀속이 비어 있다)
+./go/usage-server cleanup usage-rows --machine pc-kiosk  # → usage_sessions 1행 · usage_series 1행 · usage_counters 1행
+```
+
+### 8-7. 무엇을 지우고 무엇을 남기는가
+
+| 표 | `--user` | `--machine` | 근거 |
+|---|---|---|---|
+| `usage_sessions` | 지웁니다 | 지웁니다 | 사용량의 본체 |
+| `usage_series` | 지웁니다 | 지웁니다 | 시간×모델 버킷 — 세션에 딸린 관측치 |
+| `usage_counters` | 지웁니다 | 지웁니다 | 축 카운터 — 세션에 딸린 관측치 |
+| `usage_recommendations` | 지웁니다 | **건너뜁니다** | `username` 만 있고 `session_id`·`machine` 이 없어 머신으로 좁힐 방법이 없습니다. 조용히 0행으로 접지 않고 **건너뛴 이유를 찍습니다** |
+| `machine_identity` | 지웁니다 | 지웁니다 | 행의 내용이 곧 지우려는 것입니다(머신명 + 계정명 한 쌍이고 관리 화면 매핑 목록에 그대로 보입니다). 이 표의 기능은 **앞으로 들어올** 보고를 귀속시키는 것인데, 지목 대상에게는 앞으로의 보고가 없습니다. 관리자가 화면에서 한 줄 다시 걸면 복구됩니다 |
+| `usage_audit` | **남깁니다** | **남깁니다** | 아래 |
+| `auth_users`·`auth_sessions`·`member_tokens`·`team_members`·`ingest_keys` | **남깁니다** | **남깁니다** | 아래 |
+
+**`usage_audit`(감사 로그)를 남기는 이유.** 이 레포는 그 표를 *"어제 보던 이름이 왜 오늘 다른가에
+답하는 표"* 라며 기한을 두지 않기로 했습니다. 삭제의 부수효과로 그 근거를 함께 지우면 **방금
+지운 이유를 나중에 아무도 답할 수 없습니다** — 특히 이 명령의 직전 단계가 보통 귀속 교정
+(restamp)이라, 그 기록이 사라지면 "왜 이 사람 행이 저 이름으로 합쳐졌었나"가 미궁이 됩니다.
+
+> ⚠ **법적 삭제 요구가 있다면 이것으로 충분하지 않습니다.** 감사 로그의 `target`·`detail` 에
+> 머신명과 계정명이 남습니다(아래 실측 출력에 그대로 보입니다). 그건 이 명령이 대신 판단하지
+> 않습니다 — 별도의 명시적 결정으로 지우십시오:
+> ```sql
+> DELETE FROM usage_audit WHERE target = 'pc-leaver' OR detail LIKE '%"leaver"%';
+> ```
+
+**계정·자격 표를 남기는 이유.** 그 회수는 **사용자 관리 API 가 소유합니다**(§9-2 의 삭제가 세션과
+인제스트 키를 함께 거둡니다). 사용량 행을 지우는 명령이 계정까지 지우면 같은 표에 소유자가
+둘이 되고, 그때는 어느 쪽이 지웠는지 알 수 없습니다. **퇴사 처리의 순서는 §9 먼저, 이 명령이
+나중입니다:**
+
+1. §9-2 의 삭제 — 계정을 지우고 세션·인제스트 키를 거둡니다(그 시점부터 보고가 401 입니다).
+2. 이 명령 — 이미 쌓인 사용량 행을 지웁니다.
+
+순서를 거꾸로 하면 1과 2 사이에 훅이 한 번 더 돌아 방금 지운 사람의 행이 다시 생깁니다.
+
+#### 무엇을 근거로 행을 고르나 (빠뜨리지 않는 이유)
+
+자식 표(`usage_series`·`usage_counters`)는 **두 조건의 합**으로 고릅니다:
+
+- **세션 소유** — 대상 세션에 딸린 행. 자식 표의 `username` 이 **낡아 있어도** 빠뜨리지 않습니다.
+  실재하는 드리프트입니다: 귀속 교정(restamp)은 `usage_sessions`·`usage_counters` 만 재스탬프하고
+  `usage_series` 는 건드리지 않으므로, 세션은 새 이름인데 그 세션의 버킷은 옛 OS 계정명을 지닌
+  행이 남습니다. 이름으로만 좁히면 그 버킷이 살아남아 **"지웠는데 화면에 옛 이름이 있다"** 가 됩니다.
+- **고아 잔여** — 세션 행이 **없는데** 대상 이름을 지닌 행. 인테이크가 세션 행만 실패하고 버킷은
+  들어가는 자리가 실재합니다. 이 몫은 **고아로 한정합니다** — 한정하지 않으면 이름만 낡은 행
+  하나 때문에 **다른 사람의 살아 있는 세션**에서 버킷을 뽑아 가게 됩니다.
+
+두 몫이 함께 있을 때는 출력에 `(세션 소유 N · 고아 잔여 M)` 으로 갈라 찍습니다.
+
+> 그래서 **낡은 이름 자체를 정리하는 수단은 이 명령이 아닙니다.** 세션이 남의 것인데 자식 행만
+> 옛 이름을 지닌 경우, 그 이름으로 이 명령을 돌리면 `지울 행이 없다` 입니다(그게 맞습니다 —
+> 그 행은 실재하는 남의 사용량입니다). 그 경우는 README 의 **(a) 귀속 교정**으로 고치십시오.
+
+### 8-8. local (sqlite) — 왕복 실측
+
+아래는 실제로 실행한 출력입니다. 인테이크 API 로 두 사람(`leaver`·`stayer`)의 사용량을 심고
+`leaver` 만 지웠습니다. `leaver` 는 세션 2개(하나는 시간 버킷 2개 + 카운터 5개, 하나는 카운터 1개)와
+머신 매핑 1줄을 갖고 있었습니다.
+
+```
+심은 뒤 totals: {"sessions":3,"input":1057,"output":2068,"cacheRead":300,"cacheCreate":400,"users":2,"machines":2}
+심은 뒤 byUser : leaver(input 1050 · output 2060 · sessions 2) · stayer(input 7 · output 8 · sessions 1)
+```
+
+```bash
+# ① 먼저 무엇이 지워지는지 본다 (아무것도 지우지 않는다)
+USAGE_DB_MODE=local USAGE_DATA_DIR=./data ./go/usage-server cleanup usage-rows --user leaver
+```
+
+```
+cleanup usage-rows (dry-run · 아무것도 지우지 않았다)
+  ⚠ 이 명령은 행을 지운다 — 되돌릴 수 없다. 복구는 스냅샷/PITR 뿐이다.
+  · 대상: username=leaver
+  · usage_series          : 2행
+  · usage_counters        : 5행
+  · usage_recommendations : 0행
+  · machine_identity      : 1행
+  · usage_sessions        : 2행
+  · 합계                  : 10행
+  · 남긴다: usage_audit(감사 로그 — 기한 없음) · auth_users·auth_sessions·member_tokens·team_members·ingest_keys(계정·자격 — 사용자 관리 API 가 소유한다)
+  · 실제로 지우려면 --apply 를 붙여라.
+```
+
+dry-run 직후 `/api/usage/summary` 는 **바뀌지 않았습니다**(`sessions:3 · input:1057`).
+
+```bash
+# ② 그 계획이 맞으면 실제로 지운다
+USAGE_DB_MODE=local USAGE_DATA_DIR=./data ./go/usage-server cleanup usage-rows --user leaver --apply
+```
+
+```
+cleanup usage-rows (--apply · 실제로 지웠다)
+  ⚠ 이 명령은 행을 지운다 — 되돌릴 수 없다. 복구는 스냅샷/PITR 뿐이다.
+  · 대상: username=leaver
+  · usage_series          : 2행
+  · usage_counters        : 5행
+  · usage_recommendations : 0행
+  · machine_identity      : 1행
+  · usage_sessions        : 2행
+  · 합계                  : 10행
+  · 남긴다: usage_audit(감사 로그 — 기한 없음) · auth_users·auth_sessions·member_tokens·team_members·ingest_keys(계정·자격 — 사용자 관리 API 가 소유한다)
+```
+
+**계획과 결과의 행 수가 같습니다** — 미리 본 그대로 실행됩니다.
+
+```bash
+# ③ 멱등 확인 — 두 번째는 0행이다
+USAGE_DB_MODE=local USAGE_DATA_DIR=./data ./go/usage-server cleanup usage-rows --user leaver
+```
+
+```
+cleanup usage-rows (dry-run · 아무것도 지우지 않았다)
+  ⚠ 이 명령은 행을 지운다 — 되돌릴 수 없다. 복구는 스냅샷/PITR 뿐이다.
+  · 대상: username=leaver
+  · 지울 행이 없다.
+```
+
+삭제 뒤 화면·DB 실측:
+
+```
+totals : {"sessions":1,"input":7,"output":8,"cacheRead":0,"cacheCreate":0,"users":1,"machines":1}
+byUser : stayer(input 7 · output 8 · sessions 1)        ← leaver 가 사라졌습니다
+byModel: gpt-5.6(input 7 · output 8)
+①+②+③ == Totals 불변식 : 성립 (모델축 합 7/8 == totals 7/8)
+identity: {"items":[],"unmapped":[{"machine":"pc-stayer","username":"stayer","sessions":1}]}
+
+고아 자식 행(세션 없는 usage_series·usage_counters) : 0 · 0   ← 반쪽 삭제가 남지 않았습니다
+남긴 감사 로그  : ('2026-08-11T08:42:00.794Z','usage-admin','usage.identity.set','pc-leaver','{"moved":…,"username":"leaver"}')
+남긴 계정       : auth_users → ops-admin(admin)
+'leaver' 문자열이 남은 표 : 없음 (usage_sessions·usage_series·usage_counters·usage_recommendations·machine_identity 전부 0행)
+```
+
+> 서버를 멈추지 않아도 됩니다(같은 sqlite 파일을 열 뿐입니다). 화면은 캐시 없이 매번 질의하므로
+> 새로고침하면 곧 반영됩니다. 위 출력이 그 실측입니다 — 서버를 띄운 채로 지웠습니다.
+
+**삭제는 한 트랜잭션입니다.** 표 다섯을 지우다 중간에 끊기면 "세션은 없는데 카운터가 남은"
+상태가 되고, 그 상태는 화면에서 진단이 거의 불가능합니다 — 고아 버킷은 모델별 집계에서 아예
+빠지므로 숫자만 보고는 알아챌 수 없습니다. `maintenance_test.go` 의
+`TestPurgeIsOneTransaction` 이 결함을 주입해 롤백을 못 박습니다(끊긴 시점에 앞의 두 표가
+이미 비어 있었음을 트랜잭션 안에서 확인한 뒤 롤백 후 원상복구를 검증합니다).
+
+### 8-9. remote (PostgreSQL)
+
+같은 명령이 `USAGE_DB_MODE=remote` 에서도 그대로 듣습니다. 앱 롤(`usage_app`)로 붙어도 되고
+테이블 잠금도 걸지 않습니다. 대신 RLS 가 한 번에 한 테넌트만 보여 주므로 **테넌트마다 한 번씩**
+돌려야 합니다(8-3 의 `--tenant` 와 같은 이유):
+
+```bash
+USAGE_DB_MODE=remote DATABASE_URL='postgres://usage_app:<PW>@host:5432/usage?sslmode=require' \
+  ./go/usage-server cleanup usage-rows --user <username> --tenant <tenant-id> --apply
+```
+
+단일테넌트 배포라면 `--tenant` 를 생략하십시오(기본 테넌트 `default`).
+
+⚠ **적용 전에 스냅샷/백업을 확인하십시오**(§6-2 와 같은 규율). 8-3 의 마이그레이션과 달리 전용
+`.sql` 파일이 없습니다 — 대상이 사람마다 다르므로 동결된 파일로 만들 수 있는 작업이 아닙니다.
+
+> **미검증**: 위 remote 절차는 sqlite 로만 왕복했습니다(pg 인스턴스를 이 검증에서 띄우지
+> 않았습니다). SQL 은 방언 중립으로 작성돼 있고 테넌트 격리는 RLS 가 담당하지만, pg 실측은
+> 하지 않았음을 밝혀 둡니다.
+
+### 8-10. 되돌리기
+
+**되돌릴 수 없습니다.** 전용 되돌리기 명령이 없고, 만들 수도 없습니다 — 지운 행의 내용을 어딘가
+남겨 두면 그게 곧 "지우지 않은 것"이기 때문입니다. **스냅샷/PITR 복구가 유일한 수단입니다**
+(§6-2 · 8-5 와 같습니다).
+
+그래서 순서가 이렇습니다:
+
+1. `--apply` 없이 먼저 돌려 표별 행 수를 확인한다(8-8 ①). **이 한 번이 유일한 확인 절차입니다.**
+2. pg 는 **적용 전에 백업/스냅샷을 확인한다**(§6-2 와 같은 규율).
+3. 그다음 `--apply` 를 붙인다.
+4. **출력을 보관한다.** 이 명령은 감사 표에 기록을 남기지 않으므로(아래), 표별 행 수를 적어 둔
+   그 출력이 "무엇을 얼마나 지웠나"의 유일한 기록입니다.
+
+> **왜 감사 표에 기록하지 않나.** `usage_audit` 은 **pg 스키마가 없습니다** —
+> `migrations/pg/` 어느 파일도 그 표를 만들지 않고, sqlite 쪽 DDL(`internal/identity/audit.go`)만
+> 갖고 있습니다. 그래서 여기서 기록을 남기면 local 에는 남고 remote 에는 **조용히 남지 않습니다.**
+> 반쪽만 있는 감사 기록은 없는 것보다 나쁩니다(있다고 믿게 만듭니다). 표를 양 방언에 맞추는 것은
+> 이 명령의 범위가 아니므로, 기록 대신 **출력을 보관하라**고 말합니다.
 
 ---
 
