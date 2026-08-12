@@ -63,6 +63,7 @@
       "machine": "host-c",
       "model": "claude-sonnet-5",
       "output": 2000,
+      "platform": "claude",
       "project": "orca-core",
       "reportedAt": "<string>",
       "sessionId": "S4-carol-residual-turns",

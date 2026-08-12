@@ -4,21 +4,23 @@
  * Grafana 스타일 메인 대시보드. 실데이터(getSummary + getSeats)를 ECharts 패널로 그린다.
  * 섹션별 그리드, 패널은 드래그로 재배치(DragGrid). 사진의 레이아웃을 따른다.
  *
- * 데이터 갭(LOC·Edit 수락/거부·Active Time)은 백엔드 미수집이라 넣지 않고, 실제 수집 지표
- * (토큰 I/O·캐시·세션·도구·에이전트·스킬)로 채운다 — 가짜 숫자 금지.
+ * LOC·편집 수락/거부는 **백엔드가 실제로 수집한다**(실측: 추가 26,328줄 · 수락 279 · 거부 1).
+ * 다만 아직 보고가 없는 팀이나 구버전 수집기에서는 그 축이 통째로 비어 온다. 그때 0 을 그리면
+ * 화면이 "안 썼다"고 **단정**하고(도넛은 합계 0 을 균등 분할로 그려 가짜 비율까지 만든다),
+ * 그래서 값이 없는 패널은 차트 대신 `미수집` 안내를 띄운다 — 가짜 숫자 금지.
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { getSummary, getSeats, getDev, getPlatforms } from '@/lib/api';
 import { softly, useResource } from '@/hooks/useResource';
 import type { Dev, PlatformsResponse, Seats, Summary } from '@/lib/types';
-import { ErrorState, Loading } from '@/components/ui';
+import { Empty, ErrorState, Loading } from '@/components/ui';
 import PlatformFilter from '@/components/platform/PlatformFilter';
 import PlatformSummary from '@/components/platform/PlatformSummary';
 import { COST_DISCLAIMER, COST_LABEL, COST_WHY } from '@/lib/costLabels';
 import EChart from '@/components/charts/EChart';
 import DragGrid, { resetLayout, type GridItem } from './DragGrid';
-import { areaOption, gaugeOption, donutOption, barOption, short, fmtInt } from './options';
+import { areaOption, gaugeOption, donutOption, barOption, hasValues, hasSeriesValues, short, fmtInt } from './options';
 import ChartBuilder from './ChartBuilder';
 import CustomPanelView from './CustomPanelView';
 import {
@@ -36,6 +38,30 @@ interface Data {
 
 const usd = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+/*
+ * ── 상단 액션 슬롯(#head-actions) ────────────────────────────────────────
+ *
+ * 이 노드는 우리가 아니라 셸(components/Dashboard.tsx)이 렌더한다. 그래서 이 탭의 첫 렌더에는
+ * 아직 DOM 에 없고 커밋 뒤에야 잡힌다. 이펙트에서 setState 로 잡으면 렌더가 한 번 더 돌면서 그
+ * 사이 한 프레임 동안 버튼 없는 헤더가 보인다(react-hooks/set-state-in-effect).
+ *
+ * DOM 은 우리 밖의 저장소다 — Dashboard.tsx 가 쿠키·해시를 읽는 방법을 그대로 쓴다.
+ * useSyncExternalStore 는 구독을 붙인 직후 스냅샷을 한 번 다시 확인하므로, 커밋으로 막 생긴
+ * 슬롯을 그 자리에서 잡아낸다. getElementById 는 같은 노드에 같은 참조를 주므로 스냅샷이
+ * 안정적이다(매번 새 값을 주면 무한 렌더가 된다).
+ */
+const readHeadSlot = (): HTMLElement | null =>
+  (typeof document === 'undefined' ? null : document.getElementById('head-actions'));
+
+function subscribeHeadSlot(onChange: () => void): () => void {
+  // 이미 있으면 관찰할 것이 없다 — 셸이 사는 동안 이 노드는 교체되지 않는다(보통 이 경로).
+  if (readHeadSlot()) return () => {};
+  // 아직 없다면 생길 때까지만 지켜보고 끊는다. 상시 관찰이 아니라 비용이 남지 않는다.
+  const mo = new MutationObserver(() => { if (readHeadSlot()) { mo.disconnect(); onChange(); } });
+  mo.observe(document.body, { childList: true, subtree: true });
+  return () => mo.disconnect();
+}
+
 /* ── 패널 껍데기(드래그 핸들 = 제목바) ── */
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -45,6 +71,46 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
     </div>
   );
 }
+/*
+ * 값이 없는 패널의 자리.
+ *
+ * ① **차트가 쓰던 높이를 그대로 지킨다** — 값이 들어오고 나갈 때 그리드가 튀면 사람은 그
+ *    움직임을 데이터 변화로 읽는다.
+ * ② 색이 아니라 **글자**로 상태를 말한다(components/platform/SupportBadge.tsx 와 같은 규율).
+ * ③ 왜 비었는지를 함께 남긴다 — 이유 없는 빈 칸은 "버그인가?"로 읽힌다.
+ *
+ * 문구의 `미수집` 은 이 레포의 어휘다: 값이 존재하지 않는 `해당 없음` 과 달리, **올 수 있는
+ * 값인데 오지 않았다**는 뜻이다(README 의 미수집/해당 없음 구분).
+ */
+function NoData({ height, why }: { height: number; why: string }) {
+  return (
+    <div style={{ height, display: 'grid', placeItems: 'center', textAlign: 'center', padding: '0 12px' }}>
+      {/* 이유는 .help(작고 흐린 보조 문구) — 상태어와 크기·명도로 위계를 만든다. 폭은 measure 로
+          묶는다: 넓은 패널에서 한 줄이 화면 끝까지 늘어나면 읽는 눈이 줄을 잃는다. */}
+      <div style={{ maxWidth: '34ch' }}>
+        <Empty><b>미수집</b></Empty>
+        <p className="help" style={{ marginTop: 2 }}>{why}</p>
+      </div>
+    </div>
+  );
+}
+
+/*
+ * 도넛 패널 — **네 곳(편집 결정 · 도구 · 서브에이전트 · 스킬)이 전부 이 경로를 탄다.**
+ * 한 곳만 고치면 나머지가 같은 사고를 그대로 낸다(합계 0 → echarts 균등 분할, 빈 배열 → 회색 링).
+ */
+function DonutPanel({
+  title, rows, why, height = 190,
+}: { title: string; rows: { name: string; value: number }[]; why: string; height?: number }) {
+  return (
+    <Panel title={title}>
+      {hasValues(rows)
+        ? <EChart option={donutOption(rows)} height={height} />
+        : <NoData height={height} why={why} />}
+    </Panel>
+  );
+}
+
 function StatTile({ tone, k, v, s, title }: { tone: string; k: string; v: string; s?: string; title?: string }) {
   return (
     <div className={`gstat ${tone}`} title={title}>
@@ -62,6 +128,24 @@ function GaugeTile({ tone, label, value, color }: { tone: string; label: string;
     </div>
   );
 }
+/*
+ * 섹션 껍데기.
+ *
+ * ⚠ 이 컴포넌트는 **모듈 스코프에 있어야 한다.** GrafanaDash 의 렌더 함수 안에서 선언하면 매
+ * 렌더마다 새 타입이 되고, React 는 같은 자리를 다른 컴포넌트로 보아 섹션 서브트리를 통째로
+ * 언마운트·리마운트한다. 그러면 안에 있는 DragGrid 가 상태(드래그 순서·하이라이트)를 잃고
+ * DOM 노드가 새로 생긴다 — 화면에서는 패널이 깜빡이고 애니메이션이 끊긴다
+ * (react-hooks/static-components · test/grafana-layout.test.tsx 가 노드 동일성으로 잰다).
+ */
+function Sect({ title, gid, cls, items }: { title: string; gid: string; cls?: string; items: GridItem[] }) {
+  return (
+    <section className="gsect">
+      <div className="gsect-h"><span className="caret">▾</span> {title}</div>
+      <DragGrid gridId={gid} className={cls} items={items} />
+    </section>
+  );
+}
+
 function BarTable({ rows, unit, fmt }: { rows: { label: string; value: number }[]; unit: string; fmt: (n: number) => string }) {
   const max = Math.max(...rows.map((r) => r.value), 1);
   const palette = ['#5794f2', '#e0742f', '#73bf69', '#f2cc0c', '#b877d9', '#37872d', '#e0523e', '#8ab8ff'];
@@ -101,12 +185,25 @@ export default function GrafanaDash() {
   const [builderOpen, setBuilderOpen] = useState(false);
   const [prefill, setPrefill] = useState<Partial<Omit<CustomPanel, 'id'>> | undefined>(undefined);
   // 상단 액션 버튼은 공용 헤더(content-head)의 우측 슬롯에 포털로 얹는다 — 제목 라인과 같은 줄.
-  const [headSlot, setHeadSlot] = useState<HTMLElement | null>(null);
-  useEffect(() => { setHeadSlot(document.getElementById('head-actions')); }, []);
+  const headSlot = useSyncExternalStore(subscribeHeadSlot, readHeadSlot, () => null);
 
-  // 추적/관측 탭의 '그래프로 추가'로 넘어온 프리필이 있으면 빌더를 연다.
+  /*
+   * 추적/관측 탭의 '그래프로 추가'로 넘어온 프리필이 있으면 빌더를 연다.
+   *
+   * ⚠ 여기만 set-state-in-effect 예외다 — 규칙이 요구하는 두 대안이 **둘 다 이 자리에서 틀린다.**
+   *   ① useState 초기화 함수: takeBuilderPrefill 은 읽으면서 지우는 소비형 읽기다. 렌더 중
+   *      부수효과라 StrictMode(next.config.mjs 의 reactStrictMode: true)가 초기화 함수를 두 번
+   *      부르면 두 번째는 이미 비어 있어 프리필이 조용히 사라진다. 정적 export 라
+   *      프리렌더에서도 한 번 도는데, 그때는 localStorage 가 없어 서버·클라이언트 결과가
+   *      갈리고 하이드레이션이 어긋난다.
+   *   ② useSyncExternalStore: 소비형 읽기는 스냅샷이 될 수 없다(읽을 때마다 값이 달라진다).
+   * 저장소를 비파괴 읽기로 바꾸는 것이 정공법이지만 lib/customPanels.ts 는 이 웨이브에서 내
+   * 소유가 아니다. 대가는 빌더가 한 프레임 늦게 열리는 것뿐이고 — 그 프레임에 틀린 데이터가
+   * 보이지는 않는다(모달이 아직 없을 뿐이다).
+   */
   useEffect(() => {
     const p = takeBuilderPrefill();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 소비형(read-and-clear) 읽기: 위 주석 참조
     if (p) { setPrefill(p); setBuilderOpen(true); }
   }, []);
 
@@ -167,26 +264,36 @@ export default function GrafanaDash() {
     { id: 'cost-rate', node: <Panel title="일별 토큰 추이"><EChart option={areaOption(x, [{ name: '토큰', color: '#73bf69', data: days.map((d) => d.input + d.output + d.cacheRead + d.cacheCreate) }], short)} height={180} /></Panel> },
   ];
 
-  // 개발 지표(LOC·편집 결정) — 실제 수집값. dev 가 null 이거나 값이 0 이면 해당 패널은 대체 없이 안내.
+  /*
+   * 개발 지표(LOC·편집 결정) — 실제 수집값이다. dev 가 null 이거나 그 축이 전부 0 이면
+   * **대체 없이 안내**한다(차트를 다른 지표로 바꿔치기하지 않는다 — 그 자리에 무엇이 없는지가
+   * 정보다). LOC 면적 차트도 같은 판정을 받는다: 전부 0 인 계열은 0 평선을 그려 "추가 0줄"이라고
+   * 단정하는데, 서버 응답만으로는 그것이 관측된 0 인지 미수집인지 가릴 수 없기 때문이다.
+   */
   const devDays = [...(dev?.byDay ?? [])].reverse();
   const devX = devDays.map((d) => d.day.slice(5));
   const dt = dev?.totals;
+  const locSeries = [
+    { name: '추가', color: '#73bf69', data: devDays.map((d) => d.linesAdded) },
+    { name: '삭제', color: '#e0523e', data: devDays.map((d) => d.linesRemoved) },
+  ];
   const dev2: GridItem[] = [
     { id: 'dev-loc', node: (
       <Panel title="일별 LOC (추가 · 삭제)">
-        <EChart option={areaOption(devX, [
-          { name: '추가', color: '#73bf69', data: devDays.map((d) => d.linesAdded) },
-          { name: '삭제', color: '#e0523e', data: devDays.map((d) => d.linesRemoved) },
-        ], fmtInt)} height={180} />
+        {hasSeriesValues(locSeries)
+          ? <EChart option={areaOption(devX, locSeries, fmtInt)} height={180} />
+          : <NoData height={180} why="이 기간에 보고된 LOC 변경이 없습니다. 구버전 수집기이거나 아직 보고가 없는 팀입니다 — 0 줄을 썼다는 뜻이 아닙니다." />}
       </Panel>
     ) },
     { id: 'dev-edit', node: (
-      <Panel title="코드 편집 결정 (수락 · 거부)">
-        <EChart option={donutOption([
+      <DonutPanel
+        title="코드 편집 결정 (수락 · 거부)"
+        rows={[
           { name: '수락', value: dt?.editsAccepted ?? 0 },
           { name: '거부', value: dt?.editsRejected ?? 0 },
-        ])} height={190} />
-      </Panel>
+        ]}
+        why="이 기간에 보고된 편집 수락·거부가 없습니다. 구버전 수집기이거나 아직 보고가 없는 팀입니다 — 0 건이라는 뜻이 아닙니다."
+      />
     ) },
     { id: 'dev-io', node: <Panel title="토큰 입출력 추이"><EChart option={areaOption(x, [{ name: '입력', color: '#5794f2', data: days.map((d) => d.input) }, { name: '출력', color: '#73bf69', data: days.map((d) => d.output) }], short)} height={180} /></Panel> },
   ];
@@ -195,10 +302,13 @@ export default function GrafanaDash() {
     { id: 'cache-usage', node: <Panel title="일별 캐시 읽기 · 생성"><EChart option={areaOption(x, [{ name: '캐시읽기', color: '#73bf69', data: days.map((d) => d.cacheRead) }, { name: '캐시생성', color: '#5794f2', data: days.map((d) => d.cacheCreate) }], short)} height={200} /></Panel> },
   ];
 
+  /* 세 도넛도 편집 결정과 같은 경로다 — 비면 빈 회색 링 대신 무엇이 없는지 말한다. */
+  const notReported = (what: string) =>
+    `이 기간에 보고된 ${what} 기록이 없습니다. 구버전 수집기이거나 이 축을 기록하지 않는 플랫폼입니다.`;
   const tools: GridItem[] = [
-    { id: 'tool-usage', node: <Panel title="도구 사용"><EChart option={donutOption(donutRows(summary.top?.tool).slice(0, 10))} height={190} /></Panel> },
-    { id: 'tool-agents', node: <Panel title="서브에이전트"><EChart option={donutOption(donutRows(summary.top?.agent))} height={190} /></Panel> },
-    { id: 'tool-skills', node: <Panel title="스킬"><EChart option={donutOption(donutRows((summary.top?.skill ?? []).map((k) => ({ key: k.key.replace(/^superpowers:/, ''), count: k.count }))))} height={190} /></Panel> },
+    { id: 'tool-usage', node: <DonutPanel title="도구 사용" rows={donutRows(summary.top?.tool).slice(0, 10)} why={notReported('내장 도구')} /> },
+    { id: 'tool-agents', node: <DonutPanel title="서브에이전트" rows={donutRows(summary.top?.agent)} why={notReported('서브에이전트')} /> },
+    { id: 'tool-skills', node: <DonutPanel title="스킬" rows={donutRows((summary.top?.skill ?? []).map((k) => ({ key: k.key.replace(/^superpowers:/, ''), count: k.count })))} why={notReported('스킬')} /> },
   ];
 
   const rates: GridItem[] = [
@@ -211,13 +321,6 @@ export default function GrafanaDash() {
   const top: GridItem[] = [
     { id: 'top-tools', node: <Panel title="상위 도구 (호출 수)"><EChart option={barOption(topTools, fmtInt)} height={Math.max(120, topTools.length * 30)} /></Panel> },
   ];
-
-  const Sect = ({ title, gid, cls, items }: { title: string; gid: string; cls?: string; items: GridItem[] }) => (
-    <section className="gsect">
-      <div className="gsect-h"><span className="caret">▾</span> {title}</div>
-      <DragGrid gridId={gid} className={cls} items={items} />
-    </section>
-  );
 
   // '내 그래프' — 사용자가 만든 커스텀 패널. 각 패널에 삭제 버튼.
   const customItems: GridItem[] = customPanels.map((p) => ({

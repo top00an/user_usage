@@ -37,6 +37,35 @@ const maxLineBytes = 16 * 1024 * 1024
 // 인자(command-args)는 정책상 절대 남기지 않는다.
 var slashRe = regexp.MustCompile(`<command-name>\s*(/?[A-Za-z0-9:_.-]+)`)
 
+/*
+ * 모델 이름 자리의 자리표시자.
+ *
+ * Claude Code 는 중단·오류처럼 **모델이 관여하지 않은 턴**의 model 자리에 `<synthetic>` 을
+ * 직접 쓴다(그 턴의 usage 는 전부 0). 이름이 아니라 "이름이 없다"는 표시다.
+ *
+ * 서버(`go/internal/intake`)가 최종 경계이고 거기서도 접는다 — 구버전 수집기가 계속 밀어
+ * 넣으므로 서버만이 유일하게 빠뜨릴 자리가 없는 지점이다. 그런데도 여기서 또 접는 이유는
+ * **여기서만 고칠 수 있는 것이 하나 있어서**다: `sa.model` 은 "마지막으로 본 모델"이고
+ * tool_result 오류가 그 버킷에 달린다. 중단 턴이 그 자리를 차지하면 그 뒤의 도구 오류가
+ * 실재하는 모델에서 떨어져 나가고, 서버는 집계만 보므로 그 귀속을 되돌릴 수 없다.
+ * 대표 모델(dominantModel)도 마찬가지다 — 토큰 0 인 자리표시자가 대표가 되어선 안 된다.
+ *
+ * 판정을 `<synthetic>` 한 값이 아니라 꺾쇠로 감싼 값 전체로 두는 이유는 서버 쪽 주석과 같다:
+ * 실제 과금 ID 에는 `<`·`>` 가 없으므로 이 모양은 전부 자리표시자다. 두 규칙은 같아야 한다.
+ */
+var placeholderModelRe = regexp.MustCompile(`^<[^<>]*>$`)
+
+// normModel 은 자리표시자를 **빈 값**으로 접는다. 버리는 것이 아니라 "모른다"로 되돌리는
+// 것이다 — 빈 모델의 처리 규칙(버킷은 '(미상)', 대표 모델 후보에서 제외)은 이미 이 파일에
+// 한 벌씩 있고, 그 자리로 합류시킨다. 턴·토큰·카운터는 그대로 센다.
+func normModel(s string) string {
+	s = strings.TrimSpace(s)
+	if placeholderModelRe.MatchString(s) {
+		return ""
+	}
+	return s
+}
+
 // ── 파싱 대상 모양 ────────────────────────────────────────────────────────────
 //
 // jsonl 스키마 전체를 모델링하지 않는다 — 매핑에 쓰는 필드만 좁게 받는다. 모르는 필드는
@@ -221,7 +250,9 @@ func (sa *sessionAgg) addAssistant(m *rawMessage, ts string) {
 		return // 과금 턴이 아니다(예: thinking-only 조각)
 	}
 	u := m.Usage
-	model := m.Model
+	// 자리표시자는 여기서 빈 값이 된다 — 그래야 sa.model(도구 오류 귀속)과 대표 모델을
+	// 빼앗지 않는다. 아래 합계·턴 카운트는 모델과 무관하게 그대로 센다.
+	model := normModel(m.Model)
 	if model != "" {
 		sa.model = model
 	}

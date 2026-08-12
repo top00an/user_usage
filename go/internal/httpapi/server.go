@@ -41,6 +41,15 @@ type rctx struct {
 	// viewer 는 member 스코프에서 이 요청이 볼 수 있는 유일한 사용자다(RBAC). 빈 문자열이면
 	// 제한 없음(admin). 게이트가 member 조회를 이 이름으로 강제한다.
 	viewer string
+	// self 는 이 요청을 낸 **사람**이다(로그인 세션 또는 개인 열람 토큰). 관리자 토큰(cfg)·
+	// 인테이크에는 사람 신원이 없어 빈 문자열이고, 셀프서비스 라우트는 그때 403 을 낸다.
+	self string
+	// via 는 자격의 출처다(header|cookie|session). 셀프서비스 상태변경을 로그인 세션으로만
+	// 좁히는 판정이 이 값을 본다.
+	via string
+	// keyUser 는 **인제스트 키에 묶인 사용자**다. 비어 있지 않으면 인테이크 귀속에서 무조건
+	// 이긴다(동결 ①) — payload.user 도 machine 매핑도 이것을 덮지 못한다.
+	keyUser string
 }
 
 // memberSelfEndpoints — member(개인) 스코프가 접근할 수 있는 조회 화이트리스트. 전부 user
@@ -51,6 +60,22 @@ var memberSelfEndpoints = map[string]bool{
 	"/api/usage/series":       true,
 	"/api/usage/distribution": true,
 	"/api/usage/quality":      true,
+}
+
+/*
+ * memberSelfKeys — 로그인한 사람이 **자기** 인제스트 키를 관리하는 경로(동결 ②).
+ *
+ * member 도 써야 하므로 위 조회 화이트리스트와 별도로 둔다. 여기 있는 경로는 상태변경을
+ * 허용하되 **로그인 세션(usage_sess)일 때만** 태운다 — 개인 열람 토큰(Bearer)은 이름 그대로
+ * 조회 자격이고, 그 토큰에 키 발급 권한까지 얹으면 조회용으로 나눠 준 토큰이 보고 자격을
+ * 만들어 내는 자리가 된다.
+ *
+ * "남의 키는 보이지도 해지되지도 않는다"는 **라우트가** 진다(c.self 로 스코프를 건다) —
+ * 게이트는 여기까지 통과시키고, 무엇이 자기 것인지는 소유자를 아는 쪽이 정한다.
+ */
+var memberSelfKeys = map[string]bool{
+	"/api/me/keys":        true,
+	"/api/me/keys/revoke": true,
 }
 
 // route 는 `내가 응답했다` 를 bool 로, 예상 못 한 실패를 error 로 돌려준다.
@@ -92,8 +117,18 @@ func New(cfg config.Config) http.Handler {
 	if cfg.ReadOnly {
 		s.routes = []route{s.routeAnalytics, s.readOnlyAdmin}
 	} else {
-		// routeOnboarding 은 /api/admin 을 소유한다(usage.go 의 /api/usage 와 겹치지 않는다).
-		s.routes = []route{s.routeIntake, s.routeAnalytics, s.routeOnboarding, s.routeAdmin}
+		/*
+		 * routeOnboarding 은 /api/admin 을 소유하고 **안 걸리면 404 를 직접 낸다** — 그래서
+		 * 같은 접두사를 나눠 쓰는 routeAdminUsers(/api/admin/users…)가 반드시 그보다 **앞**이다.
+		 * 뒤로 가면 사용자 관리 API 가 통째로 404 가 된다(analytics 가 admin 앞인 것과 같은 규율).
+		 *
+		 * routeSelfKeys 는 /api/me 를 소유한다 — 누구와도 접두사가 겹치지 않는다.
+		 */
+		s.routes = []route{
+			s.routeIntake, s.routeAnalytics,
+			s.routeSelfKeys, s.routeAdminUsers, s.routeOnboarding,
+			s.routeAdmin,
+		}
 	}
 	return s
 }
@@ -107,6 +142,15 @@ func New(cfg config.Config) http.Handler {
 var resolveIngestKey = org.Resolve
 
 /*
+ * ingestKeyUsername 은 **해석에 성공한** 키에 묶인 사용자를 읽는다(귀속 우선순위 ①의 재료).
+ *
+ * 왜 resolveIngestKey 와 합치지 않았나: 위 훅은 "접두사 없는 Bearer 가 DB 를 몇 번 때렸는가"를
+ * 세는 자리라 시그니처가 계약이다(ingestkey_prefix_test.go). 그리고 이 조회는 **인증 성공 뒤**
+ * 에만 돈다 — 무인증 브루트포스는 여기까지 못 오므로 그 증폭 표면은 늘지 않는다.
+ */
+var ingestKeyUsername = org.KeyUsername
+
+/*
  * ingestKeyAuth 는 해석된 인제스트 키를 이 배포의 자격으로 접는다. 두 모드가 갈리는 **유일한**
  * 지점이라 여기 한 곳에 둔다:
  *
@@ -115,8 +159,10 @@ var resolveIngestKey = org.Resolve
  *     RLS 가 없는 배포에서 org 별 tenant 가 조용히 생기는데, 저장 계층이 그것을 보지 않으므로
  *     보고는 남의 tenant 로 들어가고 대시보드에서는 사라진 것처럼 보인다.
  */
-func (s *server) ingestKeyAuth(keyTenant string) *Auth {
-	a := &Auth{Via: ViaHeader, Scope: ScopeIntake, IngestKey: true}
+// keyUser 는 그 키에 묶인 사용자다(없으면 빈 문자열 — 레거시·org 공용 키). 모드와 무관하게
+// 싣는다: 귀속은 테넌트 격리와 다른 축이고, 단일테넌트에서도 "누가 보고했는가"는 같은 문제다.
+func (s *server) ingestKeyAuth(keyTenant, keyUser string) *Auth {
+	a := &Auth{Via: ViaHeader, Scope: ScopeIntake, IngestKey: true, Username: keyUser}
 	if s.cfg.MultiTenant {
 		a.Tenant = keyTenant
 	}
@@ -228,7 +274,18 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				logf("인제스트 키 해석 실패: %v", err)
 			}
 			if err == nil && ok {
-				auth = s.ingestKeyAuth(t)
+				/*
+				 * 키에 묶인 사용자를 함께 싣는다(귀속 우선순위 ①). 조회가 실패하면 **묶이지
+				 * 않은 것으로 접는다** — 여기서 401 을 내면 DB 딸꾹질 하나로 전 팀원의 보고가
+				 * 사라지고, 종전(키에 사용자가 없던 시절) 동작으로 떨어지는 쪽이 안전하다.
+				 * 사실이 조용히 사라지지는 않게 stderr 에 남긴다.
+				 */
+				keyUser, uerr := ingestKeyUsername(r.Context(), bearer)
+				if uerr != nil {
+					logf("인제스트 키 사용자 조회 실패(귀속은 종전 경로로 접는다): %v", uerr)
+					keyUser = ""
+				}
+				auth = s.ingestKeyAuth(t, keyUser)
 			}
 		}
 	}
@@ -248,11 +305,24 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// member(개인) 스코프 정책: 조회 전용 + self 화이트리스트 + user=본인 강제(deny-by-default).
 	if auth.Scope == ScopeMember {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		mutating := r.Method != http.MethodGet && r.Method != http.MethodHead
+		switch {
+		case memberSelfKeys[p]:
+			/*
+			 * 셀프서비스 키 관리(동결 ②) — member 도 자기 키를 발급·해지할 수 있어야 한다.
+			 * 다만 **상태변경은 로그인 세션(usage_sess)만** 태운다. 개인 열람 토큰은 조회
+			 * 자격이고(패키지 주석 ②'), 그것으로 키를 발급할 수 있으면 나눠 준 조회 토큰이
+			 * 보고 자격을 찍어 내는 자리가 된다.
+			 */
+			if mutating && auth.Via != ViaSession {
+				sendError(tw, http.StatusForbidden,
+					"개인 열람 토큰으로는 상태변경을 할 수 없습니다 — 로그인 후 다시 시도하세요")
+				return
+			}
+		case mutating:
 			sendError(tw, http.StatusForbidden, "개인 열람 토큰으로는 상태변경을 할 수 없습니다")
 			return
-		}
-		if !memberSelfEndpoints[p] {
+		case !memberSelfEndpoints[p]:
 			sendError(tw, http.StatusForbidden,
 				"개인 열람 토큰은 자기 데이터만 볼 수 있습니다 — 전사·팀 화면은 관리자 토큰이 필요합니다")
 			return
@@ -288,7 +358,15 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r = r.WithContext(tenant.With(r.Context(), tenantID))
-	c := &rctx{path: p, query: r.URL.Query(), scope: auth.Scope}
+	c := &rctx{path: p, query: r.URL.Query(), scope: auth.Scope, via: auth.Via}
+	// 사람 신원. 인테이크는 사람이 아니므로 여기 싣지 않는다 — 그쪽의 Username 은 키에 묶인
+	// 귀속 대상이지 "요청한 사람"이 아니고, 둘을 같은 칸에 두면 셀프서비스 라우트가
+	// 인제스트 키를 로그인으로 착각한다.
+	if auth.Scope != ScopeIntake {
+		c.self = auth.Username
+	} else {
+		c.keyUser = auth.Username
+	}
 	// member(RBAC): user 필터를 **본인 이름으로 덮어쓴다.** 클라이언트가 ?user=남 을 보내도
 	// 자기 것만 나온다 — 화이트리스트 엔드포인트가 전부 user 필터를 존중하므로 이 한 줄이
 	// "자기 데이터만" 을 강제한다(위 게이트가 교차 뷰는 이미 403 으로 막았다).

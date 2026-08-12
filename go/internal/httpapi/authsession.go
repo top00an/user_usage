@@ -22,9 +22,12 @@ import (
  * 하고 /me 는 스스로 401 을 낸다. 발급된 세션은 게이트가 usage_sess 쿠키로 다시 해석해
  * Auth{Via:session, Scope:role} 로 인식한다(sessionAuth).
  *
- * CSRF: 쿠키 자격이므로 세션은 조회만 태운다(admin 세션도 상태변경은 Bearer 토큰이 필요하다 —
- * 기존 usage_tok 쿠키 규칙과 동일). SameSite=Strict 로 크로스사이트 전송을 막아 로그아웃 POST 를
- * 예외로 열어도 표면이 좁다.
+ * CSRF: 세션 쿠키는 **HttpOnly + SameSite=Strict 로만** 발급된다(setSessionCookie). 브라우저가
+ * 크로스사이트 요청에 싣지 않으므로 CSRF-safe 이고, 그래서 **상태변경을 허용한다** — 화면이
+ * 사용자 관리·키 발급을 세션만으로 할 수 있는 근거다(게이트 판정은 server.go 가 소유한다).
+ *
+ * ⚠ 레거시 usage_tok 쿠키(ViaCookie)는 다르다. 그쪽은 게이트 화면이 document.cookie 로 직접
+ *   쓰던 값이라 SameSite 보장이 없어 **조회만** 태운다. 둘을 같은 규칙으로 묶지 말 것.
  */
 
 const (

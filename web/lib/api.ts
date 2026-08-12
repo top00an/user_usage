@@ -17,6 +17,7 @@
  * 틀린 쪽으로 넘어간다 — 분기는 문자열이 아니라 status 로 한다(failureKind).
  */
 import type {
+  AdminUsers,
   Coverage,
   Dispatch,
   Distribution,
@@ -31,6 +32,9 @@ import type {
   SessionsResponse,
   Summary,
   Teams,
+  UserDeletion,
+  UserMutation,
+  UserRole,
 } from './types';
 
 /**
@@ -299,12 +303,19 @@ export function seriesQuery(p: SeriesParams): string {
 export const getSeries = (p: SeriesParams, o?: RequestOptions) =>
   request<SeriesResponse>(seriesQuery(p), o);
 
-/* ── 관리자: 인제스트 키(연동/온보딩) ──────────────────────────────────────
+/* ── 인제스트 키 ──────────────────────────────────────────────────────────
  *
- * 동결 계약(백엔드와 공유 · credentials:'include'):
- *   POST /api/admin/keys             → 200 {key:"uu_ing_…", id, createdAt}   ※ 평문 key 는 이 응답 1회뿐
- *   GET  /api/admin/keys             → 200 {keys:[{id, masked, createdAt, revokedAt: null|str}]}
- *   POST /api/admin/keys/revoke {id} → 204
+ * 표면이 **둘**이다. 접두사부터 갈라져 있어 한쪽을 다른 쪽으로 착각할 수 없다:
+ *
+ *   셀프서비스(로그인한 누구나 · member 포함)  /api/me/keys*
+ *     POST /api/me/keys             → 200 IssuedKey      ※ 소유자는 언제나 요청자 본인
+ *     GET  /api/me/keys             → 200 {keys:[…]}     ※ **자기 키만**. 남의 것은 서버가 안 준다
+ *     POST /api/me/keys/revoke {id} → 204                ※ 남의 키·없는 키 모두 404(문구 동일)
+ *
+ *   관리자(전체 현황)                          /api/admin/keys*
+ *     POST /api/admin/keys {username?} → 200 IssuedKey   ※ username 을 비우면 결속 없는 org 공용 키
+ *     GET  /api/admin/keys             → 200 {keys:[…]}  ※ tenant 전체
+ *     POST /api/admin/keys/revoke {id} → 204
  *
  * 평문 key 는 **여기서도 어디서도 저장하지 않는다** — 발급 응답을 그대로 호출부(화면)에 넘기고,
  * 화면은 메모리에만 들고 표시한다. 목록은 masked 만 다룬다.
@@ -314,6 +325,8 @@ export interface IssuedKey {
   key: string;
   id: string;
   createdAt: string;
+  /** 묶인 사람. 빈 문자열이면 결속 없는 org 공용 키다. */
+  username: string;
 }
 
 export interface KeyListItem {
@@ -323,19 +336,76 @@ export interface KeyListItem {
   createdAt: string;
   /** null = 활성. 문자열이면 그 시각에 해지됨. */
   revokedAt: string | null;
+  /**
+   * 묶인 사람. **null 이면 결속 없는(레거시·org 공용) 키**다 — 그 키로 들어온 사용량은
+   * 보고한 PC 가 주장하는 이름으로 잡힌다. 화면은 이 null 을 반드시 ⚠ 로 드러낸다.
+   */
+  username: string | null;
 }
 
 export interface KeyList {
   keys: KeyListItem[];
 }
 
-/** 새 인제스트 키를 발급한다. 응답의 평문 key 는 이 한 번뿐이다(호출부가 즉시 표시). */
-export const issueKey = (o?: RequestOptions) =>
-  request<IssuedKey>('/api/admin/keys', { ...o, method: 'POST' });
+/* 셀프서비스 — 자기 키. */
+
+/** 내 인제스트 키를 발급한다. 응답의 평문 key 는 이 한 번뿐이다(호출부가 즉시 표시). */
+export const issueMyKey = (o?: RequestOptions) =>
+  request<IssuedKey>('/api/me/keys', { ...o, method: 'POST' });
+
+export const listMyKeys = (o?: RequestOptions) =>
+  request<KeyList>('/api/me/keys', o);
+
+/** 204(본문 없음)로 답한다 — request 가 빈 본문을 견딘다. */
+export const revokeMyKey = (id: string, o?: RequestOptions) =>
+  request<void>('/api/me/keys/revoke', { ...o, method: 'POST', body: { id } });
+
+/* 관리자 — 전체 키 현황. */
+
+/**
+ * 관리자 대리발급.
+ *
+ * `username` 은 **필수 인자**다(빈 문자열 = 결속 없는 org 공용 키를 명시적으로 고른 것).
+ * 선택 인자로 두면 호출부가 아무 생각 없이 생략하고, 그 키의 사용량은 PC 이름으로 잡힌다 —
+ * 타입이 그 선택을 하게 만든다(api-admin 보고서 ④-6 이 화면에 넘긴 판단).
+ */
+export const issueKeyFor = (username: string, o?: RequestOptions) =>
+  request<IssuedKey>('/api/admin/keys', { ...o, method: 'POST', body: { username } });
 
 export const listKeys = (o?: RequestOptions) =>
   request<KeyList>('/api/admin/keys', o);
 
-/** 204(본문 없음)로 답한다 — request 가 빈 본문을 견딘다. */
 export const revokeKey = (id: string, o?: RequestOptions) =>
   request<void>('/api/admin/keys/revoke', { ...o, method: 'POST', body: { id } });
+
+/* ── 관리자: 사용자 관리 ──────────────────────────────────────────────────
+ *
+ * 동결 계약(api-admin 보고서 ⑤-A). 상태변경 자격은 로그인 세션 쿠키다 — 브라우저가 자동으로
+ * 싣는다(레거시 usage_tok 쿠키로는 403).
+ *
+ * **409 는 버그가 아니라 정상적인 거부**다(마지막 관리자 · 자기 강등 · 자기 삭제). 서버는
+ * 아무것도 바꾸지 않았으므로 화면 상태를 되돌리지 말고 서버 문구를 그대로 보여준다.
+ * 분기는 문구가 아니라 status 로 한다(failureKind) — 서버가 문구를 다듬는 날 조용히 틀리지
+ * 않게. 그래서 여기서는 문구를 해석하지 않고 ApiError 를 그대로 던진다.
+ */
+export const listAdminUsers = (o?: RequestOptions) =>
+  request<AdminUsers>('/api/admin/users', o);
+
+/** role 을 생략하면 서버가 최소 권한(member)으로 만든다 — 여기서도 넘기지 않는다. */
+export const createUser = (
+  body: { username: string; password: string; role?: UserRole },
+  o?: RequestOptions,
+) => request<UserMutation>('/api/admin/users', { ...o, method: 'POST', body });
+
+export const setUserRole = (username: string, role: UserRole, o?: RequestOptions) =>
+  request<UserMutation>('/api/admin/users/role', { ...o, method: 'POST', body: { username, role } });
+
+export const setUserPassword = (username: string, password: string, o?: RequestOptions) =>
+  request<UserMutation>('/api/admin/users/password', { ...o, method: 'POST', body: { username, password } });
+
+/** 빈 문자열이면 미배정으로 되돌린다. */
+export const setUserTeam = (username: string, team: string, o?: RequestOptions) =>
+  request<UserMutation>('/api/admin/users/team', { ...o, method: 'POST', body: { username, team } });
+
+export const deleteUser = (username: string, o?: RequestOptions) =>
+  request<UserDeletion>('/api/admin/users/delete', { ...o, method: 'POST', body: { username } });

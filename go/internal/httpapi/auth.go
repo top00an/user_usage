@@ -13,9 +13,12 @@ import (
 
 // 자격증명 판정 결과. 호출부가 둘을 **다르게** 취급한다.
 const (
-	ViaHeader  = "header"  // Authorization: Bearer
-	ViaCookie  = "cookie"  // usage_tok — 조회만 태운다(CSRF 표면 제거)
-	ViaSession = "session" // usage_sess — 사람 로그인 세션. 쿠키이므로 조회만 태운다(로그아웃 POST 는 게이트 앞에서 처리)
+	ViaHeader = "header" // Authorization: Bearer
+	ViaCookie = "cookie" // usage_tok — 조회만 태운다(CSRF 표면 제거)
+	// usage_sess — 사람 로그인 세션. HttpOnly+SameSite=Strict 로만 발급되므로 브라우저가
+	// 크로스사이트 요청에 안 실어 보낸다 → CSRF-safe 라 **상태변경을 허용한다**(게이트: server.go).
+	// ⚠ ViaCookie(레거시 usage_tok)와 다르다. 그쪽은 SameSite 보장이 없어 조회만 태운다.
+	ViaSession = "session"
 	//revive:disable-next-line
 	ScopeAdmin  = "admin"  // 열람 + 상태변경 (전사)
 	ScopeIntake = "intake" // POST /api/usage 하나만

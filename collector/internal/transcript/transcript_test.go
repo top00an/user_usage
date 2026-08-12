@@ -287,3 +287,87 @@ func TestSameSessionAcrossFiles(t *testing.T) {
 		t.Fatalf("버킷 수 %d, want 2", len(s.Series))
 	}
 }
+
+/*
+ * ── `<synthetic>` — 모델 이름 자리에 온 자리표시자 ────────────────────────────
+ *
+ * Claude Code 는 중단·오류 턴의 model 자리에 `<synthetic>` 을 직접 쓴다(usage 는 전부 0).
+ * 이름이 아니라 "이름이 없다"는 표시이므로 모델 축에 올리면 안 된다.
+ *
+ * 서버(intake)가 최종 경계이고 거기서도 접지만, 여기서 접어야만 고쳐지는 것이 하나 있다:
+ * **도구 오류의 귀속**이다. sa.model 은 "마지막으로 본 모델"이고 tool_result 오류가 그 버킷에
+ * 달리는데, 중단 턴이 그 자리를 차지하면 그 뒤의 도구 오류가 실재하는 모델에서 떨어져 나간다.
+ * 서버는 집계만 보므로 그 귀속을 되돌릴 수 없다.
+ */
+
+const synthetic = "<synthetic>"
+
+func TestSyntheticModelIsNotAModelName(t *testing.T) {
+	// 중단 턴 하나뿐인 세션 — 실측상 이 모양이 56개 중 22개였다.
+	line := `{"type":"assistant","timestamp":"2026-08-05T14:00:00.000Z","sessionId":"` + sid + `",` +
+		`"message":{"role":"assistant","model":"` + synthetic + `","usage":{` +
+		`"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}`
+
+	s := one(t, aggregate(t, sid, line))
+
+	// ① 모델 축에서 사라진다.
+	if s.Model == synthetic {
+		t.Fatalf("세션 대표 모델 = %q — 자리표시자가 모델 이름이 됐다", s.Model)
+	}
+	for _, b := range s.Series {
+		if b.Model == synthetic {
+			t.Fatalf("버킷 모델 = %q: %+v", b.Model, s.Series)
+		}
+	}
+	// ② 그 세션의 사용은 살아 있다 — 버킷은 '(미상)' 으로 남고 턴이 세어진다.
+	if s.Turns != 1 {
+		t.Fatalf("턴 수 %d, want 1 — 실재하는 턴을 버렸다", s.Turns)
+	}
+	if _, ok := findBucket(s, "2026-08-05T14", "(미상)"); !ok {
+		t.Fatalf("버킷이 '(미상)' 으로 남지 않았다: %+v", s.Series)
+	}
+}
+
+// 중단 턴이 실재하는 모델의 자리를 빼앗지 않는다 — 대표 모델도, 도구 오류 귀속도.
+func TestSyntheticDoesNotStealAttribution(t *testing.T) {
+	real := `{"type":"assistant","timestamp":"2026-08-05T14:00:00.000Z","sessionId":"` + sid + `",` +
+		`"message":{"role":"assistant","model":"claude-opus-5","usage":{"input_tokens":10,"output_tokens":20}}}`
+	synth := `{"type":"assistant","timestamp":"2026-08-05T14:10:00.000Z","sessionId":"` + sid + `",` +
+		`"message":{"role":"assistant","model":"` + synthetic + `","usage":{"input_tokens":0,"output_tokens":0}}}`
+	toolErr := `{"type":"user","timestamp":"2026-08-05T14:20:00.000Z","sessionId":"` + sid + `",` +
+		`"message":{"role":"user","content":[{"type":"tool_result","is_error":true}]}}`
+
+	s := one(t, aggregate(t, sid, real, synth, toolErr))
+
+	if s.Model != "claude-opus-5" {
+		t.Fatalf("대표 모델 = %q, want claude-opus-5 — 토큰 0 인 중단 턴이 대표를 빼앗았다", s.Model)
+	}
+	b, ok := findBucket(s, "2026-08-05T14", "claude-opus-5")
+	if !ok {
+		t.Fatalf("opus 버킷이 없다: %+v", s.Series)
+	}
+	if b.ToolErrors != 1 {
+		t.Fatalf("도구 오류가 실재하는 모델에 안 붙었다: %+v", s.Series)
+	}
+}
+
+// 판정은 **꺾쇠로 감싼 값 전체** 다 — 실제 과금 ID 에는 꺾쇠가 없다.
+func TestModelPlaceholderShape(t *testing.T) {
+	line := func(model string) string {
+		return `{"type":"assistant","timestamp":"2026-08-05T14:00:00.000Z","sessionId":"` + sid + `",` +
+			`"message":{"role":"assistant","model":"` + model + `","usage":{"input_tokens":1,"output_tokens":1}}}`
+	}
+	for _, m := range []string{"<synthetic>", "<none>", "<unknown>", "<>"} {
+		s := one(t, aggregate(t, sid, line(m)))
+		if s.Model != "" {
+			t.Fatalf("model=%q 가 접히지 않았다: %q", m, s.Model)
+		}
+	}
+	// 음성 대조 — 실재하는 모델 ID 와 꺾쇠가 일부만 있는 값은 그대로 둔다.
+	for _, m := range []string{"claude-opus-5", "nemotron", "a<b>c", "<partial", "partial>"} {
+		s := one(t, aggregate(t, sid, line(m)))
+		if s.Model != m {
+			t.Fatalf("정상 모델 %q 가 %q 로 바뀌었다", m, s.Model)
+		}
+	}
+}

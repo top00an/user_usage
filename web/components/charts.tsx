@@ -50,28 +50,33 @@ export function Donut({
   const slices = restSum > 0 ? [...head, { label: '기타', value: restSum }] : head;
 
   const r = 42, c = 2 * Math.PI * r;
-  let acc = 0;
+  /*
+   * 각 조각의 길이와 시작 오프셋(= 앞 조각들의 길이 합)을 **JSX 를 만들기 전에** 끝낸다.
+   * 예전에는 map 콜백 안에서 누산 변수(`acc`)를 더해 갔는데, 렌더가 만든 값을 렌더 도중에
+   * 다시 바꾸는 모양이라 React 컴파일러가 이 컴포넌트의 최적화를 포기한다
+   * (react-hooks/immutability). 조각은 여덟 개 이하라 누적합을 그때그때 더해도 비용이 없다.
+   */
+  const dashes = slices.map((s) => (s.value / total) * c);
+  const offsets = dashes.map((_, i) => dashes.slice(0, i).reduce((a, d) => a + d, 0));
   return (
     <div className="donut-wrap">
       <svg viewBox="0 0 120 120" className="donut" role="img" aria-label="구성비 도넛">
         <g transform="translate(60 60) rotate(-90)">
           {slices.map((s, i) => {
-            const frac = s.value / total;
-            const dash = c * frac;
-            const seg = (
+            const dash = dashes[i]!;
+            const lit = Math.max(dash - 1.5, 0); // 조각 사이 1.5 만큼의 틈 — 경계가 색에만 기대지 않게.
+            return (
               <circle
                 key={s.label}
                 r={r} cx={0} cy={0} fill="none"
                 stroke={i < 8 ? SERIES[i] : 'var(--fg-faint)'}
                 strokeWidth={16}
-                strokeDasharray={`${Math.max(dash - 1.5, 0)} ${c - Math.max(dash - 1.5, 0)}`}
-                strokeDashoffset={-acc}
+                strokeDasharray={`${lit} ${c - lit}`}
+                strokeDashoffset={-offsets[i]!}
               >
-                <title>{s.label}: {s.value.toLocaleString()}{unit} ({(frac * 100).toFixed(1)}%)</title>
+                <title>{s.label}: {s.value.toLocaleString()}{unit} ({((s.value / total) * 100).toFixed(1)}%)</title>
               </circle>
             );
-            acc += dash;
-            return seg;
           })}
         </g>
         <text x="60" y="58" className="donut-center-v">{total.toLocaleString()}</text>

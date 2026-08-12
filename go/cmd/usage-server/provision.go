@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/tscorp/user-usage/internal/db"
 	"github.com/tscorp/user-usage/internal/org"
@@ -17,7 +18,7 @@ import (
 //
 //	usage-server org  create --name "Acme"     org+tenant 생성 → id 출력
 //	usage-server org  list                       등록된 org 목록
-//	usage-server key  issue  --org <id>          인제스트 키 발급(평문 1회 출력)
+//	usage-server key  issue  --org <id> [--user <u>]  인제스트 키 발급(평문 1회 출력)
 //	usage-server key  revoke --key <plaintext>   키 해지
 //
 // DB 는 서버와 같은 env 를 본다(USAGE_DB_MODE·DATABASE_URL·USAGE_DATA_DIR). ADMIN 토큰 게이트를
@@ -25,14 +26,15 @@ import (
 const provisionUsage = `usage-server 프로비저닝:
   org create --name <이름>       org+tenant 생성
   org list                       org 목록
-  key issue --org <org-id>       인제스트 키 발급(평문 1회 출력)
+  key issue --org <org-id> [--user <u>]  인제스트 키 발급(평문 1회 출력 · --user 면 그 사람에 묶임)
   key revoke --key <평문키>       키 해지
   team assign --user <u> --team <t>   사용자를 팀에 배정
   team list                      팀 멤버십 목록
   member issue --user <u>        개인 열람 토큰 발급(자기 데이터만·평문 1회 출력)
   member list                    개인 토큰 목록
   member revoke --token <t>      개인 토큰 해지
-  user add -tenant <t> -username <u> -role <admin|member> [-password <p>]  사람 계정(ID/PW 로그인) 생성`
+  user add -tenant <t> -username <u> -role <admin|member> [-password <p>]  사람 계정(ID/PW 로그인) 생성
+  cleanup placeholder-models [--apply]  저장된 자리표시자 모델 라벨(<synthetic> 등) 정리(기본 dry-run)`
 
 func provision(args []string) int {
 	if len(args) == 0 {
@@ -64,6 +66,10 @@ func provision(args []string) int {
 	case "user":
 		// 사람 계정(ID/PW). -tenant 플래그로 테넌트를 직접 정하므로 provision 의 기본 ctx 를 쓰지 않는다.
 		return userCmd(d, os.Stdout, args[1:])
+	case "cleanup":
+		// 저장된 데이터 정리. **자동 실행 경로가 아니다** — 사람이 명시적으로 부르는 자리이고,
+		// 기본값은 dry-run 이다(maintenance.go).
+		return cleanupCmd(ctx, d, os.Stdout, args[1:])
 	default:
 		fmt.Fprintln(os.Stderr, provisionUsage)
 		return 2
@@ -244,6 +250,63 @@ func orgCmd(ctx context.Context, d db.DB, out io.Writer, args []string) int {
 	}
 }
 
+/*
+ * requireUserForKey 는 키를 사람에게 묶기 **전에** 그 계정이 실재하는지 본다. 통과면 0,
+ * 거부면 종료코드(!=0)를 돌려주고 사유를 stderr 로 낸다(호출부가 그대로 반환한다).
+ *
+ * tenant 를 org 에서 다시 읽는 이유: auth_users 는 tenant 로 격리되지만(pg RLS · 0034)
+ * orgs·ingest_keys 는 아니다(0038 의 주석이 단일 출처). CLI 의 기본 ctx tenant(default)로
+ * 조회하면 멀티테넌트 호스트에서 **엉뚱한 테넌트의 명부**를 보게 된다 — 실재하는 사람이
+ * 없다고 거부되거나, 남의 테넌트에 있는 이름이 통과한다.
+ */
+func requireUserForKey(ctx context.Context, d db.DB, orgID, username string) int {
+	tnt, ok, err := orgTenant(ctx, d, orgID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "key issue 실패: %v\n", err)
+		return 1
+	}
+	if !ok {
+		fmt.Fprintf(os.Stderr, "key issue: 알 수 없는 org %q — `org list` 로 id 를 확인해라\n", orgID)
+		return 1
+	}
+	utx := tenant.With(ctx, tnt)
+	if err := store.Init(utx, d); err != nil {
+		fmt.Fprintf(os.Stderr, "key issue: store 초기화 실패: %v\n", err)
+		return 1
+	}
+	_, found, err := store.GetUser(utx, username)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "key issue 실패: %v\n", err)
+		return 1
+	}
+	if !found {
+		// 조용히 만들지 않는다. 무엇이 틀렸고 다음에 뭘 해야 하는지까지 말한다.
+		fmt.Fprintf(os.Stderr,
+			"key issue: 사용자 %q 가 tenant %q 에 없다 — 오타이거나 계정이 아직 없다.\n"+
+				"  먼저 계정을 만들고 다시 발급해라:\n"+
+				"    usage-server user add -tenant %s -username %s -role member\n"+
+				"  (없는 이름에 묶은 키의 보고는 영영 아무에게도 귀속되지 않는다)\n",
+			username, tnt, tnt, username)
+		return 1
+	}
+	return 0
+}
+
+// orgTenant 는 org 의 tenant_id 를 읽는다. CreateOrg 는 tenant_id 를 org id 와 같게 두지만
+// ensureOrgForTenant 로 생긴 org 는 둘이 다르다 — 그래서 추측하지 않고 값을 읽는다.
+func orgTenant(ctx context.Context, d db.DB, orgID string) (string, bool, error) {
+	orgs, err := org.ListOrgs(ctx, d)
+	if err != nil {
+		return "", false, err
+	}
+	for _, o := range orgs {
+		if o.ID == orgID {
+			return o.TenantID, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 func keyCmd(ctx context.Context, d db.DB, out io.Writer, args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, provisionUsage)
@@ -253,6 +316,7 @@ func keyCmd(ctx context.Context, d db.DB, out io.Writer, args []string) int {
 	case "issue":
 		fs := flag.NewFlagSet("key issue", flag.ContinueOnError)
 		orgID := fs.String("org", "", "org id(필수)")
+		user := fs.String("user", "", "이 키를 묶을 사용자명(생략하면 종전대로 org 공용 키)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
@@ -260,7 +324,25 @@ func keyCmd(ctx context.Context, d db.DB, out io.Writer, args []string) int {
 			fmt.Fprintln(os.Stderr, "key issue: --org 가 필요하다")
 			return 2
 		}
-		plain, err := org.IssueKey(ctx, d, *orgID)
+		/*
+		 * --user 는 **선택**이다. 생략하면 종전과 같은 org 공용 키다(컬럼은 NULL) — 이미 배포된
+		 * 호출 형태가 그대로 돌아야 한다.
+		 *
+		 * 주면 그 사람에게 묶인다. 묶인 키로 들어온 보고는 인테이크가 payload.user 도 machine
+		 * 매핑도 보지 않고 이 이름으로 귀속한다(귀속 우선순위 ①) — "그 사용자의 키를 실제로
+		 * 갖고 있음"이 증명된 사실이기 때문이다.
+		 *
+		 * 그래서 **발급 전에** 계정이 있는지 확인한다. 없는 이름에 조용히 묶으면 오타 하나가
+		 * 영원히 아무에게도 귀속되지 않는 키를 낳고, 그 보고는 화면에 유령 사용자로 쌓인다.
+		 * 게다가 키는 평문을 다시 볼 수 없어 "잘못 발급했다"를 되돌리는 유일한 길이 해지다.
+		 */
+		owner := strings.TrimSpace(*user)
+		if owner != "" {
+			if rc := requireUserForKey(ctx, d, *orgID, owner); rc != 0 {
+				return rc
+			}
+		}
+		plain, err := org.IssueKeyFor(ctx, d, *orgID, owner)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "key issue 실패: %v\n", err)
 			return 1

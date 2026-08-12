@@ -74,12 +74,17 @@ func userAdd(d db.DB, out io.Writer, args []string) int {
 		fmt.Fprintf(os.Stderr, "user add: store 초기화 실패: %v\n", err)
 		return 1
 	}
-	hash, err := store.HashPassword(pw)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "user add: %v\n", err)
-		return 1
-	}
-	if err := store.CreateUser(ctx, *username, *role, hash); err != nil {
+	/*
+	 * ⚠ 해시·길이·중복 검사가 **한 자리에 있는** CreateUserWithPassword 를 탄다.
+	 *
+	 * 예전에는 여기서 HashPassword → CreateUser 를 직접 불렀는데, 그 경로가 store.MinPasswordLen
+	 * 을 건너뛰어 **1자 비밀번호로 관리자가 만들어졌다**(보안검토 M-3). 하필 이 명령이 마지막
+	 * 관리자 잠금의 복구 경로라(OPERATIONS.md 9-3), 급히 복구하는 사람이 가장 약한 문을 쓰게
+	 * 되는 조합이었다. 검사를 여기에 한 벌 더 쓰지 않고 저 함수를 타는 것이 요점이다 — 두 벌이면
+	 * 한쪽만 고쳐지는 날이 온다.
+	 */
+	if err := store.CreateUserWithPassword(ctx, *username, *role, pw); err != nil {
+		// 오류 문구에 평문이 실릴 자리가 없다(그 함수가 지는 규율이다 — store/users.go ①).
 		fmt.Fprintf(os.Stderr, "user add 실패: %v\n", err)
 		return 1
 	}

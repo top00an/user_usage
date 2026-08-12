@@ -35,6 +35,7 @@
       "machine": "host-d",
       "model": "some-unreleased-model-x",
       "output": 1500,
+      "platform": "claude",
       "project": "lab",
       "reportedAt": "<string>",
       "sessionId": "S5-dave-unpriced-model",
