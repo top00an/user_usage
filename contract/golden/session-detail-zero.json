@@ -28,6 +28,7 @@
       "machine": "host-e",
       "model": "claude-sonnet-5",
       "output": 0,
+      "platform": "claude",
       "project": "lab",
       "reportedAt": "<string>",
       "sessionId": "S7-erin-zero-session",

@@ -132,6 +132,7 @@
       "machine": "host-a",
       "model": "claude-sonnet-5",
       "output": 3400,
+      "platform": "claude",
       "project": "orca-core",
       "reportedAt": "<string>",
       "sessionId": "S1-alice-series-full",

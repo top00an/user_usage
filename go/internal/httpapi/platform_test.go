@@ -186,15 +186,34 @@ func TestPlatformQueryFilterOnExistingEndpoints(t *testing.T) {
 	if len(list.Sessions) != 3 {
 		t.Fatalf("미지정 필터가 전체가 아니다: %d", len(list.Sessions))
 	}
-	// 응답 shape 에 platform 이 **추가되지 않았다** — 기존 계약(골든 44개)의 근거.
+	/*
+	 * 세션 목록의 **최상위** shape 은 그대로다 — 이 엔드포인트가 플랫폼 집계를 겸하지 않는다
+	 * (그건 /api/usage/platforms 의 일이다). 여기에 `platforms` 가 생기면 같은 사실을 두
+	 * 엔드포인트가 말하게 되고, 언젠가 한쪽만 고쳐진다.
+	 */
 	if _, exists := decode(t, rec)["platforms"]; exists {
 		t.Fatal("세션 목록 응답에 새 필드가 생겼다")
 	}
+	/*
+	 * 세션 **행**에는 platform 이 있다.
+	 *
+	 * 전에는 여기서 "있으면 실패"를 쟀다 — 멀티플랫폼을 무회귀로 얹는 동안의 한시적 규율이었다.
+	 * 그 대가로 집계(/api/usage/platforms)는 플랫폼을 아는데 드릴다운은 모르는 비대칭이 남았고,
+	 * 이번에 골든을 정식 재캡처해 그것을 없앴다. 단언을 **지우지 않고 뒤집는** 이유는, 이 자리가
+	 * 여전히 무언가를 지켜야 하기 때문이다: 값이 실린다는 것과, 그 값이 저장 계층의 정규화를
+	 * 우회하지 않는다는 것(미지정 보고는 claude 다 — 빈 문자열이 새어 나오면 안 된다).
+	 */
 	var raw map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &raw)
-	first := raw["sessions"].([]any)[0].(map[string]any)
-	if _, exists := first["platform"]; exists {
-		t.Fatal("세션 DTO 에 platform 필드가 새어 나갔다 — 기존 응답 shape 변경 금지")
+	for _, s := range raw["sessions"].([]any) {
+		row := s.(map[string]any)
+		got, exists := row["platform"]
+		if !exists {
+			t.Fatalf("세션 DTO 에 platform 이 없다: %v", row["sessionId"])
+		}
+		if got == "" || got == nil {
+			t.Fatalf("%v.platform 이 빈 값이다 — 정규화를 우회했다", row["sessionId"])
+		}
 	}
 
 	// 지정하면 갈린다.

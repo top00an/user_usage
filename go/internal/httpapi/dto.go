@@ -19,11 +19,20 @@ import (
 /* ── 세션 ─────────────────────────────────────────────────────────────── */
 
 type sessionDTO struct {
-	SessionID   string `json:"sessionId"`
-	Machine     string `json:"machine"`
-	Username    string `json:"username"`
-	Project     string `json:"project"`
-	Model       string `json:"model"`
+	SessionID string `json:"sessionId"`
+	Machine   string `json:"machine"`
+	Username  string `json:"username"`
+	Project   string `json:"project"`
+	Model     string `json:"model"`
+	/*
+	 * 이 세션을 만든 도구(claude|codex|gemini|antigravity|other).
+	 *
+	 * **빈 문자열로 나가지 않는다** — 저장 계층이 미지정 보고를 claude 로 채우고 허용목록 밖을
+	 * other 로 접기 때문이다(store.NormalizePlatform 이 그 규칙의 단일 출처). 여기서 기본값을
+	 * 다시 정하거나 빈 값을 통과시키면 규칙이 두 곳이 되고, 화면에는 /api/usage/platforms 에
+	 * 없는 "미상" 범주가 생겨 드릴다운과 집계의 모집단이 갈린다.
+	 */
+	Platform    string `json:"platform"`
 	Input       int64  `json:"input"`
 	Output      int64  `json:"output"`
 	CacheRead   int64  `json:"cacheRead"`
@@ -42,7 +51,9 @@ func toSessionDTO(s store.Session) sessionDTO {
 	return sessionDTO{
 		SessionID: s.SessionID, Machine: s.Machine, Username: s.Username,
 		Project: s.Project, Model: s.Model,
-		Input: s.Input, Output: s.Output, CacheRead: s.CacheRead, CacheCreate: s.CacheCreate,
+		// 저장 계층이 이미 정규화한 값을 **그대로** 옮긴다(기본값을 여기서 다시 정하지 않는다).
+		Platform: s.Platform,
+		Input:    s.Input, Output: s.Output, CacheRead: s.CacheRead, CacheCreate: s.CacheCreate,
 		WebSearch: s.WebSearch, WebFetch: s.WebFetch, Turns: s.Turns,
 		StartedAt: s.StartedAt, EndedAt: s.EndedAt, ReportedAt: s.ReportedAt,
 	}
@@ -413,10 +424,13 @@ func sessionUsage(s store.Session) cost.Usage {
 }
 
 /*
- * platformDTO — 플랫폼별 요약 한 행(신규 엔드포인트 전용).
+ * platformDTO — 플랫폼별 요약 한 행.
  *
- * ⚠ 기존 응답 shape 에는 platform 을 **추가하지 않는다.** 이 축은 여기서만 나간다 —
- *   기존 화면·계약(골든)이 그대로 살아 있어야 멀티플랫폼이 무회귀로 얹힌다.
+ * ⚠ 이 축이 **여기서만** 나가던 시절의 주의문이 여기 있었다("기존 응답에는 추가하지 않는다").
+ *   멀티플랫폼을 무회귀로 얹기 위한 한시적 규율이었고, 그 목적은 달성됐다. 지금은 sessionDTO
+ *   도 platform 을 싣는다 — 집계는 플랫폼을 아는데 드릴다운은 모르던 비대칭을 없앤 것이다.
+ *   골든은 그 변경을 **재캡처로** 반영했다(손으로 고치지 않았다). 추가는 계약 절차를 밟으면
+ *   되는 일이고, 금지였던 적은 없다.
  *
  * firstSeen/lastSeen 은 빈 문자열일 수 있다(시각을 안 보낸 세션뿐인 플랫폼). 그건 "모른다"다.
  */
