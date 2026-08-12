@@ -575,6 +575,9 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
   border-top: 1px solid var(--border-soft);
 }
 .side-foot .ghost { text-align: left; }
+/* 테마 토글 — 아이콘과 글자를 한 줄에. 아이콘만으로는 "지금 상태"인지 "누르면 될 상태"인지
+   갈리므로 글자가 항상 함께 간다(components/ThemeToggle.tsx 주석). */
+.theme-toggle { display: flex; align-items: center; gap: 8px; }
 
 /* ── 본문 ── */
 .content {

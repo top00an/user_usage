@@ -17,6 +17,53 @@ function loggedOutRoutes(extra: Parameters<typeof mockFetch>[0] = []) {
 
 beforeEach(() => {
   location.hash = '';
+  // 테마는 DOM(`<html data-theme>`)과 localStorage 에 산다 — 테스트 사이에 새지 않게 되돌린다.
+  document.documentElement.removeAttribute('data-theme');
+  localStorage.clear();
+});
+
+/*
+ * ── 테마 토글 ──────────────────────────────────────────────────────────────
+ * 값의 단일 출처는 `<html data-theme>` 이고 public/theme-boot.js 가 먼저 세운다. 여기서 잡는
+ * 것은 "버튼이 그 값을 실제로 바꾸고 저장하는가"다 — React state 에 사본을 두면 부팅 스크립트가
+ * 세운 값과 갈리고, 그때 화면과 저장값이 서로 다른 말을 한다.
+ */
+describe('셸 — 테마 토글', () => {
+  it('버튼 글자는 "지금 상태"가 아니라 "누르면 되는 것"이다', async () => {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    mockFetch(allRoutes());
+    render(<Dashboard />);
+    await screen.findByRole('tab', { name: '대시보드' });
+    // 다크에 있으면 버튼은 '라이트 모드'라고 말한다(누르면 갈 곳).
+    expect(await screen.findByRole('button', { name: /라이트 모드/ })).toBeInTheDocument();
+  });
+
+  it('누르면 data-theme 이 바뀌고 localStorage 에 남는다', async () => {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    mockFetch(allRoutes());
+    const user = userEvent.setup();
+    render(<Dashboard />);
+    await screen.findByRole('tab', { name: '대시보드' });
+
+    await user.click(await screen.findByRole('button', { name: /라이트 모드/ }));
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+    expect(localStorage.getItem('usage-theme')).toBe('light');
+
+    // 되돌리면 다시 dark 로. 저장값도 따라간다.
+    await user.click(await screen.findByRole('button', { name: /다크 모드/ }));
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    expect(localStorage.getItem('usage-theme')).toBe('dark');
+  });
+
+  it('지금 상태는 aria-pressed 로만 말한다 (보조기기용)', async () => {
+    document.documentElement.setAttribute('data-theme', 'light');
+    mockFetch(allRoutes());
+    render(<Dashboard />);
+    await screen.findByRole('tab', { name: '대시보드' });
+    // 라이트 상태 → 다크가 아니므로 pressed=false, 글자는 '다크 모드'.
+    const btn = await screen.findByRole('button', { name: /다크 모드/ });
+    expect(btn).toHaveAttribute('aria-pressed', 'false');
+  });
 });
 
 describe('셸 — 로그인 게이트 · 탭 · 401 복구', () => {
@@ -121,13 +168,6 @@ describe('셸 — 로그인 게이트 · 탭 · 401 복구', () => {
     expect(await screen.findByLabelText('아이디')).toBeInTheDocument();
     // 서버 세션 파기를 실제로 호출했다.
     expect(fn.mock.calls.some(([u]) => String(u).includes('/api/auth/logout'))).toBe(true);
-  });
-
-  it('로그인한 사용자의 role 을 배지로 보여준다', async () => {
-    mockFetch(allRoutes());
-    render(<Dashboard />);
-    await screen.findByRole('tab', { name: '대시보드' });
-    expect(screen.getByText('관리자')).toBeInTheDocument();
   });
 
   it('해시 딥링크로 관측 탭을 바로 연다', async () => {

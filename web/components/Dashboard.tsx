@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { getMe, isAborted, logout, setUnauthorizedHandler, type AuthUser } from '@/lib/api';
 import { ToastProvider } from '@/components/Toast';
+import ThemeToggle from '@/components/ThemeToggle';
 import Login from '@/components/Login';
 import GrafanaDash from '@/components/grafana/GrafanaDash';
 import UsageTrackTab from '@/components/usagetrack/UsageTrackTab';
@@ -161,7 +162,6 @@ export default function Dashboard() {
 
   const { user } = auth;
   const isAdmin = user.role === 'admin';
-  const roleLabel = isAdmin ? '관리자' : '구성원';
   // 관리자 전용 탭은 member 목록에서 뺀다. 딥링크로 #/admin 에 온 member 는 여기 없어
   // active 가 첫 탭으로 접히고, 아래 패널도 렌더되지 않는다(이중 방어).
   const visibleTabs = TABS.filter((t) => isAdmin || !ADMIN_ONLY_TABS.has(t.id));
@@ -211,12 +211,7 @@ export default function Dashboard() {
           </nav>
 
           <div className="side-foot">
-            <span
-              className={`badge ${user.role === 'admin' ? 'ok' : ''}`}
-              title={`${user.username} · ${user.tenant}`}
-            >
-              {roleLabel}
-            </span>
+            <ThemeToggle />
             <button className="ghost" id="signout" type="button" onClick={signOut}>로그아웃</button>
           </div>
         </aside>
@@ -226,7 +221,6 @@ export default function Dashboard() {
           <header className="content-head">
             <div>
               <h1>{active.label}</h1>
-              <p className="content-desc">{active.desc}</p>
             </div>
             {/* 탭별 상단 액션 슬롯 — GrafanaDash 가 포털로 버튼을 얹는다(제목과 같은 줄 우측). */}
             <div id="head-actions" className="head-actions" />
