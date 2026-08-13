@@ -11,12 +11,14 @@
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
-import { getSummary, getSeats, getDev, getPlatforms } from '@/lib/api';
+import { getSummary, getSeats, getDev, getPlatforms, getLeaderboard } from '@/lib/api';
 import { softly, useResource } from '@/hooks/useResource';
-import type { Dev, PlatformsResponse, Seats, Summary } from '@/lib/types';
+import type { Dev, Leaderboard, PlatformsResponse, Seats, Summary } from '@/lib/types';
 import { Empty, ErrorState, Loading } from '@/components/ui';
 import PlatformFilter from '@/components/platform/PlatformFilter';
+import UserFilter from '@/components/usagetrack/UserFilter';
 import PlatformSummary from '@/components/platform/PlatformSummary';
+import { usePlatformFilter } from '@/lib/platformFilter';
 import { COST_DISCLAIMER, COST_LABEL, COST_WHY } from '@/lib/costLabels';
 import EChart from '@/components/charts/EChart';
 import DragGrid, { resetLayout, type GridItem } from './DragGrid';
@@ -168,17 +170,42 @@ function BarTable({ rows, unit, fmt }: { rows: { label: string; value: number }[
 }
 
 export default function GrafanaDash() {
+  /*
+   * 사용자 선택 — 이 탭 안에서만 산다(사용 추적·사용 관측과 같은 규율).
+   *
+   * 이 축 하나로 **패널 전체**가 따라온다: 아래 패널들은 summary·seats·dev 에서 파생되므로
+   * 그 세 조회에 user 를 실으면 비용·토큰·캐시·LOC 차트가 모두 그 사람 기준이 된다.
+   * (커스텀 패널도 같은 summary 를 근거로 그린다 — 별도 배선이 필요 없다.)
+   */
+  const [user, setUser] = useState('');
+  const platform = usePlatformFilter();
+
+  /* 명단은 **필터를 절대 싣지 않는** 조회로 받는다 — 걸린 응답으로 만들면 갈아탈 수 없다. */
+  const rosterLoad = useCallback(
+    ({ signal }: { signal: AbortSignal }) => softly(getLeaderboard({}, { signal }), null as Leaderboard | null),
+    [],
+  );
+  const rosterRes = useResource(rosterLoad, []);
+  const roster = rosterRes.state.status === 'ready'
+    ? (rosterRes.state.data?.users ?? []).map((u) => u.username).filter((u): u is string => !!u)
+    : [];
+
   const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<Data> => {
+    /*
+     * 두 축을 함께 싣는다. platform 도 이 셋이 원래부터 받는다 — 예전 주석이 "이 패널은
+     * 플랫폼 축으로 걸러지지 않는다"고 적어 두었지만 사실이 아니었다(2026-08-13 실측).
+     */
+    const scope = { platform: platform || undefined, user: user || undefined };
     const [summary, seats, dev, platforms] = await Promise.all([
-      // 대시보드는 전사 기준이다 — 사용자 축을 비워 둔다(사용 추적 탭의 선택이 여기 오지 않는다).
-      softly(getSummary({}, { signal }), null as Summary | null),
-      softly(getSeats(3650, { signal }), null as Seats | null),
-      softly(getDev(365, { signal }), null as Dev | null),
+      softly(getSummary(scope, { signal }), null as Summary | null),
+      softly(getSeats(3650, { signal }, scope), null as Seats | null),
+      softly(getDev(365, { signal }, scope), null as Dev | null),
+      // 플랫폼 목록은 선택지의 원천이라 필터를 싣지 않는다(사용자 축도 마찬가지).
       softly(getPlatforms({ signal }), null as PlatformsResponse | null),
     ]);
     return { summary, seats, dev, platforms };
-  }, []);
-  const { state, reload } = useResource(load, []);
+  }, [platform, user]);
+  const { state, reload } = useResource(load, [platform, user]);
 
   // 커스텀 패널(내 그래프) — 저장소 구독으로 추가/삭제 즉시 반영.
   const panelsSnap = useSyncExternalStore(subscribePanels, panelsSnapshot, () => '[]');
@@ -353,7 +380,13 @@ export default function GrafanaDash() {
         그래서 applies={false} 로 두고 화면이 그 사실을 말한다. 선택은 탭을 넘어 유지되므로
         여기서 고른 값이 '사용 관측'의 조회에 그대로 실린다.
       */}
-      <PlatformFilter rows={platformRows} applies={false} what="아래 패널은 플랫폼 축으로 걸러지지 않습니다" />
+      {/*
+        * applies 를 true 로 바꿨다(2026-08-13). 예전에는 false 로 두고 "이 패널은 플랫폼 축으로
+        * 걸러지지 않는다"고 말했는데, 서버는 summary·seats·dev 모두 platform 을 받는다 —
+        * 화면이 안 싣고 있었을 뿐이다. 이제 싣는다.
+        */}
+      <PlatformFilter rows={platformRows} applies what="아래 패널은 이 플랫폼만 집계합니다" />
+      <UserFilter users={roster} value={user} onChange={setUser} />
 
       <section className="gsect">
         <div className="gsect-h"><span className="caret">▾</span> 플랫폼</div>

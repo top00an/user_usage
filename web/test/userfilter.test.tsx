@@ -269,3 +269,66 @@ describe('사용 관측 — 유저별 세부 내역', () => {
     expect(plain.length).toBeGreaterThan(0);
   });
 });
+
+/*
+ * ── 대시보드 탭 — 패널 전체가 유저별로 따라온다 ──────────────────────────
+ *
+ * 이 탭의 패널들은 summary·seats·dev 에서 파생된다. 그래서 셋에 user 를 실으면 비용·토큰·
+ * 캐시·LOC 차트가 **한 번에** 그 사람 기준이 된다 — 패널마다 배선할 필요가 없다.
+ * 셋 중 하나라도 빠지면 같은 화면에서 어떤 패널은 개인, 어떤 패널은 전사를 그린다.
+ */
+describe('대시보드 — 패널 전체 유저별', () => {
+  const dashRoutes = (): [string, RouteSpec][] => [
+    ...obsRoutes(),
+    ...trackRoutes(),
+    ...authRoutes({ username: 'admin', role: 'admin', tenant: 'acme' }),
+  ];
+
+  async function openDashboard() {
+    render(<Dashboard />);
+    await screen.findByRole('tab', { name: '대시보드' });
+  }
+
+  it('전체가 기본이다 — user 를 보내지 않는다', async () => {
+    location.hash = '#/overview';
+    const { fn } = mockFetch(dashRoutes());
+    await openDashboard();
+    await waitFor(() => {
+      expect(fn.mock.calls.map(([u]) => String(u)).some((u) => u.includes('/api/usage/summary'))).toBe(true);
+    });
+    expect(fn.mock.calls.map(([u]) => String(u)).some((u) => u.includes('user='))).toBe(false);
+  });
+
+  it('사용자를 고르면 summary·seats·dev 전부에 user= 가 실린다', async () => {
+    location.hash = '#/overview';
+    const { fn } = mockFetch(dashRoutes());
+    const user = userEvent.setup();
+    await openDashboard();
+
+    await user.selectOptions(await screen.findByLabelText('사용자'), 'alice');
+
+    await waitFor(() => {
+      const urls = fn.mock.calls.map(([u]) => String(u));
+      for (const ep of ['summary', 'seats', 'dev']) {
+        expect(
+          urls.some((u) => u.includes(`/api/usage/${ep}`) && u.includes('user=alice')),
+          `${ep} 에 user=alice 가 실리지 않았다`,
+        ).toBe(true);
+      }
+    });
+  });
+
+  it('플랫폼 목록은 선택지의 원천이라 user 를 싣지 않는다', async () => {
+    location.hash = '#/overview';
+    const { fn } = mockFetch(dashRoutes());
+    const user = userEvent.setup();
+    await openDashboard();
+    await user.selectOptions(await screen.findByLabelText('사용자'), 'alice');
+    await waitFor(() => {
+      expect(fn.mock.calls.map(([u]) => String(u)).some((u) => u.includes('user=alice'))).toBe(true);
+    });
+    const plat = fn.mock.calls.map(([u]) => String(u)).filter((u) => u.startsWith('/api/usage/platforms'));
+    expect(plat.length).toBeGreaterThan(0);
+    for (const u of plat) expect(u).not.toContain('user=');
+  });
+});
