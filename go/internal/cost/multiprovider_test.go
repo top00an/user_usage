@@ -22,15 +22,21 @@ type modelSpec struct {
 	long      Price // 제로값이면 계단 없음
 }
 
-// developers.openai.com/api/docs/pricing · 검증일 2026-08-10
+// developers.openai.com/api/docs/pricing · 검증일 2026-08-13 (전수 재감사)
 //
-// long 은 계단 요금(입력 >272K)의 초과 구간 단가다 — 공식 배수는 **입력 2배 · 출력 1.5배**이고,
-// 그 계열은 gpt-5.5 와 gpt-5.6-* 뿐이다. 나머지는 공식 표에 롱 항목이 없어 제로값으로 둔다
-// (이름이 비슷하다고 빌려 오지 않는다 — seed_openai.go 주석).
+// long 은 계단 요금(입력 >272K)의 초과 구간 단가다 — 공식 배수는 **입력 2배 · 출력 1.5배**다.
+// 나머지는 공식 표에 롱 항목이 없어 제로값으로 둔다(이름이 비슷하다고 빌려 오지 않는다 —
+// seed_openai.go 주석).
+//
+// ⚠ 2026-08-13 전수 재감사에서 세 가지를 고쳤다. 이전 검증(08-10)이 놓친 것들이다:
+//   · gpt-5.6-cyber 가 아예 빠져 있었다(공식 표에 $12.50/$75.00 로 있다).
+//   · gpt-5.4 의 계단($5/$22.50)이 누락 — 계단 계열이 "5.5 와 5.6-* 뿐"이라는 이전 판단이
+//     틀렸다. 공식 표는 gpt-5.4 에도 Long context 를 적고 있다.
+//   · gpt-5.5-pro · gpt-5.4-pro 의 계단($60/$270)이 누락. pro 도 계단이 있다.
 var wantOpenAI = map[string]modelSpec{
 	"gpt-5.5":       {in: 5, out: 30, readMult: 0.1, long: Price{10, 45}},
 	"gpt-5.4-mini":  {in: 0.75, out: 4.5, readMult: 0.1},
-	"gpt-5.4":       {in: 2.5, out: 15, readMult: 0.1},
+	"gpt-5.4":       {in: 2.5, out: 15, readMult: 0.1, long: Price{5, 22.5}},
 	"gpt-5.4-nano":  {in: 0.2, out: 1.25, readMult: 0.1},
 	"gpt-5.2":       {in: 1.75, out: 14, readMult: 0.1},
 	"gpt-5.1":       {in: 1.25, out: 10, readMult: 0.1},
@@ -44,10 +50,13 @@ var wantOpenAI = map[string]modelSpec{
 	"gpt-5.6-sol":   {in: 5, out: 30, readMult: 0.1, writeMult: 1.25, long: Price{10, 45}},
 	"gpt-5.6-terra": {in: 2, out: 12, readMult: 0.1, writeMult: 1.25, long: Price{4, 18}},
 	"gpt-5.6-luna":  {in: 0.2, out: 1.2, readMult: 0.1, writeMult: 1.25, long: Price{0.4, 1.8}},
+	// cyber 는 short context only 라 계단이 없다. 캐시 쓰기는 공식 표의 cyber 행에
+	// 따로 적혀 있지 않지만 "5.6 이후 계열은 1.25배"라는 계열 규칙이 적용된다.
+	"gpt-5.6-cyber": {in: 12.5, out: 75, readMult: 0.1, writeMult: 1.25},
 
 	// *-pro 는 캐시 할인이 없다(1.0).
-	"gpt-5.5-pro": {in: 30, out: 180, readMult: 1.0},
-	"gpt-5.4-pro": {in: 30, out: 180, readMult: 1.0},
+	"gpt-5.5-pro": {in: 30, out: 180, readMult: 1.0, long: Price{60, 270}},
+	"gpt-5.4-pro": {in: 30, out: 180, readMult: 1.0, long: Price{60, 270}},
 	"gpt-5.2-pro": {in: 21, out: 168, readMult: 1.0},
 	"gpt-5-pro":   {in: 15, out: 120, readMult: 1.0},
 

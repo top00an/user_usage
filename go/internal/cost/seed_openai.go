@@ -54,7 +54,9 @@ var openaiSeed = map[string]seedEntry{
 	// 계단 요금 — 입력 >272K 이면 요청 전체가 입력 2배 · 출력 1.5배.
 	"gpt-5.5":       {provider: ProviderOpenAI, price: Price{5, 30}, priceLong: Price{10, 45}, cacheReadMult: oaiCacheRead},
 	"gpt-5.4-mini":  {provider: ProviderOpenAI, price: Price{0.75, 4.5}, cacheReadMult: oaiCacheRead},
-	"gpt-5.4":       {provider: ProviderOpenAI, price: Price{2.5, 15}, cacheReadMult: oaiCacheRead},
+	// gpt-5.4 도 계단이 있다(공식표: long $5.00/$22.50). 2026-08-13 감사에서 누락을 잡았다 —
+	// 빠져 있으면 272K 초과 요청의 몫이 표준가로 계산돼 **과소**계상된다.
+	"gpt-5.4":       {provider: ProviderOpenAI, price: Price{2.5, 15}, priceLong: Price{5, 22.5}, cacheReadMult: oaiCacheRead},
 	"gpt-5.4-nano":  {provider: ProviderOpenAI, price: Price{0.2, 1.25}, cacheReadMult: oaiCacheRead},
 	"gpt-5.2":       {provider: ProviderOpenAI, price: Price{1.75, 14}, cacheReadMult: oaiCacheRead},
 	"gpt-5.1":       {provider: ProviderOpenAI, price: Price{1.25, 10}, cacheReadMult: oaiCacheRead},
@@ -68,10 +70,21 @@ var openaiSeed = map[string]seedEntry{
 	"gpt-5.6-sol":   {provider: ProviderOpenAI, price: Price{5, 30}, priceLong: Price{10, 45}, cacheReadMult: oaiCacheRead, cacheWriteMult: oaiCacheWrite56},
 	"gpt-5.6-terra": {provider: ProviderOpenAI, price: Price{2, 12}, priceLong: Price{4, 18}, cacheReadMult: oaiCacheRead, cacheWriteMult: oaiCacheWrite56},
 	"gpt-5.6-luna":  {provider: ProviderOpenAI, price: Price{0.2, 1.2}, priceLong: Price{0.4, 1.8}, cacheReadMult: oaiCacheRead, cacheWriteMult: oaiCacheWrite56},
+	/*
+	 * gpt-5.6-cyber — 2026-08-13 감사에서 **미등재**를 잡았다. 공식표에 단가가 있다
+	 * (입력 $12.50 · 캐시히트 $1.25 · 출력 $75.00 · short context only).
+	 * 5.5-cyber 와 같은 단가이고, 그쪽만 등재돼 있어 5.6 을 쓰면 비용이 통째로 빠졌다.
+	 *
+	 * 캐시 **쓰기**는 공식표의 cyber 행에 따로 적혀 있지 않다. 그래도 1.25 를 넣는 이유:
+	 * "GPT-5.6 이후 계열은 캐시 쓰기가 입력가의 1.25배"라는 **계열 규칙**이 별도로 문서화돼
+	 * 있고, cyber 는 그 계열이다. 0 으로 두면 "무과금"이라는 더 강한 주장을 하게 된다.
+	 */
+	"gpt-5.6-cyber": {provider: ProviderOpenAI, price: Price{12.5, 75}, cacheReadMult: oaiCacheRead, cacheWriteMult: oaiCacheWrite56},
 
 	// ── *-pro — 캐시 할인 없음(1.0배). 배수를 0 으로 두면 전역 0.1 로 떨어져 10배 과소가 된다. ──
-	"gpt-5.5-pro": {provider: ProviderOpenAI, price: Price{30, 180}, cacheReadMult: oaiCacheReadNone},
-	"gpt-5.4-pro": {provider: ProviderOpenAI, price: Price{30, 180}, cacheReadMult: oaiCacheReadNone},
+	// 5.5-pro·5.4-pro 는 계단도 있다(공식표: long $60/$270). 2026-08-13 감사에서 누락을 잡았다.
+	"gpt-5.5-pro": {provider: ProviderOpenAI, price: Price{30, 180}, priceLong: Price{60, 270}, cacheReadMult: oaiCacheReadNone},
+	"gpt-5.4-pro": {provider: ProviderOpenAI, price: Price{30, 180}, priceLong: Price{60, 270}, cacheReadMult: oaiCacheReadNone},
 	"gpt-5.2-pro": {provider: ProviderOpenAI, price: Price{21, 168}, cacheReadMult: oaiCacheReadNone},
 	"gpt-5-pro":   {provider: ProviderOpenAI, price: Price{15, 120}, cacheReadMult: oaiCacheReadNone},
 

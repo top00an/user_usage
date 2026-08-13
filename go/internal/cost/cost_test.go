@@ -252,22 +252,45 @@ func TestPricing_OfficialTable(t *testing.T) {
 	}
 }
 
+/*
+ * 도입가 장치(introUntil·intro)가 날짜로 갈리는지.
+ *
+ * ⚠ 이 테스트는 원래 claude-sonnet-5 로 쟀다. 그 모델은 이제 도입가가 없다 — $2/$10 이
+ *   표준가로 확정됐고 2026-09-01 인상은 취소됐다(공식 단가 문서). 그래서 실제 모델 대신
+ *   **합성 항목**으로 장치만 잰다. 장치를 지우지 않는 이유는 다음 도입가가 오면 쓸 자리이고,
+ *   쓰는 모델이 없다고 검증을 지우면 다시 쓰는 날 아무도 동작을 모르기 때문이다.
+ */
 func TestPricing_IntroPriceSplitsOnDate(t *testing.T) {
-	// Sonnet 5 는 2026-08-31 까지 $2/$10, 그 뒤 $3/$15. 어느 쪽을 상수로 박아도 한쪽 기간에는
-	// 틀린다 — 정가를 박으면 도입 기간 중 1.5배 과대, 도입가를 박으면 9/1 부터 33% 과소다.
 	useConfig(t, `{}`)
-	cases := []struct {
+
+	const probe = "zz-intro-probe"
+	if _, exists := seed[probe]; exists {
+		t.Fatalf("%s 가 이미 시드에 있다 — 테스트 전용 이름을 바꿔라", probe)
+	}
+	seed[probe] = seedEntry{
+		provider: ProviderAnthropic, price: Price{9, 90},
+		introUntil: "2026-08-31", intro: Price{3, 30},
+	}
+	t.Cleanup(func() { delete(seed, probe) })
+
+	for _, c := range []struct {
 		day  string
 		want Price
 		why  string
 	}{
-		{"2026-08-04", Price{Input: 2, Output: 10}, "도입 기간인데 정가를 쓴다(1.5배 과대)"},
-		{"2026-08-31", Price{Input: 2, Output: 10}, "만료일 당일이 이미 정가로 넘어갔다"},
-		{"2026-09-01", Price{Input: 3, Output: 15}, "도입가가 만료 후에도 남아 있다(33% 과소)"},
-	}
-	for _, c := range cases {
-		if got := Pricing(day(c.day))["claude-sonnet-5"]; got != c.want {
+		{"2026-08-04", Price{Input: 3, Output: 30}, "도입 기간인데 정가를 쓴다"},
+		{"2026-08-31", Price{Input: 3, Output: 30}, "만료일 당일이 이미 정가로 넘어갔다(경계 포함이어야 한다)"},
+		{"2026-09-01", Price{Input: 9, Output: 90}, "도입가가 만료 후에도 남아 있다"},
+	} {
+		if got := Pricing(day(c.day))[probe]; got != c.want {
 			t.Fatalf("%s: %+v — %s", c.day, got, c.why)
+		}
+	}
+
+	// 그리고 sonnet-5 는 **어느 날짜에도** 같아야 한다(도입가가 사라진 결과).
+	for _, d := range []string{"2026-08-04", "2026-09-01"} {
+		if got := Pricing(day(d))["claude-sonnet-5"]; got != (Price{Input: 2, Output: 10}) {
+			t.Fatalf("%s sonnet-5 = %+v (항상 2/10 이어야 한다)", d, got)
 		}
 	}
 }

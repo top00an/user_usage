@@ -69,18 +69,38 @@ var regressionCases = []regressionCase{
 		row:  Usage{Model: "claude-sonnet-5", Input: 1234, Output: 5678, CacheCreate: 2000000, CacheCreate5m: 2000000},
 		usd:  5.059248, ax: Axis{Input: 0.002468, Output: 0.05678, CacheCreate: 5},
 	},
+	/*
+	 * ── 09-01 케이스: 기대값을 2026-08-13 에 갱신했다 ──────────────────────
+	 *
+	 * 원래 이 둘은 "인트로 만료 후의 정가($3/$15)"를 고정했다. 그 인상이 **취소됐다** —
+	 * Anthropic 이 $2/$10 을 표준가로 확정했고 09-01 인상은 없다(공식 단가 문서의
+	 * claude-sonnet-5-introductory-pricing 노트). 그래서 예전 기대값은 이제 존재하지 않는
+	 * 요금을 고정하는 셈이다.
+	 *
+	 * 기대값은 코드 출력을 베끼지 않고 **공식 단가로 직접 계산**해 넣었다(입력가 $2 ·
+	 * 출력가 $10 · 히트 0.1배 · 5분 쓰기 1.25배 · 1시간 쓰기 2배):
+	 *   cacheCreate1h = 1234×2/1M + 5678×10/1M + 2,000,000×2×2/1M
+	 *                 = 0.002468 + 0.05678 + 8 = 8.059248
+	 *   mixedTTL      = 0.002468 + 0.05678 + 9,876,543×2×0.1/1M
+	 *                 + (1,500,000×2×1.25 + 500,000×2×2)/1M
+	 *                 = 0.002468 + 0.05678 + 1.9753086 + 5.75 = 7.7845566
+	 *
+	 * 날짜(09-01)는 그대로 둔다. 이제 이 두 케이스의 의미가 바뀌었다 — "만료 후 정가"가
+	 * 아니라 **"인트로 창을 넘겨도 값이 그대로인가"**를 재는 자리다. 위의 08-04 케이스와
+	 * 같은 단가가 나와야 한다.
+	 */
 	{
-		name: "sonnet5/list/cacheCreate1h",
+		name: "sonnet5/afterIntroWindow/cacheCreate1h",
 		day:  "2026-09-01",
 		row:  Usage{Model: "claude-sonnet-5", Input: 1234, Output: 5678, CacheCreate: 2000000, CacheCreate1h: 2000000},
-		usd:  12.088872, ax: Axis{Input: 0.003702, Output: 0.08517, CacheCreate: 12},
+		usd:  8.059248, ax: Axis{Input: 0.002468, Output: 0.05678, CacheCreate: 8},
 	},
 	{
-		name: "sonnet5/list/mixedTTL",
+		name: "sonnet5/afterIntroWindow/mixedTTL",
 		day:  "2026-09-01",
 		row: Usage{Model: "claude-sonnet-5", Input: 1234, Output: 5678, CacheRead: 9876543,
 			CacheCreate: 2000000, CacheCreate5m: 1500000, CacheCreate1h: 500000},
-		usd: 11.6768349, ax: Axis{Input: 0.003702, Output: 0.08517, CacheRead: 2.9629629000000004, CacheCreate: 8.625},
+		usd: 7.7845566, ax: Axis{Input: 0.002468, Output: 0.05678, CacheRead: 1.9753086000000002, CacheCreate: 5.75},
 	},
 	{
 		name: "haiku45/cacheRead",

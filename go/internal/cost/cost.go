@@ -183,10 +183,17 @@ type Result struct {
  * **이 표는 낡는다.** config.json 의 `usage.pricing` 이 이기므로, 단가가 바뀌면 코드가 아니라
  * 설정을 고친다. 화면은 PricedAt 을 함께 표시해 이 표가 언제 것인지 보이게 한다.
  *
- * ⚠ Claude Sonnet 5 는 **기간 한정 도입가**($2/$10, 2026-08-31 까지)가 있다. intro 로 적어
- *   날짜에 따라 자동으로 갈린다 — 어느 쪽을 시드에 박아도 한쪽 기간에는 틀리기 때문이다.
- *   정가를 박으면 도입 기간 중 1.5배 과대, 도입가를 박으면 9/1 부터 33% 과소가 된다.
- *   기간이 끝나면 intro 를 지우기만 하면 된다(지우지 않아도 만료일이 지나면 정가를 쓴다).
+ * ⚠ introUntil·intro 는 **기간 한정 도입가** 장치다. 어느 쪽 단가를 시드에 박아도 한쪽
+ *   기간에는 틀리기 때문에 날짜로 갈라야 한다.
+ *
+ *   지금 이 장치를 쓰는 모델은 **없다.** 유일한 사용자였던 Claude Sonnet 5 는 도입가
+ *   $2/$10 이 그대로 표준가로 확정돼(2026-09-01 인상 취소) 평범한 항목이 됐다.
+ *   장치는 남겨 둔다 — 다음 도입가가 오면 여기가 그 자리다.
+ *
+ *   ⚠ 도입가를 넣을 때는 **만료 후 단가에 근거가 있는지** 먼저 확인할 것. Sonnet 5 에서
+ *     정확히 그 함정을 밟았다: 예고된 인상가(3/15)를 base 에 박아 뒀는데 인상이 취소되면서,
+ *     코드를 아무도 건드리지 않아도 만료일에 1.5배 과대계상으로 넘어가는 상태가 됐다.
+ *     예고는 사실이 아니다 — 시행된 뒤에 적는다.
  */
 type seedEntry struct {
 	provider   string
@@ -235,7 +242,20 @@ var anthropicSeed = map[string]seedEntry{
 	"claude-opus-4-7": {provider: ProviderAnthropic, price: Price{5, 25}},
 	"claude-opus-4-6": {provider: ProviderAnthropic, price: Price{5, 25}},
 	"claude-opus-4-5": {provider: ProviderAnthropic, price: Price{5, 25}},
-	"claude-sonnet-5": {provider: ProviderAnthropic, price: Price{3, 15}, introUntil: "2026-08-31", intro: Price{2, 10}},
+	/*
+	 * claude-sonnet-5 — $2/$10 이 **표준가다**(인트로가 아니다).
+	 *
+	 * 처음에는 "2026-08-31 까지 인트로 $2/$10, 9월 1일부터 $3/$15" 로 넣었다. 그 예고가
+	 * 취소됐다: Anthropic 이 인트로가를 그대로 표준가로 확정하고 9월 인상은 없다고 밝혔다
+	 * (platform.claude.com/docs/en/about-claude/pricing 의 claude-sonnet-5-introductory-pricing
+	 * 노트 — 2026-08-13 확인).
+	 *
+	 * ⚠ 그대로 두면 **2026-09-01 에 저절로 틀린다.** introUntil 이 지나면 base(3/15)로 올라가
+	 *   실제 청구의 1.5배를 그린다. 게이트에도 안 걸린다 — 날짜가 바뀌기만 하면 되는 일이라
+	 *   코드 변경이 없고, 골든은 인트로 기간에 캡처돼 있어 9월 1일에 조용히 갈린다.
+	 *   (실사용 모델이다. 이 배포에서 출력 559,654 토큰이 이 모델로 잡혀 있다.)
+	 */
+	"claude-sonnet-5": {provider: ProviderAnthropic, price: Price{2, 10}},
 
 	"claude-sonnet-4-6": {provider: ProviderAnthropic, price: Price{3, 15}},
 	"claude-sonnet-4-5": {provider: ProviderAnthropic, price: Price{3, 15}},

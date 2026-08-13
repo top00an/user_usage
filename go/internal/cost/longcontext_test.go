@@ -91,7 +91,11 @@ func TestLongContext_Gemini25Pro_HandChecked(t *testing.T) {
  */
 func TestLongContext_OpenAIStepIsTwoAndOneAndHalf(t *testing.T) {
 	useConfig(t, `{}`)
-	for _, m := range []string{"gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+	// 2026-08-13 전수 재감사: gpt-5.4 와 *-pro 둘도 공식 표에 Long context 가 있다.
+	// 이전 판단("계단 계열은 5.5 와 5.6-* 뿐")이 틀렸고, 그 탓에 계단 몫이 표준가로
+	// 계산돼 **과소**계상되고 있었다.
+	for _, m := range []string{"gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+		"gpt-5.4", "gpt-5.5-pro", "gpt-5.4-pro"} {
 		base, ok := seed[m]
 		if !ok {
 			t.Fatalf("%s 가 시드에서 사라졌다", m)
@@ -106,7 +110,11 @@ func TestLongContext_OpenAIStepIsTwoAndOneAndHalf(t *testing.T) {
 
 	// 계열 이름이 비슷해도 공식 표에 항목이 없는 것은 등록하지 않았다 — flat 으로 나가야 한다
 	// (여기가 무너지면 추측 단가가 표에 들어온 것이다).
-	for _, m := range []string{"gpt-5.5-pro", "gpt-5.5-cyber", "gpt-5.4"} {
+	//
+	// cyber 계열은 공식 표가 "short context only" 라고 명시한다 — 계단이 **없는 것이 사실**이고
+	// 모르는 것이 아니다. 5.2/5.1/5 계열도 Long context 항목이 없다.
+	for _, m := range []string{"gpt-5.5-cyber", "gpt-5.6-cyber", "gpt-5.2", "gpt-5.2-pro",
+		"gpt-5.1", "gpt-5", "gpt-5-pro", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex"} {
 		if _, tiered := LongContextPrice(m); tiered {
 			t.Fatalf("%s 에 출처 없는 롱 단가가 붙었다", m)
 		}
