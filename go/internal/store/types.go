@@ -43,6 +43,15 @@ type SessionInput struct {
 	InputLong     int64
 	OutputLong    int64
 	CacheReadLong int64
+	/*
+	 * 고속 모드(fast mode) 분리분 — 총량의 부분집합이다(롱과 같은 계약).
+	 * 고속은 같은 모델에 2배 단가가 붙으므로(캐시 축까지) 이 몫을 따로 세지 않으면
+	 * 고속 세션의 비용이 절반으로 나온다.
+	 */
+	InputFast       int64
+	OutputFast      int64
+	CacheReadFast   int64
+	CacheCreateFast int64
 
 	StartedAt string
 	EndedAt   string // 구버전 수집기는 안 보낸다 → 빈 값이면 NULL 로 남아 "모른다"가 보인다
@@ -75,6 +84,15 @@ type SeriesRow struct {
 	InputLong     int64
 	OutputLong    int64
 	CacheReadLong int64
+	/*
+	 * 고속 모드(fast mode) 분리분 — 총량의 부분집합이다(롱과 같은 계약).
+	 * 고속은 같은 모델에 2배 단가가 붙으므로(캐시 축까지) 이 몫을 따로 세지 않으면
+	 * 고속 세션의 비용이 절반으로 나온다.
+	 */
+	InputFast       int64
+	OutputFast      int64
+	CacheReadFast   int64
+	CacheCreateFast int64
 
 	ToolErrors    int64
 	StopMaxTokens int64
@@ -280,12 +298,21 @@ type Session struct {
 	InputLong     int64
 	OutputLong    int64
 	CacheReadLong int64
-	WebSearch     int64
-	WebFetch      int64
-	Turns         int64
-	StartedAt     *string
-	EndedAt       *string
-	ReportedAt    *string
+	/*
+	 * 고속 모드(fast mode) 분리분 — 총량의 부분집합이다(롱과 같은 계약).
+	 * 고속은 같은 모델에 2배 단가가 붙으므로(캐시 축까지) 이 몫을 따로 세지 않으면
+	 * 고속 세션의 비용이 절반으로 나온다.
+	 */
+	InputFast       int64
+	OutputFast      int64
+	CacheReadFast   int64
+	CacheCreateFast int64
+	WebSearch       int64
+	WebFetch        int64
+	Turns           int64
+	StartedAt       *string
+	EndedAt         *string
+	ReportedAt      *string
 }
 
 // PlatformModelRow 는 한 플랫폼 안의 모델별 토큰이다 — **비용 계산의 근거**다.
@@ -301,7 +328,16 @@ type PlatformModelRow struct {
 	InputLong     int64
 	OutputLong    int64
 	CacheReadLong int64
-	Sessions      int
+	/*
+	 * 고속 모드(fast mode) 분리분 — 총량의 부분집합이다(롱과 같은 계약).
+	 * 고속은 같은 모델에 2배 단가가 붙으므로(캐시 축까지) 이 몫을 따로 세지 않으면
+	 * 고속 세션의 비용이 절반으로 나온다.
+	 */
+	InputFast       int64
+	OutputFast      int64
+	CacheReadFast   int64
+	CacheCreateFast int64
+	Sessions        int
 }
 
 // PlatformRow 는 플랫폼 하나의 요약이다.
@@ -336,16 +372,25 @@ type Bucket struct {
 	InputLong     int64
 	OutputLong    int64
 	CacheReadLong int64
-	Turns         int64
-	ToolErrors    int64
-	StopMaxTokens int64
-	StopRefusal   int64
-	LatencyMsSum  int64
-	LatencyMsMax  int64
-	LatencyTurns  int64
-	Username      string
-	Machine       string
-	Project       string
+	/*
+	 * 고속 모드(fast mode) 분리분 — 총량의 부분집합이다(롱과 같은 계약).
+	 * 고속은 같은 모델에 2배 단가가 붙으므로(캐시 축까지) 이 몫을 따로 세지 않으면
+	 * 고속 세션의 비용이 절반으로 나온다.
+	 */
+	InputFast       int64
+	OutputFast      int64
+	CacheReadFast   int64
+	CacheCreateFast int64
+	Turns           int64
+	ToolErrors      int64
+	StopMaxTokens   int64
+	StopRefusal     int64
+	LatencyMsSum    int64
+	LatencyMsMax    int64
+	LatencyTurns    int64
+	Username        string
+	Machine         string
+	Project         string
 }
 
 // Gap 은 추천 공백 토큰 한 줄이다.

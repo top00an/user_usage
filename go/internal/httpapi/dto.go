@@ -420,6 +420,11 @@ func sessionUsage(s store.Session) cost.Usage {
 		InputLong:     float64(s.InputLong),
 		OutputLong:    float64(s.OutputLong),
 		CacheReadLong: float64(s.CacheReadLong),
+		// 고속 모드 분리분 — 계단과 같은 규율이다. 셋 다 올려야 한다.
+		InputFast:       float64(s.InputFast),
+		OutputFast:      float64(s.OutputFast),
+		CacheReadFast:   float64(s.CacheReadFast),
+		CacheCreateFast: float64(s.CacheCreateFast),
 	}
 }
 
@@ -456,28 +461,36 @@ type platformsResponse struct {
 // 여기서 0 이 아닌 값을 지어내면 그 가정이 사실로 둔갑한다.
 func platformModelUsage(m store.PlatformModelRow) cost.Usage {
 	return cost.Usage{
-		Model:         m.Model,
-		Input:         float64(m.Input),
-		Output:        float64(m.Output),
-		CacheRead:     float64(m.CacheRead),
-		CacheCreate:   float64(m.CacheCreate),
-		InputLong:     float64(m.InputLong),
-		OutputLong:    float64(m.OutputLong),
-		CacheReadLong: float64(m.CacheReadLong),
+		Model:           m.Model,
+		Input:           float64(m.Input),
+		Output:          float64(m.Output),
+		CacheRead:       float64(m.CacheRead),
+		CacheCreate:     float64(m.CacheCreate),
+		InputLong:       float64(m.InputLong),
+		OutputLong:      float64(m.OutputLong),
+		CacheReadLong:   float64(m.CacheReadLong),
+		InputFast:       float64(m.InputFast),
+		OutputFast:      float64(m.OutputFast),
+		CacheReadFast:   float64(m.CacheReadFast),
+		CacheCreateFast: float64(m.CacheCreateFast),
 	}
 }
 
 func bucketUsage(b store.Bucket) cost.Usage {
 	return cost.Usage{
-		Model:         b.Model,
-		Input:         float64(b.Input),
-		Output:        float64(b.Output),
-		CacheRead:     float64(b.CacheRead),
-		CacheCreate:   float64(b.CacheCreate),
-		CacheCreate5m: float64(b.CacheCreate5m),
-		CacheCreate1h: float64(b.CacheCreate1h),
-		InputLong:     float64(b.InputLong),
-		OutputLong:    float64(b.OutputLong),
-		CacheReadLong: float64(b.CacheReadLong),
+		Model:           b.Model,
+		Input:           float64(b.Input),
+		Output:          float64(b.Output),
+		CacheRead:       float64(b.CacheRead),
+		CacheCreate:     float64(b.CacheCreate),
+		CacheCreate5m:   float64(b.CacheCreate5m),
+		CacheCreate1h:   float64(b.CacheCreate1h),
+		InputLong:       float64(b.InputLong),
+		OutputLong:      float64(b.OutputLong),
+		CacheReadLong:   float64(b.CacheReadLong),
+		InputFast:       float64(b.InputFast),
+		OutputFast:      float64(b.OutputFast),
+		CacheReadFast:   float64(b.CacheReadFast),
+		CacheCreateFast: float64(b.CacheCreateFast),
 	}
 }

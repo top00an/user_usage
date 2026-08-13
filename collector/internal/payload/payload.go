@@ -47,9 +47,25 @@ type Session struct {
 	Output      int64 `json:"output"`
 	CacheRead   int64 `json:"cacheRead"`
 	CacheCreate int64 `json:"cacheCreate"`
-	WebSearch   int64 `json:"webSearch"`
-	WebFetch    int64 `json:"webFetch"`
-	Turns       int64 `json:"turns"`
+
+	/*
+	 * 고속 모드(fast mode) 몫 — 총량의 **부분집합**이다(서버 intake 의 longNat 이 같은
+	 * 불변식으로 검증한다: 0 <= fast <= 해당 총량).
+	 *
+	 * 왜 보내는가: 고속 모드는 같은 모델에 2배 단가가 붙는다(Claude Opus 5 고속 $10/$50 vs
+	 * 표준 $5/$25, 캐시 배수는 그 위에 얹힌다). 이 몫을 안 보내면 서버가 전부 표준가로 계산해
+	 * 고속 세션의 비용이 **절반**으로 나온다. 원천은 트랜스크립트의 `usage.speed` 다.
+	 *
+	 * omitempty 를 쓰지 않는다 — 0 은 "표준 속도였다"는 관측이고, 필드가 사라지면 서버가
+	 * "안 보냈다"와 구분할 수 없다. 둘의 계산 결과는 같지만 의미가 달라서 그 구분을 남긴다.
+	 */
+	InputFast       int64 `json:"inputFast"`
+	OutputFast      int64 `json:"outputFast"`
+	CacheReadFast   int64 `json:"cacheReadFast"`
+	CacheCreateFast int64 `json:"cacheCreateFast"`
+	WebSearch       int64 `json:"webSearch"`
+	WebFetch        int64 `json:"webFetch"`
+	Turns           int64 `json:"turns"`
 
 	// NoTsTurns 는 시각을 파싱하지 못해 series 버킷에 올리지 못한 턴 수다. **관측 축이다.**
 	//
@@ -80,8 +96,24 @@ type Bucket struct {
 	Output      int64 `json:"output"`
 	CacheRead   int64 `json:"cacheRead"`
 	CacheCreate int64 `json:"cacheCreate"`
-	CC5m        int64 `json:"cc5m"`
-	CC1h        int64 `json:"cc1h"`
+
+	/*
+	 * 고속 모드(fast mode) 몫 — 총량의 **부분집합**이다(서버 intake 의 longNat 이 같은
+	 * 불변식으로 검증한다: 0 <= fast <= 해당 총량).
+	 *
+	 * 왜 보내는가: 고속 모드는 같은 모델에 2배 단가가 붙는다(Claude Opus 5 고속 $10/$50 vs
+	 * 표준 $5/$25, 캐시 배수는 그 위에 얹힌다). 이 몫을 안 보내면 서버가 전부 표준가로 계산해
+	 * 고속 세션의 비용이 **절반**으로 나온다. 원천은 트랜스크립트의 `usage.speed` 다.
+	 *
+	 * omitempty 를 쓰지 않는다 — 0 은 "표준 속도였다"는 관측이고, 필드가 사라지면 서버가
+	 * "안 보냈다"와 구분할 수 없다. 둘의 계산 결과는 같지만 의미가 달라서 그 구분을 남긴다.
+	 */
+	InputFast       int64 `json:"inputFast"`
+	OutputFast      int64 `json:"outputFast"`
+	CacheReadFast   int64 `json:"cacheReadFast"`
+	CacheCreateFast int64 `json:"cacheCreateFast"`
+	CC5m            int64 `json:"cc5m"`
+	CC1h            int64 `json:"cc1h"`
 
 	Turns         int64 `json:"turns"`
 	ToolErrors    int64 `json:"toolErrors"`

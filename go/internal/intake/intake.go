@@ -146,6 +146,15 @@ type Bucket struct {
 	InputLong     int64
 	OutputLong    int64
 	CacheReadLong int64
+	/*
+	 * 고속 모드 몫(총량의 부분집합). 롱과 **같은 종류의 몫**이라 같은 클램프(longNat)를 쓴다 —
+	 * 불변식도 같다: 0 <= fast <= 해당 총량. 위반은 LongClamped 에 함께 세어진다(둘 다
+	 * "수집기가 몫을 잘못 셌다"는 하나의 신호이고, 갈라 세면 로그만 늘고 판단은 같다).
+	 */
+	InputFast       int64
+	OutputFast      int64
+	CacheReadFast   int64
+	CacheCreateFast int64
 	// LongClamped 는 이 버킷에서 불변식을 위반해 접은 필드 수다.
 	LongClamped int
 
@@ -189,6 +198,15 @@ type Session struct {
 	InputLong     int64
 	OutputLong    int64
 	CacheReadLong int64
+	/*
+	 * 고속 모드 몫(총량의 부분집합). 롱과 **같은 종류의 몫**이라 같은 클램프(longNat)를 쓴다 —
+	 * 불변식도 같다: 0 <= fast <= 해당 총량. 위반은 LongClamped 에 함께 세어진다(둘 다
+	 * "수집기가 몫을 잘못 셌다"는 하나의 신호이고, 갈라 세면 로그만 늘고 판단은 같다).
+	 */
+	InputFast       int64
+	OutputFast      int64
+	CacheReadFast   int64
+	CacheCreateFast int64
 	// LongClamped 는 불변식(0 <= long <= 총량)을 위반해 접은 필드 수다 —
 	// **이 세션 자신과 딸린 버킷 전부를 합친 값**이다. 0 이 아니면 수집기가 잘못 센 것이므로
 	// 호출부(httpapi)가 로그로 남긴다. 저장 대상이 아니라 관측 축이다.
@@ -371,6 +389,13 @@ func NormSession(raw map[string]any, ctx ...Ctx) (Session, bool) {
 	inLong, c1 := longNat(raw["inputLong"], in)
 	outLong, c2 := longNat(raw["outputLong"], out)
 	crLong, c3 := longNat(raw["cacheReadLong"], cr)
+	// 고속 몫도 같은 순서 계약이다. cacheCreate 는 아래에서 다시 읽지만 여기서 상한으로 쓴다 —
+	// nat 은 순수 함수라 두 번 읽어도 같은 값이다.
+	ccTotal := nat(raw["cacheCreate"])
+	inFast, f1 := longNat(raw["inputFast"], in)
+	outFast, f2 := longNat(raw["outputFast"], out)
+	crFast, f3 := longNat(raw["cacheReadFast"], cr)
+	ccFast, f4 := longNat(raw["cacheCreateFast"], ccTotal)
 
 	s := Session{
 		SessionID: sessionID,
@@ -381,24 +406,28 @@ func NormSession(raw map[string]any, ctx ...Ctx) (Session, bool) {
 		Project:   nilIfEmpty(clip(jsString(raw["project"]), 200)),
 		Model:     nilIfEmpty(normModel(raw["model"])),
 		// 40자로 자른다 — 식별자 하나이고, 길면 어차피 저장 계층이 other 로 접는다.
-		Platform:      nilIfEmpty(clip(jsString(raw["platform"]), 40)),
-		Input:         in,
-		Output:        out,
-		CacheRead:     cr,
-		InputLong:     inLong,
-		OutputLong:    outLong,
-		CacheReadLong: crLong,
-		LongClamped:   countTrue(c1, c2, c3),
-		CacheCreate:   nat(raw["cacheCreate"]),
-		WebSearch:     nat(raw["webSearch"]),
-		WebFetch:      nat(raw["webFetch"]),
-		Turns:         nat(raw["turns"]),
-		LinesAdded:    nat(raw["linesAdded"]),
-		LinesRemoved:  nat(raw["linesRemoved"]),
-		EditsAccepted: nat(raw["editsAccepted"]),
-		EditsRejected: nat(raw["editsRejected"]),
-		Counters:      []Counter{},
-		Series:        []Bucket{},
+		Platform:        nilIfEmpty(clip(jsString(raw["platform"]), 40)),
+		Input:           in,
+		Output:          out,
+		CacheRead:       cr,
+		InputLong:       inLong,
+		OutputLong:      outLong,
+		CacheReadLong:   crLong,
+		InputFast:       inFast,
+		OutputFast:      outFast,
+		CacheReadFast:   crFast,
+		CacheCreateFast: ccFast,
+		LongClamped:     countTrue(c1, c2, c3) + countTrue(f1, f2, f3, f4),
+		CacheCreate:     nat(raw["cacheCreate"]),
+		WebSearch:       nat(raw["webSearch"]),
+		WebFetch:        nat(raw["webFetch"]),
+		Turns:           nat(raw["turns"]),
+		LinesAdded:      nat(raw["linesAdded"]),
+		LinesRemoved:    nat(raw["linesRemoved"]),
+		EditsAccepted:   nat(raw["editsAccepted"]),
+		EditsRejected:   nat(raw["editsRejected"]),
+		Counters:        []Counter{},
+		Series:          []Bucket{},
 	}
 	if v, present := raw["noTsTurns"]; present && v != nil {
 		n := nat(v)
@@ -459,13 +488,20 @@ func normSeries(v any) []Bucket {
 		binLong, c1 := longNat(b["inputLong"], bin)
 		boutLong, c2 := longNat(b["outputLong"], bout)
 		bcrLong, c3 := longNat(b["cacheReadLong"], bcr)
+		bcc := nat(b["cacheCreate"])
+		binFast, f1 := longNat(b["inputFast"], bin)
+		boutFast, f2 := longNat(b["outputFast"], bout)
+		bcrFast, f3 := longNat(b["cacheReadFast"], bcr)
+		bccFast, f4 := longNat(b["cacheCreateFast"], bcc)
 
 		out = append(out, Bucket{
 			Hour: hour, Model: model,
 			Input: bin, Output: bout,
-			CacheRead: bcr, CacheCreate: nat(b["cacheCreate"]),
+			CacheRead: bcr, CacheCreate: bcc,
 			InputLong: binLong, OutputLong: boutLong, CacheReadLong: bcrLong,
-			LongClamped: countTrue(c1, c2, c3),
+			InputFast: binFast, OutputFast: boutFast,
+			CacheReadFast: bcrFast, CacheCreateFast: bccFast,
+			LongClamped: countTrue(c1, c2, c3) + countTrue(f1, f2, f3, f4),
 			CC5m:        nat(b["cc5m"]), CC1h: nat(b["cc1h"]),
 			Turns: nat(b["turns"]), ToolErrors: nat(b["toolErrors"]),
 			StopMaxTokens: nat(b["stopMaxTokens"]), StopRefusal: nat(b["stopRefusal"]),

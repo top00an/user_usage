@@ -100,7 +100,23 @@ type rawUsage struct {
 		WebSearch int64 `json:"web_search_requests"`
 		WebFetch  int64 `json:"web_fetch_requests"`
 	} `json:"server_tool_use"`
+	/*
+	 * Speed — 이 턴이 고속 모드였나("fast" | "standard").
+	 *
+	 * 실측(2026-08-13, 로컬 트랜스크립트 40파일): 메시지 1,994건 전부 "standard" 였다.
+	 * 즉 지금은 이 값이 비용을 바꾸지 않는다 — 그래도 읽는 이유는 `/fast` 를 켜는 순간부터
+	 * 단가가 2배가 되고(Opus 5 고속 $10/$50), 안 읽으면 그 사실이 **비용이 절반으로 나오는
+	 * 방향**으로 조용히 틀리기 때문이다. 사람은 싸게 나온 숫자를 의심하지 않는다.
+	 *
+	 * 판정은 **"fast" 와 정확히 일치**할 때만 한다. 모르는 값(빈 문자열·새 값)은 표준으로
+	 * 둔다 — 모르는 값을 고속으로 접으면 비용을 2배로 지어내게 된다. 이 축에서는 과소보다
+	 * 과대가 더 나쁘다(없는 청구를 만든다).
+	 */
+	Speed string `json:"speed"`
 }
+
+// isFast 는 이 턴이 고속 단가로 청구되는지다. 모르는 값은 표준이다(위 주석 참고).
+func (u *rawUsage) isFast() bool { return u != nil && u.Speed == "fast" }
 
 type rawBlock struct {
 	Type      string          `json:"type"`
@@ -144,6 +160,10 @@ type sessionAgg struct {
 
 	input, output, cacheRead, cacheCreate int64
 	webSearch, webFetch, turns            int64
+
+	// 고속 모드 몫(위 총량의 부분집합). 세션 총량은 버킷에서 파생되지 않고 여기서 따로
+	// 누적되므로, 버킷과 **같은 자리에서** 같이 더해야 둘이 어긋나지 않는다.
+	inputFast, outputFast, cacheReadFast, cacheCreateFast int64
 
 	// 개발 지표(파생). Edit/Write/MultiEdit tool_use 에서 **줄 수만** 센다(내용 미저장).
 	linesAdded, linesRemoved     int64
@@ -261,6 +281,14 @@ func (sa *sessionAgg) addAssistant(m *rawMessage, ts string) {
 	sa.output += u.OutputTokens
 	sa.cacheRead += u.CacheReadInputTokens
 	sa.cacheCreate += u.CacheCreationInputTokens
+	// 고속 몫 — 버킷 쪽(addBucketUsage)과 **같은 판정·같은 값**이어야 한다. 한쪽만 세면
+	// 세션 합계와 시간 뷰의 비용이 갈리고, 두 화면이 다른 값을 말하게 된다.
+	if u.isFast() {
+		sa.inputFast += u.InputTokens
+		sa.outputFast += u.OutputTokens
+		sa.cacheReadFast += u.CacheReadInputTokens
+		sa.cacheCreateFast += u.CacheCreationInputTokens
+	}
 	sa.turns++
 	if u.ServerToolUse != nil {
 		sa.webSearch += u.ServerToolUse.WebSearch
@@ -282,6 +310,21 @@ func (sa *sessionAgg) addAssistant(m *rawMessage, ts string) {
 	if u.CacheCreation != nil {
 		bk.b.CC1h += u.CacheCreation.Ephemeral1h
 		bk.b.CC5m += u.CacheCreation.Ephemeral5m
+	}
+	/*
+	 * 고속 모드 몫 — 총량에 **더한 뒤** 같은 값을 fast 쪽에도 더한다(부분집합이므로).
+	 * 총량에서 빼지 않는다: 그러면 표준 몫과 고속 몫의 의미가 갈려 이미 저장된 값이 어느
+	 * 규칙으로 쓰인 것인지 알 수 없게 된다(서버 0039 마이그레이션과 같은 판단).
+	 *
+	 * 캐시 축도 포함한다. 고속은 기준 입력가를 올리고 캐시 배수가 그 위에 얹히므로
+	 * 캐시 읽기·쓰기도 2배다 — 빼면 이 워크로드에서 누락이 가장 큰 축이 빠진다
+	 * (실측: 캐시읽기가 전체 토큰의 90% 이상이다).
+	 */
+	if u.isFast() {
+		bk.b.InputFast += u.InputTokens
+		bk.b.OutputFast += u.OutputTokens
+		bk.b.CacheReadFast += u.CacheReadInputTokens
+		bk.b.CacheCreateFast += u.CacheCreationInputTokens
 	}
 	bk.b.Turns++
 	switch m.StopReason {
@@ -466,25 +509,30 @@ func (a *Aggregator) Sessions() []payload.Session {
 		}
 		noTs := sa.noTsTurn
 		s := payload.Session{
-			ID:            sid,
-			StartedAt:     sa.minTs,
-			EndedAt:       sa.maxTs,
-			Project:       sa.project,
-			Model:         sa.dominantModel(),
-			Input:         sa.input,
-			Output:        sa.output,
-			CacheRead:     sa.cacheRead,
-			CacheCreate:   sa.cacheCreate,
-			WebSearch:     sa.webSearch,
-			WebFetch:      sa.webFetch,
-			Turns:         sa.turns,
-			NoTsTurns:     &noTs,
-			LinesAdded:    sa.linesAdded,
-			LinesRemoved:  sa.linesRemoved,
-			EditsAccepted: sa.editsAccepted,
-			EditsRejected: sa.editsRejected,
-			Counters:      capCounters(sa.counters),
-			Series:        sa.sortedBuckets(),
+			ID:          sid,
+			StartedAt:   sa.minTs,
+			EndedAt:     sa.maxTs,
+			Project:     sa.project,
+			Model:       sa.dominantModel(),
+			Input:       sa.input,
+			Output:      sa.output,
+			CacheRead:   sa.cacheRead,
+			CacheCreate: sa.cacheCreate,
+			// 고속 몫(총량의 부분집합) — 서버가 이 값에 2배 단가를 매긴다.
+			InputFast:       sa.inputFast,
+			OutputFast:      sa.outputFast,
+			CacheReadFast:   sa.cacheReadFast,
+			CacheCreateFast: sa.cacheCreateFast,
+			WebSearch:       sa.webSearch,
+			WebFetch:        sa.webFetch,
+			Turns:           sa.turns,
+			NoTsTurns:       &noTs,
+			LinesAdded:      sa.linesAdded,
+			LinesRemoved:    sa.linesRemoved,
+			EditsAccepted:   sa.editsAccepted,
+			EditsRejected:   sa.editsRejected,
+			Counters:        capCounters(sa.counters),
+			Series:          sa.sortedBuckets(),
 		}
 		out = append(out, s)
 	}

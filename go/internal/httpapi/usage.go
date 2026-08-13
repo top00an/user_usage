@@ -124,7 +124,10 @@ func (s *server) storeSessions(ctx context.Context, sessions []intake.Session, k
 			// 계단 분리분 — 없으면 0 이고 그것이 현행 동작이다(전부 표준 구간).
 			InputLong: sess.InputLong, OutputLong: sess.OutputLong,
 			CacheReadLong: sess.CacheReadLong,
-			WebSearch:     sess.WebSearch, WebFetch: sess.WebFetch, Turns: sess.Turns,
+			// 고속 모드 분리분 — 없으면 0 이고 그것이 현행 동작이다(전부 표준 속도).
+			InputFast: sess.InputFast, OutputFast: sess.OutputFast,
+			CacheReadFast: sess.CacheReadFast, CacheCreateFast: sess.CacheCreateFast,
+			WebSearch: sess.WebSearch, WebFetch: sess.WebFetch, Turns: sess.Turns,
 			StartedAt: deref(sess.StartedAt), EndedAt: deref(sess.EndedAt),
 			NoTsTurns:     sess.NoTsTurns,
 			LinesAdded:    sess.LinesAdded,
@@ -200,7 +203,9 @@ func toSeriesRows(bs []intake.Bucket) []store.SeriesRow {
 			CacheRead: b.CacheRead, CacheCreate: b.CacheCreate,
 			InputLong: b.InputLong, OutputLong: b.OutputLong,
 			CacheReadLong: b.CacheReadLong,
-			CC5m:          b.CC5m, CC1h: b.CC1h, Turns: b.Turns,
+			InputFast:     b.InputFast, OutputFast: b.OutputFast,
+			CacheReadFast: b.CacheReadFast, CacheCreateFast: b.CacheCreateFast,
+			CC5m: b.CC5m, CC1h: b.CC1h, Turns: b.Turns,
 			ToolErrors: b.ToolErrors, StopMaxTokens: b.StopMaxTokens, StopRefusal: b.StopRefusal,
 			LatencyMsSum: b.LatencyMsSum, LatencyMsMax: b.LatencyMsMax, LatencyTurns: b.LatencyTurns,
 		})
