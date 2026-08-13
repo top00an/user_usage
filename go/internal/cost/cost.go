@@ -109,11 +109,53 @@ type Usage struct {
 	// **0/부재가 기존 동작이다.** 전부 표준 구간으로 계산되며 결과는 개편 전과 비트 동일하다
 	// (regression_test.go · longcontext_test.go 가 못박는다).
 	//
-	// 캐시 **생성**에는 분리분이 없다. 계단 요금을 적용하는 두 공급사(Google·OpenAI)가
-	// 캐시 생성에 별도 롱 단가를 두지 않기 때문이다 — 없는 축을 만들지 않는다.
-	InputLong     float64
-	OutputLong    float64
-	CacheReadLong float64
+	/*
+	 * CacheCreateLong — 캐시 **생성**의 롱 몫.
+	 *
+	 * ⚠ 예전에는 "계단을 쓰는 두 공급사가 캐시 생성에 롱 단가를 두지 않는다"고 적고 이 필드를
+	 *   두지 않았다. 2026-08-13 전수 감사에서 그것이 틀린 것을 잡았다 — OpenAI 공식 표는
+	 *   5.6 계열의 캐시 쓰기를 **두 값**으로 싣는다(sol $6.25/$12.50 · terra $2.50/$5.00 ·
+	 *   luna $0.25/$0.50). 앞이 표준 구간, 뒤가 롱 구간이고 각각 1.25 × 해당 구간 입력가다.
+	 *   없으면 롱 구간의 캐시 쓰기가 표준가로 계산돼 **과소**계상된다.
+	 *
+	 *   Google 은 여전히 해당 없다(쓰기 토큰 과금 자체가 없다). Anthropic 도 해당 없다
+	 *   (4.6+ 는 1M 컨텍스트가 표준가라 계단이 없다). 즉 실제로 이 필드가 값을 갖는 것은
+	 *   OpenAI 5.6 계열뿐이고, 그쪽은 TTL 로 갈리지 않아(5분·1시간 배수가 같은 1.25)
+	 *   롱 몫에 어느 TTL 배수를 쓸지 모호하지 않다.
+	 */
+	InputLong       float64
+	OutputLong      float64
+	CacheReadLong   float64
+	CacheCreateLong float64
+
+	/*
+	 * ── 고속 모드(fast mode) 분리분 ─────────────────────────────────────────
+	 *
+	 * **총량 중 고속 모드로 처리된 몫**이다(롱 분리분과 같은 계약 — 총량의 부분집합).
+	 *
+	 * 왜 필요한가: 고속 모드는 같은 모델에 **다른 단가**가 붙는다.
+	 *   Anthropic  Claude Opus 5 / Opus 4.8 — $10/$50 (표준 $5/$25 의 정확히 2배).
+	 *              캐시 배수는 그 위에 얹힌다(공식: "Prompt caching multipliers apply on top
+	 *              of fast mode pricing") → 캐시 축도 2배다.
+	 *   OpenAI     공식 단가 표 각주 "Fast mode pricing is doubled." → 같은 2배.
+	 *
+	 * 두 공급사가 같은 배수라서 단일 상수(FastMult)로 갈음한다. 갈리면 seedEntry 로 내린다.
+	 *
+	 * ⚠ **원천은 이미 있다.** Claude Code 트랜스크립트가 메시지마다 `usage.speed` 를 싣는다
+	 *   (실측 2026-08-13: 표본 1,994건 전부 "standard" — 즉 지금 오차는 0 이다).
+	 *   그래서 이 축은 "관측 불가"가 아니라 **아직 배관이 없는 것**이다: 수집기·인테이크·
+	 *   저장 컬럼이 채워지면 아래 계산이 그대로 동작한다.
+	 *   0/부재가 기존 동작이며(전부 표준 속도) 결과는 비트 동일하다.
+	 *
+	 * ⚠ 고속 몫이 **롱 구간과 겹칠 때**는 표준 단가 기준으로 2배를 매긴다(아래 delta 항).
+	 *   즉 `고속 + 272K 초과`가 동시인 요청은 그 겹친 부분만 소폭 과소가 된다. 혼합 비율을
+	 *   추정해 곱하는 편이 이론상 정확하지만, 그건 근거 없는 가정을 비용 계산에 넣는 일이다 —
+	 *   가정 대신 **경계를 문서로 남긴다**. (Opus 5 고속 + 272K 초과는 실측된 바 없다.)
+	 */
+	InputFast       float64
+	OutputFast      float64
+	CacheReadFast   float64
+	CacheCreateFast float64
 }
 
 // LongPricing 은 롱 몫에 **무슨 단가를 적용했는지**다.
@@ -164,9 +206,18 @@ type Result struct {
 
 	// ── 계단(롱컨텍스트) ──────────────────────────────────────────────────
 	//
-	// LongTokens 는 롱 구간으로 분리된 토큰 수다(입력 + 출력 + 캐시읽기). CostOf 는 그 행의
-	// 값을, Summarize 는 합계를 담는다. 0 이면 계단이 개입하지 않았다는 뜻이다.
+	// LongTokens 는 롱 구간으로 분리된 토큰 수다(입력 + 출력 + 캐시읽기 + 캐시쓰기). CostOf 는
+	// 그 행의 값을, Summarize 는 합계를 담는다. 0 이면 계단이 개입하지 않았다는 뜻이다.
 	LongTokens float64
+
+	// ── 고속 모드 ─────────────────────────────────────────────────────────
+	//
+	// FastTokens 는 고속 단가로 계산된 토큰 수다(전 축 합). 0 이면 전부 표준 속도이며
+	// 비용은 고속 모드가 없던 때와 비트 동일하다.
+	//
+	// 이 값을 내보내는 이유는 "왜 이 세션이 비싼가"를 화면이 답할 수 있어야 하기 때문이다 —
+	// 같은 모델·같은 토큰인데 2배가 나오는 유일한 이유가 이 축이다.
+	FastTokens float64
 	// LongPricing 은 CostOf 만 채운다 — 한 행에 적용된 단가의 종류다.
 	LongPricing LongPricing
 	// LongUnknownRows 는 Summarize 만 채운다. **롱 몫이 있는데 롱 단가를 몰라 표준가로
@@ -262,6 +313,26 @@ var anthropicSeed = map[string]seedEntry{
 	"claude-fable-5":    {provider: ProviderAnthropic, price: Price{10, 50}},
 	"claude-mythos-5":   {provider: ProviderAnthropic, price: Price{10, 50}},
 	"claude-haiku-4-5":  {provider: ProviderAnthropic, price: Price{1, 5}},
+
+	/*
+	 * ── 은퇴 모델 ────────────────────────────────────────────────────────
+	 *
+	 * 1st-party API 에서는 은퇴했지만 **Bedrock·Google Cloud 에서는 아직 돌아간다**
+	 * (공식 단가 문서가 각 행에 "retired, except on Bedrock and Google Cloud" 로 명시하고
+	 * 단가를 계속 싣고 있다). 2026-08-13 전수 감사에서 미등재를 잡았다.
+	 *
+	 * 등재하는 이유: 미등재로 두면 그 세션이 unpriced 로 빠져 **비용에서 사라진다.** 단가가
+	 * 공개돼 있는데 비용을 0 으로 두는 것은 이 레포의 규율("틀린 숫자보다 없는 숫자가 낫다")이
+	 * 말하는 상황이 아니다 — 그 규율은 단가를 **모를 때** 쓰는 것이고, 여기는 안다.
+	 *
+	 * ⚠ 이 모델들은 4.5 이전이라 데이터 레지던시(inference_geo)를 지원하지 않는다.
+	 *   Bedrock·GCP 는 자체 지역 단가가 따로 있으므로, 그쪽으로 돌린 사용량의 실제 청구는
+	 *   이 표와 다를 수 있다(공식 문서도 그 둘은 별도 페이지를 보라고 한다).
+	 */
+	"claude-opus-4-1":  {provider: ProviderAnthropic, price: Price{15, 75}},
+	"claude-opus-4":    {provider: ProviderAnthropic, price: Price{15, 75}},
+	"claude-sonnet-4":  {provider: ProviderAnthropic, price: Price{3, 15}},
+	"claude-haiku-3-5": {provider: ProviderAnthropic, price: Price{0.8, 4}},
 }
 
 // seed 는 공급사별 표를 합친 것이다(openaiSeed·googleSeed 는 seed_openai.go·seed_google.go).
@@ -356,6 +427,18 @@ const (
 	CacheReadMult     = 0.1
 	CacheCreateMult   = 1.25 // 5분 TTL
 	CacheCreate1hMult = 2    // 1시간 TTL
+
+	/*
+	 * FastMult 는 고속 모드 배수다 — 전 축(입력·출력·캐시)에 같이 걸린다.
+	 *
+	 * 두 공급사가 같은 2배다:
+	 *   Anthropic  Opus 5 / Opus 4.8 고속 $10/$50 = 표준 $5/$25 × 2. 캐시 배수는 그 위에 얹힌다.
+	 *   OpenAI     공식 단가 표 각주 "Fast mode pricing is doubled."
+	 * 갈리는 날이 오면 seedEntry 로 내린다(cacheReadMult 가 그렇게 내려간 전례가 있다).
+	 *
+	 * config 오버라이드를 두지 않는다 — 이건 협상 대상 배수가 아니라 공표된 단가 구조다.
+	 */
+	FastMult = 2.0
 
 	multMin = 0
 	multMax = 10
@@ -643,7 +726,13 @@ func CostOf(row Usage, table Table, mult Mult) Result {
 	inLong := longShare(row.InputLong, row.Input)
 	outLong := longShare(row.OutputLong, row.Output)
 	crLong := longShare(row.CacheReadLong, row.CacheRead)
-	longTokens := inLong + outLong + crLong
+	ccLong := longShare(row.CacheCreateLong, row.CacheCreate)
+	/*
+	 * ccLong 도 여기 합산한다. longPriceOf 가 이 합으로 "롱 단가를 적용할지"를 정하므로,
+	 * 빼놓으면 **캐시 쓰기만 롱인 행**에서 롱 단가가 발동하지 않고 차액이 0 이 된다
+	 * (누락을 고치려고 필드를 넣었는데 그 필드만으로는 동작하지 않는 상태가 된다).
+	 */
+	longTokens := inLong + outLong + crLong + ccLong
 
 	if !priced {
 		return Result{
@@ -662,6 +751,20 @@ func CostOf(row Usage, table Table, mult Mult) Result {
 	} else {
 		cacheCreateUSD = (tok(row.CacheCreate) * p.Input * mult.CacheCreate) / mtok
 	}
+	/*
+	 * 롱 구간 캐시 쓰기의 **차액**만 더한다.
+	 *
+	 * 차액으로 더하는 이유는 무회귀다: ccLong 이 0 이면 이 항이 통째로 0 이라 위에서 낸 값의
+	 * 비트가 그대로 남는다(regression_test.go 가 그것을 요구한다). 롱 몫을 본식에 끼워 넣으면
+	 * 곱셈 순서가 바뀌어 롱이 없는 기존 행의 마지막 비트가 흔들린다.
+	 *
+	 * 배수는 mult.CacheCreate 를 쓴다. 이 필드가 값을 갖는 것은 OpenAI 5.6 계열뿐이고
+	 * (위 CacheCreateLong 주석), 그쪽은 modelMult 가 CacheCreate 와 CacheCreate1h 에 같은
+	 * 값(1.25)을 넣으므로 TTL 어느 쪽을 골라도 결과가 같다 — 가정이 아니라 항등이다.
+	 */
+	if ccLong > 0 {
+		cacheCreateUSD += ccLong * (pLong.Input - p.Input) * mult.CacheCreate / mtok
+	}
 
 	byAxis := Axis{
 		Input:  ((tok(row.Input)-inLong)*p.Input + inLong*pLong.Input) / mtok,
@@ -677,6 +780,32 @@ func CostOf(row Usage, table Table, mult Mult) Result {
 		CacheRead:   (((tok(row.CacheRead)-crLong)*p.Input + crLong*pLong.Input) * mult.CacheRead) / mtok,
 		CacheCreate: cacheCreateUSD,
 	}
+
+	/*
+	 * ── 고속 모드 차액 ────────────────────────────────────────────────────
+	 *
+	 * 고속 단가는 표준의 FastMult 배다. 총량에 이미 1배가 들어가 있으므로 여기서는
+	 * **(FastMult − 1)배만** 더한다. 고속 몫이 0 이면 fastTokens 가 0 이라 이 블록을 아예
+	 * 건너뛴다 — 기존 행의 비트가 그대로 남는 근거다.
+	 *
+	 * 캐시 축에도 걸린다. 고속 모드는 **기준 입력가**를 올리는 것이고 캐시 배수는 그 위에
+	 * 얹히기 때문이다(공식 문구). 캐시만 빼면 고속 세션의 캐시 비용이 절반으로 잡힌다.
+	 *
+	 * 차액에 표준가(p)를 쓰는 이유와 그 경계는 Usage.InputFast 주석에 적었다.
+	 */
+	inFast := longShare(row.InputFast, row.Input)
+	outFast := longShare(row.OutputFast, row.Output)
+	crFast := longShare(row.CacheReadFast, row.CacheRead)
+	ccFast := longShare(row.CacheCreateFast, row.CacheCreate)
+	fastTokens := inFast + outFast + crFast + ccFast
+	if fastTokens > 0 {
+		const extra = FastMult - 1
+		byAxis.Input += inFast * p.Input * extra / mtok
+		byAxis.Output += outFast * p.Output * extra / mtok
+		byAxis.CacheRead += crFast * p.Input * mult.CacheRead * extra / mtok
+		byAxis.CacheCreate += ccFast * p.Input * mult.CacheCreate * extra / mtok
+	}
+
 	return Result{
 		USD:         byAxis.Input + byAxis.Output + byAxis.CacheRead + byAxis.CacheCreate,
 		ByAxis:      byAxis,
@@ -685,6 +814,7 @@ func CostOf(row Usage, table Table, mult Mult) Result {
 		Model:       model,
 		LongTokens:  longTokens,
 		LongPricing: longPricing,
+		FastTokens:  fastTokens,
 	}
 }
 

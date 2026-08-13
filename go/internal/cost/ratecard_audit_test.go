@@ -157,15 +157,15 @@ func TestAudit_OpenAICachedInputMatchesOfficialColumn(t *testing.T) {
 		{"gpt-5.3-codex", 0.175},
 		{"gpt-5.1", 0.125},
 		{"gpt-5-nano", 0.005},
-		{"gpt-4.1", 0.50},     // 0.25배 계열
+		{"gpt-4.1", 0.50},      // 0.25배 계열
 		{"gpt-4.1-mini", 0.10}, // 0.25배
-		{"gpt-4o", 1.25},      // 0.5배 계열
+		{"gpt-4o", 1.25},       // 0.5배 계열
 		{"gpt-4o-mini", 0.075}, // 0.5배
-		{"o1", 7.50},          // 0.5배
-		{"o3", 0.50},          // 0.25배
-		{"o4-mini", 0.275},    // 0.25배
-		{"o3-mini", 0.55},     // 0.5배
-		{"gpt-5-pro", 15},     // 할인 없음(1.0배) — 입력가와 같다
+		{"o1", 7.50},           // 0.5배
+		{"o3", 0.50},           // 0.25배
+		{"o4-mini", 0.275},     // 0.25배
+		{"o3-mini", 0.55},      // 0.5배
+		{"gpt-5-pro", 15},      // 할인 없음(1.0배) — 입력가와 같다
 		{"gpt-5.5-pro", 30},
 		{"gpt-5.2-pro", 21},
 		{"o1-pro", 150},
@@ -187,15 +187,15 @@ func TestAudit_LongContextTiers(t *testing.T) {
 	tbl := Pricing(auditDay)
 
 	for _, tc := range []struct {
-		model     string
-		longIn    float64
-		longOut   float64
+		model   string
+		longIn  float64
+		longOut float64
 	}{
 		{"gpt-5.6-sol", 10, 45},
 		{"gpt-5.6-terra", 4, 18},
 		{"gpt-5.6-luna", 0.4, 1.8},
 		{"gpt-5.5", 10, 45},
-		{"gpt-5.4", 5, 22.5},    // ③ 감사에서 추가
+		{"gpt-5.4", 5, 22.5},     // ③ 감사에서 추가
 		{"gpt-5.5-pro", 60, 270}, // ③
 		{"gpt-5.4-pro", 60, 270}, // ③
 		{"gemini-2.5-pro", 2.5, 15},
@@ -284,5 +284,141 @@ func TestAudit_UnpricedModelsStayVisible(t *testing.T) {
 		if r.USD != 0 {
 			t.Errorf("%s: 미등재인데 비용이 붙었다 $%v", m, r.USD)
 		}
+	}
+}
+
+/*
+ * ③ 캐시 쓰기의 롱 단가 — 공식 표는 5.6 계열의 Cache writes 를 **두 값**으로 싣는다:
+ *      sol   $6.25 / $12.50
+ *      terra $2.50 / $5.00
+ *      luna  $0.25 / $0.50
+ *    앞이 표준 구간(1.25 × 표준입력), 뒤가 롱 구간(1.25 × 롱입력)이다.
+ */
+func TestAudit_CacheWriteLongTier(t *testing.T) {
+	const mtok = 1_000_000
+	tbl := Pricing(auditDay)
+	for _, tc := range []struct {
+		model               string
+		wantShort, wantLong float64
+	}{
+		{"gpt-5.6-sol", 6.25, 12.50},
+		{"gpt-5.6-terra", 2.50, 5.00},
+		{"gpt-5.6-luna", 0.25, 0.50},
+	} {
+		short := CostOf(Usage{Model: tc.model, CacheCreate: mtok}, tbl, Mult{}).ByAxis.CacheCreate
+		if d := short - tc.wantShort; d > 1e-9 || d < -1e-9 {
+			t.Errorf("%s 표준 캐시쓰기: got $%v want $%v", tc.model, short, tc.wantShort)
+		}
+		// 전량이 롱 구간인 행.
+		long := CostOf(Usage{Model: tc.model, CacheCreate: mtok, CacheCreateLong: mtok}, tbl, Mult{}).ByAxis.CacheCreate
+		if d := long - tc.wantLong; d > 1e-9 || d < -1e-9 {
+			t.Errorf("%s 롱 캐시쓰기: got $%v want $%v", tc.model, long, tc.wantLong)
+		}
+	}
+
+	// 캐시 쓰기 과금이 없는 공급사는 롱 몫을 넣어도 $0 이어야 한다(없는 요금을 만들지 않는다).
+	for _, m := range []string{"gemini-2.5-pro", "gemini-3.1-pro-preview"} {
+		got := CostOf(Usage{Model: m, CacheCreate: mtok, CacheCreateLong: mtok}, tbl, Mult{}).ByAxis.CacheCreate
+		if got != 0 {
+			t.Errorf("%s: Google 은 캐시 쓰기 토큰 과금이 없다 — got $%v", m, got)
+		}
+	}
+
+	// 무회귀 — CacheCreateLong 이 0 이면 값이 종전과 같아야 한다(차액 항이 0 곱셈이다).
+	for _, m := range []string{"claude-opus-5", "gpt-5.6-terra", "gpt-5.5"} {
+		a := CostOf(Usage{Model: m, CacheCreate: 12345, CacheCreate5m: 12345}, tbl, Mult{}).ByAxis.CacheCreate
+		b := CostOf(Usage{Model: m, CacheCreate: 12345, CacheCreate5m: 12345, CacheCreateLong: 0}, tbl, Mult{}).ByAxis.CacheCreate
+		if a != b {
+			t.Errorf("%s: CacheCreateLong 0 이 비트를 바꿨다 %v vs %v", m, a, b)
+		}
+	}
+}
+
+/*
+ * ④ 은퇴 모델 — 1st-party 에서는 은퇴했지만 Bedrock·GCP 에서 돌아가고 공식 표가 단가를
+ *    계속 싣는다. 미등재로 두면 그 세션이 비용에서 통째로 사라진다.
+ */
+func TestAudit_RetiredModelsArePriced(t *testing.T) {
+	for _, tc := range []struct {
+		model   string
+		in, out float64
+	}{
+		{"claude-opus-4-1", 15, 75},
+		{"claude-opus-4", 15, 75},
+		{"claude-sonnet-4", 3, 15},
+		{"claude-haiku-3-5", 0.8, 4},
+	} {
+		wantPrice(t, tc.model, tc.in, tc.out)
+		r := CostOf(Usage{Model: tc.model, Input: 1_000_000}, Pricing(auditDay), Mult{})
+		if !r.Priced {
+			t.Errorf("%s 가 unpriced 다 — 공식 단가가 있는데 비용에서 빠진다", tc.model)
+		}
+	}
+}
+
+/*
+ * ① 고속 모드 — 공식 표의 Fast mode 행을 그대로 대조한다.
+ *
+ *   Anthropic  Claude Opus 5 / Opus 4.8 : 입력 $10 · 출력 $50 (표준 $5/$25 의 2배)
+ *   OpenAI     "Fast mode pricing is doubled."
+ *
+ * 캐시 축도 2배다 — 고속은 **기준 입력가**를 올리고 캐시 배수는 그 위에 얹힌다
+ * (공식: "Prompt caching multipliers apply on top of fast mode pricing").
+ */
+func TestAudit_FastModeDoublesEveryAxis(t *testing.T) {
+	const mtok = 1_000_000
+	tbl := Pricing(auditDay)
+
+	// 전량 고속인 행: 입력 $10 · 출력 $50 (공식 Fast mode 표와 같아야 한다).
+	for _, m := range []string{"claude-opus-5", "claude-opus-4-8"} {
+		in := CostOf(Usage{Model: m, Input: mtok, InputFast: mtok}, tbl, Mult{}).ByAxis.Input
+		if d := in - 10; d > 1e-9 || d < -1e-9 {
+			t.Errorf("%s 고속 입력: got $%v want $10 (공식 Fast mode)", m, in)
+		}
+		out := CostOf(Usage{Model: m, Output: mtok, OutputFast: mtok}, tbl, Mult{}).ByAxis.Output
+		if d := out - 50; d > 1e-9 || d < -1e-9 {
+			t.Errorf("%s 고속 출력: got $%v want $50", m, out)
+		}
+		// 캐시 히트: 0.1 × $10 = $1.00 (표준은 0.1 × $5 = $0.50)
+		cr := CostOf(Usage{Model: m, CacheRead: mtok, CacheReadFast: mtok}, tbl, Mult{}).ByAxis.CacheRead
+		if d := cr - 1; d > 1e-9 || d < -1e-9 {
+			t.Errorf("%s 고속 캐시히트: got $%v want $1.00", m, cr)
+		}
+		// 5분 캐시 쓰기: 1.25 × $10 = $12.50 (표준은 $6.25)
+		cc := CostOf(Usage{Model: m, CacheCreate: mtok, CacheCreate5m: mtok, CacheCreateFast: mtok}, tbl, Mult{}).ByAxis.CacheCreate
+		if d := cc - 12.5; d > 1e-9 || d < -1e-9 {
+			t.Errorf("%s 고속 5분 캐시쓰기: got $%v want $12.50", m, cc)
+		}
+	}
+
+	// 절반만 고속인 행 — 표준과 고속의 중간이어야 한다(비례).
+	half := CostOf(Usage{Model: "claude-opus-5", Input: mtok, InputFast: mtok / 2}, tbl, Mult{}).ByAxis.Input
+	if d := half - 7.5; d > 1e-9 || d < -1e-9 {
+		t.Errorf("절반 고속 입력: got $%v want $7.50 (표준 5 + 고속분 2.5)", half)
+	}
+
+	// FastTokens 가 보고돼야 한다 — "왜 2배인가"를 화면이 답할 유일한 근거다.
+	r := CostOf(Usage{Model: "claude-opus-5", Input: mtok, InputFast: mtok}, tbl, Mult{})
+	if r.FastTokens != mtok {
+		t.Errorf("FastTokens=%v want %v", r.FastTokens, float64(mtok))
+	}
+
+	// 무회귀 — 고속 몫이 0/부재면 비트가 종전과 같아야 한다.
+	for _, m := range []string{"claude-opus-5", "claude-sonnet-5", "gpt-5.6-terra", "gemini-3.6-flash"} {
+		row := Usage{Model: m, Input: 1234, Output: 5678, CacheRead: 98765, CacheCreate: 4321, CacheCreate5m: 4321}
+		a := CostOf(row, tbl, Mult{})
+		row.InputFast, row.OutputFast, row.CacheReadFast, row.CacheCreateFast = 0, 0, 0, 0
+		b := CostOf(row, tbl, Mult{})
+		if a.USD != b.USD {
+			t.Errorf("%s: 고속 몫 0 이 비트를 바꿨다 %v vs %v", m, a.USD, b.USD)
+		}
+		if a.FastTokens != 0 {
+			t.Errorf("%s: 고속 몫이 없는데 FastTokens=%v", m, a.FastTokens)
+		}
+	}
+
+	// 배수 상수가 공식(2배)과 같은지.
+	if FastMult != 2.0 {
+		t.Errorf("FastMult=%v (공식 표: Opus 5 고속 $10/$50 = 표준의 2배)", FastMult)
 	}
 }
