@@ -158,7 +158,13 @@ describe('아키텍처 — 4개 플랫폼 · 2가지 수집 방식', () => {
     expect(cellsOf(METRIC_LABEL.slash)?.[1]).toBe('미수집');
     expect(cellsOf(METRIC_LABEL.skill)?.[1]).toBe('수집됨');
     expect(cellsOf(METRIC_LABEL.agent)?.[1]).toBe('수집됨');
-    expect(cellsOf(METRIC_LABEL.cacheCreate)?.[1]).toBe('해당 없음');
+    /*
+     * Codex 의 캐시생성은 **Antigravity 와 이유가 다르다**(2026-08-13 정정).
+     * GPT-5.6 부터 캐시 쓰기가 입력가의 1.25배로 청구되므로 "개념 없음"이 아니고,
+     * Codex 로그에 그 필드가 없으므로 "수집됨"도 아니다 — 미수집(공백)이다.
+     * 같은 열에서 Antigravity(위 [3])만 '해당 없음'으로 남는다: Google 은 청구하지 않는다.
+     */
+    expect(cellsOf(METRIC_LABEL.cacheCreate)?.[1]).toBe('미수집');
     // Gemini 수집기는 이미 있다 — 이 탭이 '준비 중'이라고 말하면 안 된다.
     expect(cellsOf(METRIC_LABEL.tool)?.[2]).toBe('수집됨');
     expect(cellsOf(METRIC_LABEL.skill)?.[2]).toBe('수집됨');

@@ -165,7 +165,11 @@ export const COMMON_CORE: readonly MetricId[] = ['sessions', 'input', 'output', 
  * 이 축들은 원칙적으로 `yes` 다. 서버가 실제 세션 행에서 집계한 값이라, 행이 있으면 그 숫자는
  * 관측이다. 여기에 '준비 중'·'미상'을 씌우면 이번엔 **수집된 값을 화면이 숨기게 된다** —
  * 없는 값을 0 으로 그리는 것과 정확히 같은 종류의 거짓말이고, 방향만 반대다.
- * (예외는 codex 의 cacheCreate 뿐이다: 열은 합산되지만 그 개념 자체가 존재하지 않는다.)
+ * 예외는 cacheCreate 둘이다. 열은 합산되지만 그 숫자가 관측이 아니다:
+ *   · antigravity — 개념 자체가 없다('na'). Google 은 캐시 쓰기를 청구하지 않는다.
+ *   · codex       — 청구는 되는데 로그에 필드가 없다('unmeasured'). 0 이 아니라 공백이다.
+ * 이 둘을 'yes' 로 두면 화면이 "관측된 0"이라고 말하게 되고, codex 쪽은 비용을 낮게
+ * 보이는 방향으로 틀린다.
  */
 const VALUE_AXES: readonly MetricId[] = ['sessions', 'input', 'output', 'cacheRead', 'cacheCreate', 'cost'];
 
@@ -185,8 +189,28 @@ const UNKNOWN: Support = {
   why: '이 화면이 모르는 플랫폼입니다 — 어떤 축을 기록하는지 단정할 수 없습니다.',
 };
 
-/** 캐시 쓰기 과금 개념이 없는 플랫폼의 cacheCreate — codex·antigravity 가 같은 결론을 공유한다. */
+/**
+ * 캐시 쓰기 과금 개념이 **없는** 플랫폼의 cacheCreate.
+ *
+ * ⚠ 이제 antigravity(Gemini) 전용이다. Google 은 암시적 캐싱이라 쓰기 비용을 청구하지 않는다 —
+ *   go/internal/cost/seed_google.go 가 cacheWriteMult 0 으로 같은 사실을 적고 있다.
+ *
+ * ⚠ **codex 는 여기서 빠졌다.** 예전에는 codex 도 이 결론을 공유했는데 사실이 바뀌었다:
+ *   2026-07-09 GPT-5.6 GA 부터 OpenAI 는 캐시 쓰기에 **입력가의 1.25배**를 청구한다
+ *   (자동·명시 모드 모두 · 최소 TTL 30분). GPT-5.5 까지는 무과금이었다.
+ *   seed_openai.go 의 oaiCacheWrite56 가 이미 그 단가를 담고 있다 — 표가 코드와 어긋나 있었다.
+ */
 const NO_CACHE_WRITE_BILLING = (why: string): Support => ({ state: 'na', why });
+
+/**
+ * 과금되지만 **로그에 안 남는** cacheCreate — 지금은 codex 하나다.
+ *
+ * 'na'(개념 없음)로 두면 안 되는 이유: 사용자는 실제로 그 몫을 청구받고 있다. 화면이
+ * "해당 없음"이라고 말하면 **없는 사실을 만들어 낸다** — 게다가 비용을 낮게 보이게 하는
+ * 방향으로 틀린다(CacheCreate 0 × 1.25배 = $0). 'unmeasured' 는 "값이 아니라 공백"이라는
+ * 뜻이고, 그것이 지금 상태의 정확한 이름이다.
+ */
+const BILLED_BUT_UNLOGGED = (why: string): Support => ({ state: 'unmeasured', why });
 
 /*
  * 슬래시가 없는 이유는 codex·gemini 가 같다: 세션 파일에 그 개념의 기록이 남지 않는다.
@@ -204,8 +228,10 @@ const SUPPORT: Record<PlatformId, Record<MetricId, Support>> = {
   codex: {
     ...fill('yes', 'Codex 수집기가 보고합니다(collector/internal/codex).'),
     slash: NO_SLASH('Codex'),
-    cacheCreate: NO_CACHE_WRITE_BILLING(
-      'OpenAI 는 캐시 쓰기에 과금하지 않습니다 — 캐시 생성이라는 값 자체가 없습니다(0 이 아닙니다).',
+    cacheCreate: BILLED_BUT_UNLOGGED(
+      'GPT-5.6 계열은 캐시 쓰기에 입력가의 1.25배가 청구되지만(2026-07-09 GA 부터), '
+      + 'Codex 세션 로그에는 캐시 쓰기 토큰 필드가 없습니다 — 청구는 되는데 관측할 원천이 '
+      + '없어서 이 화면의 비용에 그 몫이 빠져 있습니다(0 이 아니라 공백입니다).',
     ),
   },
   // collector/internal/gemini/gemini.go — **수집기는 이미 있다.** codex 와 같은 범위(slash 만 없다).

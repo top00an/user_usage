@@ -98,12 +98,42 @@ describe('lib/platforms — 0 과 "모른다"를 가르는 사실표', () => {
     }
   });
 
-  it('codex 의 캐시생성은 해당 없음이다 — OpenAI 는 캐시 쓰기에 과금하지 않는다', () => {
+  /*
+   * ── 사실이 바뀐 자리 (2026-08-13 정정) ─────────────────────────────────
+   *
+   * 예전 단정: "codex 의 캐시생성은 해당 없음 — OpenAI 는 캐시 쓰기에 과금하지 않는다."
+   * 그것은 GPT-5.5 까지의 사실이었다. 2026-07-09 GPT-5.6 GA 부터 OpenAI 는 캐시 쓰기에
+   * **입력가의 1.25배**를 청구한다(자동·명시 모드 모두 · 최소 TTL 30분).
+   *
+   * 그래서 'na'(개념 없음) 는 이제 틀린 주장이다 — 사용자는 실제로 그 몫을 청구받는다.
+   * 맞는 이름은 'unmeasured' 다: 청구는 되는데 Codex 롤아웃 로그에 캐시 쓰기 필드가 없어
+   * 관측할 원천이 없다(실측 확인 — token_count 페이로드의 리프 키는 input·cached_input·
+   * output·reasoning_output·total 다섯뿐이다).
+   *
+   * 이 구분이 중요한 이유는 방향이다. 'na' 는 비용을 **낮게** 보이게 하는 쪽으로 틀린다
+   * (CacheCreate 0 × 1.25배 = $0 을 "그런 개념이 없어서 0"이라고 말한다).
+   *
+   * 근거는 코드 안에도 이미 있었다 — go/internal/cost/seed_openai.go 의 oaiCacheWrite56
+   * (=1.25) 가 gpt-5.6-sol·terra·luna 에 걸려 있다. 표가 코드와 어긋나 있던 것이다.
+   */
+  it('codex 의 캐시생성은 미수집이다 — 1.25배로 청구되지만 로그에 필드가 없다', () => {
     const s = supportOf('codex', 'cacheCreate');
-    expect(s.state).toBe('na');
-    expect(s.why).toMatch(/캐시 쓰기/);
+    expect(s.state).toBe('unmeasured');
+    // "개념이 없다"로 되돌아가면 빨개진다.
+    expect(s.state).not.toBe('na');
+    // 이유가 두 사실을 **둘 다** 말해야 한다: 청구된다 + 로그에 없다.
+    expect(s.why).toMatch(/1\.25/);
+    expect(s.why).toMatch(/로그/);
     // 캐시읽기는 반대로 수집된다 — 둘을 뭉치면 codex 의 캐시 사용이 통째로 사라진다.
     expect(supportOf('codex', 'cacheRead').state).toBe('yes');
+  });
+
+  // antigravity 는 여전히 '해당 없음'이다 — Google 은 암시적 캐싱이라 쓰기를 청구하지 않는다
+  // (seed_google.go 가 cacheWriteMult 0 으로 같은 사실을 적고 있다). 두 플랫폼을 한 결론으로
+  // 묶어 두었던 것이 이번 오류의 원인이라, 갈라진 상태를 여기서 못 박는다.
+  it('antigravity 의 캐시생성은 해당 없음 그대로다 (codex 와 이유가 다르다)', () => {
+    expect(supportOf('antigravity', 'cacheCreate').state).toBe('na');
+    expect(supportOf('codex', 'cacheCreate').state).toBe('unmeasured');
   });
 
   it('모르는 플랫폼은 미상이다 — 단정하지 않는다', () => {
@@ -122,8 +152,9 @@ describe('lib/platforms — 0 과 "모른다"를 가르는 사실표', () => {
         expect(supportOf(p, m).state).toBe('yes');
       }
     }
-    // 단 codex 의 캐시생성은 예외다 — 열은 합산되지만 개념 자체가 없다.
-    expect(supportOf('codex', 'cacheCreate').state).toBe('na');
+    // 단 캐시생성은 예외가 둘이다 — 열은 합산되지만 그 숫자가 관측이 아니다.
+    expect(supportOf('codex', 'cacheCreate').state).toBe('unmeasured');   // 청구되는데 로그에 없다
+    expect(supportOf('antigravity', 'cacheCreate').state).toBe('na');     // 개념 자체가 없다
   });
 
   it('질의로 보낼 수 있는 값은 서버 허용목록과 같다 (그 밖은 400 이므로 보내지 않는다)', () => {
@@ -262,13 +293,18 @@ describe('플랫폼 요약 — 실제 0 · 미수집 · 해당 없음을 갈라 
     expect(within(sect).getAllByText('Codex').length).toBeGreaterThan(0);
   });
 
-  it('codex 의 캐시생성은 0 이 아니라 "해당 없음" 배지다', async () => {
+  /*
+   * 응답의 codex.cacheCreate 는 0 이지만 그 0 은 **관측이 아니다.** 숫자로 그리면
+   * "캐시 쓰기를 안 했다"로 읽히는데, 실제로는 1.25배로 청구되면서 로그에 안 남는 것이다.
+   * 배지 문구는 2026-08-13 에 '해당 없음' → '미수집' 으로 바뀌었다(위 정정 주석 참고).
+   */
+  it('codex 의 캐시생성은 0 이 아니라 "미수집" 배지다', async () => {
     render(<Dashboard />);
     await screen.findByRole('heading', { name: '플랫폼별 사용량' });
 
     // 응답의 codex.cacheCreate 는 0 이다. 그 0 이 화면에 숫자로 나오면 안 된다.
     expect(PLATFORMS_FIXTURE.platforms[1]!.cacheCreate).toBe(0);
-    const badges = screen.getAllByText('해당 없음').filter((el) => el.classList.contains('badge'));
+    const badges = screen.getAllByText('미수집').filter((el) => el.classList.contains('badge'));
     expect(badges.length).toBeGreaterThan(0);
     for (const b of badges) {
       expect(b).toHaveAttribute('title', expect.stringContaining('캐시 쓰기'));
