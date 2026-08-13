@@ -73,8 +73,20 @@ const TABS = [
  * ⚠ `onboarding` 은 여기 **없다.** 연동 탭은 셀프서비스라 member 에게 온전히 자기 것이다 —
  *   자기 키 발급·목록·해지(`/api/me/keys`). 남의 키는 서버가 목록에 담지 않는다.
  *   그 탭을 다시 관리자 전용으로 되돌리면 member 는 자기 머신을 연동할 방법이 없어진다.
+ *
+ * ⚠ `usage`(사용 추적)가 여기 있는 이유: 그 화면의 주 조회인 `/api/usage/summary` 와
+ *   `/api/usage/dispatch` 는 **전사 교차 뷰라 member 에게 403 이다**(deny-by-default —
+ *   httpapi/rbac_test.go 가 못 박는다). 게다가 summary 는 fail-soft 가 아니라서 403 이 곧
+ *   탭 전체의 오류 화면이 된다. 열 수 없는 탭을 보여 주는 것은 클릭 낭비가 아니라 오해다 —
+ *   "권한이 없다"가 아니라 "고장났다"로 읽힌다.
+ *
+ *   개인이 자기 사용량을 보는 자리는 **사용 관측** 탭이다(대시보드 탭도 같은 안내를 한다 —
+ *   grafana/GrafanaDash.tsx 의 member 스코프 문구). 그 방침과 이 목록을 맞춘 것이다.
+ *
+ *   ⚠ 이것은 member 용 사용 추적을 **포기한 결정이 아니다.** 사람 스코프 집계 엔드포인트가
+ *     생기면(자기 것만 돌려주는 summary) 이 목록에서 빼는 것이 맞다.
  */
-const ADMIN_ONLY_TABS = new Set<TabId>(['architecture', 'admin']);
+const ADMIN_ONLY_TABS = new Set<TabId>(['usage', 'architecture', 'admin']);
 
 type TabId = (typeof TABS)[number]['id'];
 
@@ -175,7 +187,7 @@ export default function Dashboard() {
         <aside className="sidebar">
           <div className="brand">
             <span className="brand-mark" aria-hidden="true" />
-            <span className="brand-name">사용량<br />대시보드</span>
+            <span className="brand-name">사용량 대시보드</span>
           </div>
 
           <nav className="side-nav" role="tablist" aria-orientation="vertical" aria-label="화면">

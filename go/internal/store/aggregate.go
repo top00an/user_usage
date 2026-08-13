@@ -403,7 +403,8 @@ func TopKeys(ctx context.Context, kind string, limit int) ([]KeyRow, error) {
  * TopKeysWithFilter 는 필터가 걸린 축별 상위 키다.
  *
  * ⚠ usage_counters 에는 세션의 축(model·started_at)이 없다. 그래서 이 함수가 보는 것은
- *   **Filter.Platform 뿐**이고, 그 조건조차 세션 행으로 되짚어 만든다(counterPlatformCond).
+ *   **Filter.Platform 과 Filter.Username 뿐**이다. 플랫폼은 세션 행으로 되짚어 만들고
+ *   (counterPlatformCond), 사용자는 이 표의 username 컬럼을 직접 본다(counterUserCond).
  *   기간·모델까지 여기서 흉내내면 세션 축과 카운터 축에 서로 다른 기간 규칙이 두 벌 생긴다 —
  *   이 화면(summary)이 기간을 노출하는 자리는 byDay 하나이고 그쪽은 세션 표가 소유한다.
  */
@@ -420,6 +421,10 @@ func TopKeysWithFilter(ctx context.Context, kind string, limit int, f Filter) ([
 		" FROM usage_counters WHERE kind=?"
 	args := []any{kind}
 	if cond, cargs := counterPlatformCond(f); cond != "" {
+		sql += " AND " + cond
+		args = append(args, cargs...)
+	}
+	if cond, cargs := counterUserCond(f); cond != "" {
 		sql += " AND " + cond
 		args = append(args, cargs...)
 	}
@@ -454,7 +459,10 @@ func ByUser(ctx context.Context, kind string, limit int) ([]UserKeys, error) {
 }
 
 // ByUserWithFilter 는 필터가 걸린 사용자별 축 집계다(dispatch 화면의 근거).
-// TopKeysWithFilter 와 같은 제약 — 카운터 축에서 볼 수 있는 것은 Filter.Platform 뿐이다.
+// TopKeysWithFilter 와 같은 제약 — 카운터 축에서 볼 수 있는 것은 Platform·Username 뿐이다.
+//
+// Username 이 걸리면 결과는 **그 사람 한 줄**로 좁혀진다(사람별 비교가 아니라 그 사람의 내역).
+// 그것이 이 필터의 요점이다 — 전사 비교는 필터를 비우면 그대로 돌아온다.
 func ByUserWithFilter(ctx context.Context, kind string, limit int, f Filter) ([]UserKeys, error) {
 	d, err := conn()
 	if err != nil {
@@ -468,6 +476,10 @@ func ByUserWithFilter(ctx context.Context, kind string, limit int, f Filter) ([]
 		" FROM usage_counters WHERE kind=?"
 	args := []any{kind}
 	if cond, cargs := counterPlatformCond(f); cond != "" {
+		sql += " AND " + cond
+		args = append(args, cargs...)
+	}
+	if cond, cargs := counterUserCond(f); cond != "" {
 		sql += " AND " + cond
 		args = append(args, cargs...)
 	}
@@ -567,13 +579,33 @@ func RecommendationGaps(ctx context.Context, limit int) ([]Gap, error) {
 // 임계값을 인자로 빼는 이유: 점수 분포는 카탈로그 크기에 따라 달라져서 고정 상수로 두면
 // 카탈로그가 커질 때 조용히 아무것도 안 잡는다.
 func RecommendationGapsAt(ctx context.Context, maxScore float64, limit int) ([]Gap, error) {
+	return RecommendationGapsAtWithFilter(ctx, maxScore, limit, Filter{})
+}
+
+/*
+ * RecommendationGapsAtWithFilter 는 사람으로 좁힌 공백 목록이다.
+ *
+ * ⚠ 이 표가 보는 축은 **Username 하나뿐이다.** usage_recommendations 에는 session_id 가 없어
+ *   (스키마 참조) 플랫폼·모델·기간으로 되짚을 근거가 존재하지 않는다 — 그래서 Filter 의 나머지
+ *   필드는 여기서 조용히 무시된다. 이것은 값이 0 인 것과 다르다: 축이 없는 것을 0 으로 접으면
+ *   "그 플랫폼에는 공백이 없었다"는 **없는 사실**을 만든다(usage.go 의 같은 주석과 한 벌).
+ *
+ *   반면 username 컬럼은 있다. 그래서 사용자 필터는 이 축까지 정직하게 닿는다.
+ */
+func RecommendationGapsAtWithFilter(ctx context.Context, maxScore float64, limit int, f Filter) ([]Gap, error) {
 	d, err := conn()
 	if err != nil {
 		return nil, err
 	}
-	rows, err := d.Query(ctx,
-		"SELECT goal_tokens FROM usage_recommendations WHERE score <= ? AND goal_tokens IS NOT NULL"+
-			" ORDER BY id DESC LIMIT 2000", maxScore)
+	sql := "SELECT goal_tokens FROM usage_recommendations WHERE score <= ? AND goal_tokens IS NOT NULL"
+	args := []any{maxScore}
+	if cond, cargs := recoUserCond(f); cond != "" {
+		sql += " AND " + cond
+		args = append(args, cargs...)
+	}
+	// LIMIT 은 조건 뒤에 온다 — 앞에 두면 필터가 "최근 2000건 중 그 사람 것"만 보게 되어
+	// 활동이 적은 사람의 공백이 조용히 사라진다.
+	rows, err := d.Query(ctx, sql+" ORDER BY id DESC LIMIT 2000", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -607,13 +639,24 @@ func RecommendationGapsAt(ctx context.Context, maxScore float64, limit int) ([]G
 
 // RecommendationSummary 는 추천 전환 요약이다 — 몇 건 중 몇 건이 매칭 실패였나.
 func RecommendationSummary(ctx context.Context) (RecoSummary, error) {
+	return RecommendationSummaryWithFilter(ctx, Filter{})
+}
+
+// RecommendationSummaryWithFilter 는 사람으로 좁힌 전환 요약이다.
+// RecommendationGapsAtWithFilter 와 같은 제약 — 이 표에서 볼 수 있는 축은 Username 뿐이다.
+func RecommendationSummaryWithFilter(ctx context.Context, f Filter) (RecoSummary, error) {
 	var out RecoSummary
 	d, err := conn()
 	if err != nil {
 		return out, err
 	}
-	r, err := d.QueryRow(ctx,
-		"SELECT COUNT(*) n, SUM(CASE WHEN score <= 0 THEN 1 ELSE 0 END) miss FROM usage_recommendations")
+	sql := "SELECT COUNT(*) n, SUM(CASE WHEN score <= 0 THEN 1 ELSE 0 END) miss FROM usage_recommendations"
+	var args []any
+	if cond, cargs := recoUserCond(f); cond != "" {
+		sql += " WHERE " + cond
+		args = append(args, cargs...)
+	}
+	r, err := d.QueryRow(ctx, sql, args...)
 	if err != nil || r == nil {
 		return out, err
 	}

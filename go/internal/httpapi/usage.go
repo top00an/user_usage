@@ -280,7 +280,17 @@ func (s *server) routeAdmin(w http.ResponseWriter, r *http.Request, c *rctx) (bo
 		if !ok {
 			return true, nil
 		}
-		f := store.Filter{Platform: platform}
+		/*
+		 * user 필터 — 사용 추적 화면이 "이 사람만" 볼 때 싣는다. 파라미터 이름은 이미 쓰이는
+		 * `user` 로 맞춘다(analytics.go 의 sessions·platforms 갈래와 한 벌).
+		 *
+		 * platform 과 달리 **허용목록이 없다.** 사용자명은 자유 문자열이라 400 을 낼 근거가
+		 * 없고, 없는 이름은 빈 집계로 돌아온다(그것이 사실이다 — 그 사람의 보고가 없다).
+		 * 화면은 선택지를 응답의 byUser 에서만 만들고, 목록에 없는 선택은 전체로 되돌린다.
+		 *
+		 * 미지정이면 조건이 하나도 안 붙는다 = 현행과 같은 SQL·같은 응답(골든 44개 무회귀).
+		 */
+		f := store.Filter{Platform: platform, Username: c.query.Get("user")}
 
 		totals, err := store.TotalsWithFilter(ctx, f)
 		if err != nil {
@@ -329,15 +339,18 @@ func (s *server) routeAdmin(w http.ResponseWriter, r *http.Request, c *rctx) (bo
 		 * (session_id 컬럼이 없다) 목표 문장·점수만 남는 별도 경로라, 어느 도구에서 나온
 		 * 호출인지 되짚을 근거가 이 표에 존재하지 않는다.
 		 *
-		 * 그래서 필터를 걸지 않는다. 빈 값으로 접지도 않는다 — 그러면 "codex 에서는 추천
+		 * 그래서 플랫폼 필터는 걸지 않는다. 빈 값으로 접지도 않는다 — 그러면 "codex 에서는 추천
 		 * 공백이 없었다"는 **없는 사실**을 만들어 낸다. 축이 없는 것과 값이 0 인 것은 다르다.
 		 * (응답 shape 를 못 바꾸므로 이 한계는 코드와 보고에만 남는다 — 잔여 항목.)
+		 *
+		 * **사용자 축은 다르다.** 이 표에는 username 컬럼이 있어서 사람으로는 정직하게 걸린다 —
+		 * f 를 그대로 넘기고, store 쪽이 자기가 볼 수 있는 축(Username)만 집어 쓴다.
 		 */
-		gaps, err := store.RecommendationGaps(ctx, topN)
+		gaps, err := store.RecommendationGapsAtWithFilter(ctx, 1, topN, f)
 		if err != nil {
 			return true, err
 		}
-		reco, err := store.RecommendationSummary(ctx)
+		reco, err := store.RecommendationSummaryWithFilter(ctx, f)
 		if err != nil {
 			return true, err
 		}

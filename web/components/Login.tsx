@@ -72,7 +72,7 @@ export default function Login({
         <div className="brand" style={{ padding: '0 0 4px' }}>
           <span className="brand-mark" aria-hidden="true" />
           <span className="brand-name" id="login-title">
-            사용량<br />대시보드
+            사용량 대시보드
           </span>
         </div>
         <p className="help mt-sm">계속하려면 로그인하세요.</p>

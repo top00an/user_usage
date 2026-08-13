@@ -288,7 +288,11 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 	// ── 서브에이전트·스킬 활용 ────────────────────────────────────────────
 	if p == "/api/usage/dispatch" {
 		// 근거가 usage_counters 라 platform 컬럼이 없다 — 세션 행으로 되짚어 거른다(store 쪽 규율).
-		f := store.Filter{Platform: platform}
+		//
+		// user 는 그 표의 username 컬럼을 직접 본다(되짚을 필요가 없다). 사용 추적 화면이
+		// 한 사람으로 좁힐 때 같은 값을 summary 와 이 갈래에 함께 싣는다 — 한쪽만 걸면
+		// 같은 화면의 두 카드가 서로 다른 모집단을 그리고, 그 사실이 어디에도 안 보인다.
+		f := store.Filter{Platform: platform, Username: c.query.Get("user")}
 		agents, err := store.ByUserWithFilter(ctx, "agent", 0, f)
 		if err != nil {
 			return true, err

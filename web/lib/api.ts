@@ -202,15 +202,31 @@ export const getMe = (o?: RequestOptions) =>
  *     조용히 돌아오는 편이 더 나쁘기 때문이다). 그래서 호출부는 lib/platforms.ts 의
  *     isPlatformId 로 좁힌 값만 넘긴다.
  *
- * ⚠ **모든 엔드포인트가 이 축을 받는 것은 아니다.** 서버 라우팅(go/internal/httpapi/analytics.go)
- *   기준으로 갈린다:
- *     받는다  — series · distribution · sessions · quality · coverage · leaderboard · platforms
- *     안 받는다 — summary · dispatch · seats · teams · dev  (핸들러가 platform 을 읽기 전에 끝난다)
+ * ⚠ **이 표는 한때 틀렸다** — 아래가 2026-08-13 실측으로 고친 내용이다.
  *
- *   안 받는 쪽에 platform 을 붙여도 서버는 **조용히 무시하고 전체를 돌려준다.** 그래서 여기서는
- *   아예 받을 수 있는 함수에만 인자를 둔다 — 타입이 "이건 못 거른다"를 말하게 해서, 화면이
- *   전체 합계를 그 플랫폼의 값인 척 그리는 사고를 컴파일 시점에 막는다.
- *   (화면은 그 사실을 사용자에게도 말한다 — components/platform/PlatformScope.tsx)
+ *   서버는 `/api/usage/*` 조회 **전부**에서 platform 을 읽고 거른다:
+ *     series · distribution · sessions · quality · coverage · leaderboard · platforms
+ *     summary · dispatch · seats · teams · dev
+ *
+ *   예전 주석은 뒤의 5개(summary·dispatch·seats·teams·dev)를 "핸들러가 platform 을 읽기 전에
+ *   끝난다 = 안 받는다"고 적어 두었다. 사실이 아니다. 확인 방법과 근거:
+ *     · 오타를 보내면 **400** 이다(`?platform=claud`) — 읽지 않으면 나올 수 없는 응답이다.
+ *     · `?platform=codex` 로 부르면 본문이 실제로 줄어든다(summary 5616→367 바이트).
+ *     · 코드: usage.go 의 summary 갈래와 analytics.go 의 dispatch·seats·teams·dev 갈래가
+ *       모두 platformParam 을 읽어 store.Filter{Platform: …} 을 만든다.
+ *     · 테스트: httpapi/platform_scope_test.go 의 TestSummaryPlatformScope 가 이미 이것을 못 박고 있다.
+ *
+ *   ⚠ 다만 **아직 platform 을 실어 보내지 않는 화면이 있다**(사용 추적의 summary·dispatch,
+ *     사용 관측의 seats·teams, 대시보드의 dev). 그 화면들이 틀린 값을 그리는 것은 아니다 —
+ *     안 보내면 서버가 전체를 돌려주고, 화면도 "전체 플랫폼 기준"이라고 밝힌다
+ *     (components/platform/PlatformScope.tsx 의 applies={false}). **못 하는 것이 아니라
+ *     아직 배선하지 않은 것**이라는 점만 헷갈리지 말 것 — 위 표를 근거로 "서버가 못 한다"고
+ *     결론 내리면 안 된다.
+ *
+ *   ⚠ 서버가 platform 으로 거를 수 **없는** 축은 딱 하나다: 추천 공백·전환 요약
+ *     (usage_recommendations). 그 표에는 session_id 가 없어 어느 도구에서 나온 호출인지
+ *     되짚을 근거가 존재하지 않는다(usage.go 의 같은 주석). 사용자 축은 username 컬럼이
+ *     있어서 닿는다.
  */
 export interface PlatformParams {
   /** 미지정·빈 문자열 = 전체. 허용목록 밖 값은 보내지 않는다. */
@@ -229,11 +245,41 @@ function withPlatform(path: string, platform?: string): string {
   return qs ? `${path}?${qs}` : path;
 }
 
+/* ── 사용자 필터 ──────────────────────────────────────────────────────────
+ *
+ * '사용 추적' 화면이 한 사람으로 좁힐 때 싣는 축이다. 파라미터 이름은 서버가 이미 쓰는
+ * `user` 다(go/internal/httpapi 의 sessions·platforms 갈래와 한 벌).
+ *
+ * platform 과 다른 점 둘:
+ *   · **허용목록이 없다.** 사용자명은 자유 문자열이라 서버가 400 을 낼 근거가 없고, 없는
+ *     이름은 200 + 빈 집계로 돌아온다. 그래서 화면은 선택지를 **응답의 byUser 에서만** 만들고
+ *     (하드코딩한 목록을 두지 않는다), 목록에 없는 선택은 조용히 전체로 되돌린다.
+ *   · 추천 공백 축까지 닿는다. usage_recommendations 에 username 컬럼이 있어서다 —
+ *     플랫폼은 그 표에 session_id 가 없어 못 거르는 자리다.
+ *
+ * 미지정이면 **키 자체를 만들지 않는다** = 전체(현행과 같은 응답, 골든 44개 무회귀).
+ */
+export interface UserParams {
+  /** 미지정·빈 문자열 = 전체. */
+  user?: string;
+}
+
+function withUser(path: string, user?: string): string {
+  if (!user) return path;
+  return `${path}?${new URLSearchParams({ user }).toString()}`;
+}
+
 /* ── 엔드포인트 ───────────────────────────────────────────────────────── */
 
-/* platform 축을 받지 않는 조회 — 인자를 두지 않는다(위 주석 참고). */
-export const getSummary = (o?: RequestOptions) => request<Summary>('/api/usage/summary', o);
-export const getDispatch = (o?: RequestOptions) => request<Dispatch>('/api/usage/dispatch', o);
+/*
+ * platform 축은 받지 않는다(위 표 참고). user 축은 받는다 — 사용 추적 화면이 쓴다.
+ * 두 조회에 **같은 값**을 실어야 한다: 한쪽만 걸면 같은 화면의 두 카드가 서로 다른
+ * 모집단을 그리면서 그 사실을 말하지 않는다.
+ */
+export const getSummary = (p: UserParams = {}, o?: RequestOptions) =>
+  request<Summary>(withUser('/api/usage/summary', p.user), o);
+export const getDispatch = (p: UserParams = {}, o?: RequestOptions) =>
+  request<Dispatch>(withUser('/api/usage/dispatch', p.user), o);
 export const getSeats = (days = 30, o?: RequestOptions) =>
   request<Seats>(`/api/usage/seats?days=${days}`, o);
 export const getTeams = (days = 30, o?: RequestOptions) =>

@@ -170,7 +170,8 @@ function BarTable({ rows, unit, fmt }: { rows: { label: string; value: number }[
 export default function GrafanaDash() {
   const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<Data> => {
     const [summary, seats, dev, platforms] = await Promise.all([
-      softly(getSummary({ signal }), null as Summary | null),
+      // 대시보드는 전사 기준이다 — 사용자 축을 비워 둔다(사용 추적 탭의 선택이 여기 오지 않는다).
+      softly(getSummary({}, { signal }), null as Summary | null),
       softly(getSeats(3650, { signal }), null as Seats | null),
       softly(getDev(365, { signal }), null as Dev | null),
       softly(getPlatforms({ signal }), null as PlatformsResponse | null),

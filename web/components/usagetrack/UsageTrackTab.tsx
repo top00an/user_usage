@@ -1,14 +1,15 @@
 'use client';
 
-import { useCallback } from 'react';
-import { getDispatch, getPlatforms, getSummary } from '@/lib/api';
+import { useCallback, useState } from 'react';
+import { getDispatch, getLeaderboard, getPlatforms, getSummary } from '@/lib/api';
 import { softly, useResource } from '@/hooks/useResource';
-import type { Dispatch, PlatformsResponse, Summary, UserRow } from '@/lib/types';
+import type { Dispatch, Leaderboard, PlatformsResponse, Summary, UserRow } from '@/lib/types';
 import { n, shortTokens } from '@/lib/format';
 import { Card, Empty, ErrorState, Loading, TableWrap, TokenCount } from '@/components/ui';
 import PlatformFilter from '@/components/platform/PlatformFilter';
 import ModelTable from './ModelTable';
 import AxisExplorer from './AxisExplorer';
+import UserFilter from './UserFilter';
 import { setBuilderPrefill, type GroupBy, type Metric } from '@/lib/customPanels';
 
 /* '그래프로 추가' — 대시보드 빌더에 프리필을 넘기고 대시보드 탭으로 이동한다. */
@@ -34,6 +35,10 @@ import { AX_CACHE_CREATE, AX_CACHE_READ, IN_HINT, IN_LABEL, TURNS_HINT } from '.
      ③ 공백   추천이 매칭에 실패한 목표의 토큰 — **새 에이전트를 만들 자리**
 
    ③ 이 이 화면의 존재 이유다. ①②만 보면 비용 대시보드에 그친다.
+
+   **사용자 축이 이 화면의 1급 축이다**(UserFilter). 한 사람을 고르면 위 세 가지가 전부 그
+   사람 기준으로 다시 조회된다 — 전사 합계 안에서는 개인의 사용 패턴이 평균에 묻힌다(실측:
+   같은 지침이 모든 세션에 실렸는데 역할 에이전트 사용은 사람마다 25 대 0 으로 갈렸다).
 
    캐시 읽기를 항상 따로 세운다 — 입력에 합치면 비용이 수십 배로 과대 표시된다(실측 71887 vs 2).
    ================================================================ */
@@ -113,30 +118,88 @@ function UserTable({ rows }: { rows: UserRow[] }) {
 
 export default function UsageTrackTab() {
   /*
+   * 사용자 선택 — **이 탭 안에서만** 산다(전역 스토어에 넣지 않는다). 탭을 떠나면 풀리고,
+   * 사용 관측·대시보드는 전사 기준을 유지한다. 그쪽 화면들은 자기 조회·빈 상태 문구를
+   * 사람 기준으로 다시 쓰지 않았으므로, 선택을 공유하면 "전사"라고 말하면서 한 사람의 값을
+   * 그리게 된다.
+   */
+  const [user, setUser] = useState('');
+
+  /*
    * 두 조회를 한 로더에 묶는다 — 같은 signal 을 공유하므로 탭을 떠나면 **둘 다** 끊긴다.
    * '사람별 활용'(dispatch)은 fail-soft 다: 실패해도 위의 전체 집계는 그대로 보여야 한다.
+   *
+   * user 는 summary·dispatch **양쪽에** 같은 값으로 싣는다. 한쪽만 걸면 같은 화면의 두 카드가
+   * 서로 다른 모집단을 그리면서 그 사실을 말하지 않는다.
+   * (platforms 는 "이 서버에 어떤 플랫폼 데이터가 있나"라 사람 축과 무관하다 — 안 싣는다.)
    */
   const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<TrackData> => {
     const [summary, dispatch, platforms] = await Promise.all([
-      getSummary({ signal }),
-      softly(getDispatch({ signal }), null as Dispatch | null),
+      getSummary({ user }, { signal }),
+      softly(getDispatch({ user }, { signal }), null as Dispatch | null),
       softly(getPlatforms({ signal }), null as PlatformsResponse | null),
     ]);
     return { summary, dispatch, platforms };
-  }, []);
+  }, [user]);
 
-  const { state, reload } = useResource(load, []);
+  // user 가 키에 들어가므로 선택이 바뀌면 재조회된다(낡은 응답은 훅이 키 대조로 버린다).
+  const { state, reload } = useResource(load, [user]);
 
   /*
-   * ⚠ 이 화면의 집계(summary·dispatch)는 서버가 platform 축으로 거르지 못한다(lib/api.ts 의 표).
-   *   그래서 필터는 applies={false} 로 두고 "전체 플랫폼 기준"이라고 밝힌다 — 선택만 유지된다.
-   *   대신 축 패널이 **축마다** 어느 플랫폼이 그것을 기록하는지 말한다(AxisExplorer).
+   * 명단(roster) — 셀렉트의 선택지다. **필터가 걸리지 않은 응답만** 근거로 삼는다.
+   * 걸린 응답의 byUser 에는 고른 사람만 남으므로, 그것으로 목록을 만들면 한 번 고른 뒤
+   * 다른 사람으로 갈아탈 방법이 사라진다.
+   */
+  /*
+   * 명단은 **필터를 절대 싣지 않는 별도 조회**로 받는다(deps 가 [] 이므로 마운트당 한 번).
+   * 걸린 summary 의 byUser 로 만들면 한 사람을 고른 순간 목록에 그 사람만 남아 다른 사람으로
+   * 갈아탈 방법이 사라진다 — 자기 자신을 좁히는 목록은 만들지 않는다.
+   *
+   * leaderboard 를 쓰는 이유: "사용량을 보고한 사람"이 곧 이 응답의 users 다(summary 를 한 번
+   * 더 부르면 이 화면에서 가장 무거운 질의를 같은 값으로 두 번 받는다).
+   * fail-soft 다 — 실패하면 셀렉트만 안 그려지고 전체 기준 화면은 그대로 산다.
+   */
+  const rosterLoad = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      softly(getLeaderboard({}, { signal }), null as Leaderboard | null),
+    [],
+  );
+  const rosterRes = useResource(rosterLoad, []);
+  const roster = rosterRes.state.status === 'ready'
+    ? (rosterRes.state.data?.users ?? [])
+        .map((u) => u.username)
+        .filter((u): u is string => !!u)
+    : [];
+
+  /*
+   * ⚠ 이 화면은 platform 을 **아직 실어 보내지 않는다** — 그래서 applies={false} 로 두고
+   *   "전체 플랫폼 기준"이라고 밝힌다. 그 배지는 정확하다(안 보내면 서버가 전체를 돌려준다).
+   *
+   *   단 이유를 헷갈리지 말 것: **서버가 못 하는 것이 아니다.** summary·dispatch 둘 다
+   *   platform 을 읽어 거른다(실측: ?platform=codex 로 본문이 줄고, 오타는 400 이다.
+   *   httpapi/platform_scope_test.go 의 TestSummaryPlatformScope 가 이미 못 박고 있다).
+   *   예전 주석과 lib/api.ts 의 표가 "안 받는다"고 적어 두었던 것을 2026-08-13 에 고쳤다.
+   *   배선하려면 두 조회에 platform 을 함께 싣고 applies={true} 로 바꾸면 된다 — 그때
+   *   추천 공백 축만은 여전히 전체다(그 표에 session_id 가 없다).
+   *
+   *   지금도 축 패널은 **축마다** 어느 플랫폼이 그것을 기록하는지 말한다(AxisExplorer).
    */
   const platformRows = state.status === 'ready' ? state.data.platforms?.platforms ?? null : null;
-  const bar = <PlatformFilter rows={platformRows} applies={false} what="이 화면의 집계는 플랫폼 축으로 걸러지지 않습니다" />;
+  const bar = (
+    <>
+      <PlatformFilter rows={platformRows} applies={false} what="이 화면의 집계는 플랫폼 축으로 걸러지지 않습니다" />
+      <UserFilter users={roster} value={user} onChange={setUser} />
+    </>
+  );
 
-  if (state.status === 'loading') return <Loading />;
-  if (state.status === 'error') return <ErrorState what="사용 추적을 불러오지 못했습니다." error={state.error} onRetry={reload} />;
+  /*
+   * 로딩·오류에도 **필터 바를 남긴다.** 조회할 때마다 셀렉트가 사라지면 방금 고른 사람을
+   * 되돌리거나 다른 사람으로 갈아탈 수 없고, 실패한 선택에 갇힌다.
+   */
+  if (state.status === 'loading') return <>{bar}<Loading /></>;
+  if (state.status === 'error') {
+    return <>{bar}<ErrorState what="사용 추적을 불러오지 못했습니다." error={state.error} onRetry={reload} /></>;
+  }
 
   const d = state.data.summary;
   const t = d.totals ?? { sessions: 0, users: 0, machines: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
@@ -146,14 +209,33 @@ export default function UsageTrackTab() {
     <>
       {bar}
       <p className="lead">
-        동기화된 PC 들이 <b>무엇을 얼마나 썼는지</b>를 모읍니다.
+        {user
+          ? <><b>{user}</b> 의 사용량입니다 — 아래 모든 수치가 이 사람 기준입니다.{' '}</>
+          : <>동기화된 PC 들이 <b>무엇을 얼마나 썼는지</b>를 모읍니다.{' '}</>}
         집계만 수집하며 <b>프롬프트 원문·파일 경로·명령 인자는 저장하지 않습니다.</b>{' '}
         <RetentionNote retention={d.retention} />
       </p>
 
       <TotalsTiles t={t} />
 
-      {empty && (
+      {/*
+        * 빈 화면의 이유가 둘이다 — 보고가 아예 없는 것과, 고른 사람의 보고가 없는 것.
+        * 후자에 설치 안내를 띄우면 "수집기를 갱신하라"는 틀린 처방이 된다(다른 사람의 데이터는
+        * 이미 올라와 있다). 그래서 문구를 갈라 쓴다.
+        */}
+      {empty && user && (
+        <Card title={`${user} 의 보고가 없습니다`} className="mt">
+          <p className="help">
+            이 기간에 <b>{user}</b> 로 귀속된 세션이 없습니다. 사용자를 <b>전체</b>로 되돌리면
+            팀 전체 집계를 볼 수 있습니다.
+          </p>
+          <p className="help mt-sm">
+            이름이 실제 담당자와 다르게 올라왔다면 <b>귀속 교정</b>으로 머신을 사람에게 묶습니다.
+          </p>
+        </Card>
+      )}
+
+      {empty && !user && (
         <Card title="아직 보고가 없습니다" className="mt">
           <p className="help">
             팀원 PC 가 <b>수집기를 갱신한 뒤 세션을 한 번 열면</b> 직전 세션들의 집계가 올라옵니다

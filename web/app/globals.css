@@ -523,14 +523,23 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
   gap: 10px;
   padding: 6px 8px 14px;
 }
+/*
+ * 브랜드 마크 — 칩 안에 오르는 막대 3개(사용량). 글리프는 data-URI SVG 로 배경에 얹는다:
+ * 마크업이 `<span aria-hidden>` 하나로 남아 두 호출부(Dashboard · Login)가 갈리지 않는다.
+ * 순수 장식이므로 접근성 이름은 `.brand-name` 이 갖는다.
+ */
 .brand-mark {
   width: 26px; height: 26px; flex: none;
-  border-radius: 7px;
-  background: linear-gradient(135deg, var(--accent-from), var(--accent-to));
+  border-radius: 8px;
+  background:
+    url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Cg%20fill='%23fff'%20fill-opacity='.92'%3E%3Crect%20x='2.25'%20y='9'%20width='3'%20height='4.75'%20rx='1.5'/%3E%3Crect%20x='6.5'%20y='6'%20width='3'%20height='7.75'%20rx='1.5'/%3E%3Crect%20x='10.75'%20y='2.5'%20width='3'%20height='11.25'%20rx='1.5'/%3E%3C/g%3E%3C/svg%3E")
+      center / 15px 15px no-repeat,
+    linear-gradient(135deg, var(--accent-from), var(--accent-to));
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
               0 4px 14px color-mix(in srgb, var(--accent) 30%, transparent);
 }
-.brand-name { font-size: .92rem; font-weight: 680; line-height: 1.1; letter-spacing: -.01em; }
+/* 한 줄로 놓는다 — 232px 레일에서 마크·간격을 빼도 156px 가 남아 접히지 않는다. */
+.brand-name { font-size: .92rem; font-weight: 680; line-height: 1.2; letter-spacing: -.01em; white-space: nowrap; }
 
 .side-nav { display: flex; flex-direction: column; gap: 2px; }
 .side-item {

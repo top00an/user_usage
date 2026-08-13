@@ -121,6 +121,37 @@ func counterPlatformCond(f Filter) (string, []any) {
 	return platformSessionCond(f, "usage_counters.session_id")
 }
 
+/*
+ * ── 사용자 축 조건 ────────────────────────────────────────────────────────
+ *
+ * 플랫폼과 달리 **세션으로 되짚지 않는다.** usage_counters·usage_recommendations 에는
+ * username 컬럼이 직접 있다(스키마 참조 — 같은 사실을 두 번 적는 것이 아니라, 이 표들은
+ * 세션 없이도 사람에게 귀속된다). 그래서 EXISTS 서브쿼리가 필요 없고, 세션 행이 사라진
+ * 고아 카운터도 사람 기준으로는 정확히 센다.
+ *
+ * ⚠ 이것을 platformSessionCond 안에 넣지 않는 이유는 그 함수 주석이 이미 말한다: 거기에
+ *   사용자 축을 얹으면 usage_series 의 username 으로 이미 거른 것과 이중으로 걸려
+ *   series·quality 의 현행 모집단이 조용히 달라진다(골든 44개). 규칙은 나란히 둔다.
+ *
+ * col 은 **이 패키지의 상수 문자열만** 넘긴다(요청 값이 닿지 않는다 — 주입 표면 0).
+ */
+func userCondOn(f Filter, col string) (string, []any) {
+	if f.Username == "" {
+		return "", nil
+	}
+	return col + " = ?", []any{f.Username}
+}
+
+// counterUserCond 는 축 카운터(usage_counters)를 사람으로 거른다.
+func counterUserCond(f Filter) (string, []any) {
+	return userCondOn(f, "usage_counters.username")
+}
+
+// recoUserCond 는 추천 관측(usage_recommendations)을 사람으로 거른다.
+func recoUserCond(f Filter) (string, []any) {
+	return userCondOn(f, "usage_recommendations.username")
+}
+
 // strOrNil 은 빈 값을 nil 로 남긴다 — 안 보낸 값을 "" 로 지어내지 않는다.
 func strOrNil(r db.Row, col string) *string {
 	if r.IsNull(col) {
