@@ -424,10 +424,26 @@ describe('플랫폼 필터 — 선택지는 응답이 정하고, 선택은 질�
       expect(urls.some((u) => u === '/api/usage/leaderboard?platform=codex')).toBe(true);
     });
 
-    // 반대로 platform 축을 못 받는 조회에는 절대 붙지 않는다 — 붙여도 서버가 무시하므로
-    // 화면이 전체 합계를 그 플랫폼의 값인 척 그리게 된다.
+    /*
+     * ── 2026-08-13 정정 ──────────────────────────────────────────────────
+     *
+     * 예전 단정: "seats 는 platform 축을 못 받으니 절대 붙지 않는다."
+     * **전제가 틀렸다.** 서버의 routeSeats 는 처음부터 platform 을 받았고 실제로 거른다
+     * (실측: /api/usage/seats?days=30&platform=codex 로 본문이 647→261 바이트).
+     * 이 테스트가 틀린 전제를 못 박고 있었던 탓에, 화면이 축을 안 싣는 상태가 초록불로
+     * 유지됐다 — 그때 seats 카드는 "codex 기준"이라고 말하면서 전사 합계를 그렸다.
+     *
+     * 이제 싣는다. 아래가 그것을 요구한다.
+     */
     const urls = fn.mock.calls.map(([u]) => String(u));
-    expect(urls.some((u) => u.includes('/api/usage/seats') && u.includes('platform='))).toBe(false);
+    expect(urls.some((u) => u.includes('/api/usage/seats') && u.includes('platform=codex'))).toBe(true);
+    expect(urls.some((u) => u.includes('/api/usage/teams') && u.includes('platform=codex'))).toBe(true);
+
+    /*
+     * summary 는 여전히 안 붙는다 — **사용 추적** 탭의 조회이고 그 화면은 아직 배선하지
+     * 않았다(서버는 받는다). 그 화면은 배지로 "전체 플랫폼 기준"이라고 정직하게 밝힌다.
+     * 이 단정은 "서버가 못 받는다"는 뜻이 아니라 "그 탭이 아직 안 싣는다"는 뜻이다.
+     */
     expect(urls.some((u) => u.includes('/api/usage/summary') && u.includes('platform='))).toBe(false);
   });
 

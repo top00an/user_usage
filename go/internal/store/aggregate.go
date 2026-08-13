@@ -130,19 +130,45 @@ func UsageByUserWithFilter(ctx context.Context, f Filter) ([]UserRow, error) {
  * machine→username 은 identity 매핑으로 사실상 1:1 이라 대표값 하나(MAX)로 충분하다.
  */
 func ReporterCoverage(ctx context.Context) ([]Reporter, error) {
+	return ReporterCoverageWithFilter(ctx, Filter{})
+}
+
+/*
+ * ReporterCoverageWithFilter 는 필터가 걸린 발신처 목록이다.
+ *
+ * 사용자 축이 여기 닿아야 하는 이유: "이 사람의 PC 들이 언제 마지막으로 보고했나"가 곧
+ * 개인 화면의 "왜 내 데이터가 없나"에 대한 답이다. 전사 목록만 주면 그 답을 사람이 직접
+ * 골라내야 한다.
+ *
+ * ⚠ 두 번째 질의(usage_series 를 보내는 머신 집합)에도 **같은 조건**을 건다. 한쪽만 걸면
+ *   거른 목록에 안 거른 SendsSeries 가 붙어, 남의 머신이 series 를 보낸다는 사실이 이 사람의
+ *   행으로 새어 들어온다.
+ */
+func ReporterCoverageWithFilter(ctx context.Context, f Filter) ([]Reporter, error) {
 	d, err := conn()
 	if err != nil {
 		return nil, err
 	}
+	where, args := sessionWhere(f)
+	cond := ""
+	if len(where) > 0 {
+		cond = " WHERE " + strings.Join(where, " AND ")
+	}
 	rows, err := d.Query(ctx,
 		"SELECT COALESCE(NULLIF(machine,''),'"+UnknownModel+"') m, MAX(COALESCE(username,'')) u,"+
 			" COUNT(*) n, MAX(reported_at) last_rep, MAX(started_at) last_start"+
-			" FROM usage_sessions GROUP BY m ORDER BY last_rep DESC")
+			" FROM usage_sessions"+cond+" GROUP BY m ORDER BY last_rep DESC", args...)
 	if err != nil {
 		return nil, err
 	}
+	// usage_series 에는 platform 컬럼이 없다 — 사용자 축만 직접 걸 수 있다(그 표의 username).
+	sCond, sArgs := "", []any{}
+	if f.Username != "" {
+		sCond = " WHERE username = ?"
+		sArgs = append(sArgs, f.Username)
+	}
 	seriesRows, err := d.Query(ctx,
-		"SELECT DISTINCT COALESCE(NULLIF(machine,''),'"+UnknownModel+"') m FROM usage_series")
+		"SELECT DISTINCT COALESCE(NULLIF(machine,''),'"+UnknownModel+"') m FROM usage_series"+sCond, sArgs...)
 	if err != nil {
 		return nil, err
 	}

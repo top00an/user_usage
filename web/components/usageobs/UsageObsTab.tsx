@@ -15,6 +15,7 @@ import { usePlatformFilter } from '@/lib/platformFilter';
 import { platformMeta } from '@/lib/platforms';
 import { COST_LABEL, COST_LABEL_SHORT, COST_WHY } from '@/lib/costLabels';
 import PlatformFilter from '@/components/platform/PlatformFilter';
+import UserFilter from '@/components/usagetrack/UserFilter';
 import CostCard from './CostCard';
 import SeatsCard from './SeatsCard';
 import SessionsCard from './SessionsCard';
@@ -257,29 +258,57 @@ export default function UsageObsTab() {
    * 곁가지 넷은 fail-soft 다: 하나가 실패해도 비용 카드와 상위 세션은 그대로 보여야 한다.
    * 반대로 sessions 는 이 화면의 뼈대라 실패하면 화면 전체가 실패로 간다.
    */
+  /*
+   * 사용자 선택 — 이 탭 안에서만 산다(사용 추적 탭과 같은 규율). 전역 스토어에 넣지 않는
+   * 이유는 다른 탭이 자기 빈 상태 문구를 사람 기준으로 다시 쓰지 않았기 때문이다.
+   */
+  const [user, setUser] = useState('');
+
+  /*
+   * 명단은 **필터를 절대 싣지 않는** 조회로 받는다(deps []). 걸린 leaderboard 로 만들면
+   * 한 사람을 고른 순간 목록에 그 사람만 남아 다른 사람으로 갈아탈 수 없다.
+   */
+  const rosterLoad = useCallback(
+    ({ signal }: { signal: AbortSignal }) => softly(getLeaderboard({}, { signal }), null as Leaderboard | null),
+    [],
+  );
+  const rosterRes = useResource(rosterLoad, []);
+  const roster = rosterRes.state.status === 'ready'
+    ? (rosterRes.state.data?.users ?? []).map((u) => u.username).filter((u): u is string => !!u)
+    : [];
+
   const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<ObsData> => {
-    const p = platform || undefined; // 빈 값은 파라미터 자체를 안 붙인다(=전체, 현행 동작)
+    // 빈 값은 파라미터 자체를 안 붙인다(=전체, 현행 동작)
+    const scope = { platform: platform || undefined, user: user || undefined };
     const [dist, sessions, leaderboard, quality, coverage, seats, teams] = await Promise.all([
-      getDistribution({ platform: p }, { signal }),
-      getSessions({ sort: 'cost', top: 25, platform: p }, { signal }),
-      softly(getLeaderboard({ platform: p }, { signal }), { users: [], pricedAt: '', sample: { limit: 0, rows: 0, truncated: false }, unpriced: [] } as Leaderboard),
-      softly(getQuality({ platform: p }, { signal }), null as Quality | null),
-      softly(getCoverage({ platform: p }, { signal }), { now: '', reporters: [] } as Coverage),
-      // seats·teams 는 관리자 전용(교차 뷰) — member 스코프는 403 이라 softly 로 null 처리해
-      // 카드가 스스로 숨는다. 이것이 프런트의 RBAC 화면 분기다.
-      // ⚠ 이 둘은 platform 축을 받지 않는다 — 넘기지 않고, 화면이 '전체 기준'이라고 밝힌다.
-      softly(getSeats(30, { signal }), null as Seats | null),
-      softly(getTeams(30, { signal }), null as Teams | null),
+      getDistribution(scope, { signal }),
+      getSessions({ sort: 'cost', top: 25, ...scope }, { signal }),
+      softly(getLeaderboard(scope, { signal }), { users: [], pricedAt: '', sample: { limit: 0, rows: 0, truncated: false }, unpriced: [] } as Leaderboard),
+      softly(getQuality(scope, { signal }), null as Quality | null),
+      softly(getCoverage(scope, { signal }), { now: '', reporters: [] } as Coverage),
+      /*
+       * seats·teams 는 관리자 전용(교차 뷰) — member 스코프는 403 이라 softly 로 null 처리해
+       * 카드가 스스로 숨는다. 이것이 프런트의 RBAC 화면 분기다.
+       *
+       * ⚠ 예전 주석은 "이 둘은 platform 축을 받지 않는다"며 스코프를 안 넘겼다. 사실이
+       *   아니었다(2026-08-13 실측: ?platform=codex 로 seats 본문이 647→261 바이트).
+       *   user 축도 같은 날 서버에 배선했다 — 두 축을 모두 싣는다.
+       */
+      softly(getSeats(30, { signal }, scope), null as Seats | null),
+      softly(getTeams(30, { signal }, scope), null as Teams | null),
     ]);
     return { dist, sessions, leaderboard, quality, coverage, seats, teams };
-  }, [platform]);
+  }, [platform, user]);
 
-  // 플랫폼이 바뀌면 키가 바뀌어 낡은 응답이 렌더에 오르지 못한다(hooks/useResource.ts ③).
-  const { state, reload } = useResource(load, [platform]);
+  // 두 축이 키에 들어간다 — 바뀌면 낡은 응답이 렌더에 오르지 못한다(hooks/useResource.ts ③).
+  const { state, reload } = useResource(load, [platform, user]);
 
   /* 컨트롤은 로딩·실패 중에도 남는다 — 사라지면 되돌릴 방법이 화면에서 없어진다. */
   const bar = (
-    <PlatformFilter rows={platformRows} applies what="아래 지표는 이 플랫폼만 집계합니다" />
+    <>
+      <PlatformFilter rows={platformRows} applies what="아래 지표는 이 플랫폼만 집계합니다" />
+      <UserFilter users={roster} value={user} onChange={setUser} />
+    </>
   );
 
   let body: React.ReactNode;

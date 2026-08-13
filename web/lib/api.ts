@@ -216,12 +216,10 @@ export const getMe = (o?: RequestOptions) =>
  *       모두 platformParam 을 읽어 store.Filter{Platform: …} 을 만든다.
  *     · 테스트: httpapi/platform_scope_test.go 의 TestSummaryPlatformScope 가 이미 이것을 못 박고 있다.
  *
- *   ⚠ 다만 **아직 platform 을 실어 보내지 않는 화면이 있다**(사용 추적의 summary·dispatch,
- *     사용 관측의 seats·teams, 대시보드의 dev). 그 화면들이 틀린 값을 그리는 것은 아니다 —
- *     안 보내면 서버가 전체를 돌려주고, 화면도 "전체 플랫폼 기준"이라고 밝힌다
- *     (components/platform/PlatformScope.tsx 의 applies={false}). **못 하는 것이 아니라
- *     아직 배선하지 않은 것**이라는 점만 헷갈리지 말 것 — 위 표를 근거로 "서버가 못 한다"고
- *     결론 내리면 안 된다.
+ *   ⚠ 2026-08-13: seats·teams·dev 의 배선을 함께 넣었다(scopeSuffix). 남은 미배선은
+ *     사용 추적의 summary·dispatch 뿐이고, 그 화면은 "전체 플랫폼 기준"이라고 정직하게
+ *     밝힌다(PlatformScope 의 applies={false}). **못 하는 것이 아니라 아직 배선하지 않은 것**
+ *     이라는 점만 헷갈리지 말 것.
  *
  *   ⚠ 서버가 platform 으로 거를 수 **없는** 축은 딱 하나다: 추천 공백·전환 요약
  *     (usage_recommendations). 그 표에는 session_id 가 없어 어느 도구에서 나온 호출인지
@@ -238,12 +236,7 @@ function setPlatform(q: URLSearchParams, platform?: string): void {
   if (platform) q.set('platform', platform);
 }
 
-function withPlatform(path: string, platform?: string): string {
-  const q = new URLSearchParams();
-  setPlatform(q, platform);
-  const qs = q.toString();
-  return qs ? `${path}?${qs}` : path;
-}
+
 
 /* ── 사용자 필터 ──────────────────────────────────────────────────────────
  *
@@ -264,9 +257,26 @@ export interface UserParams {
   user?: string;
 }
 
+/**
+ * ScopeParams — 이 서버의 조회 스코프는 **두 축**이다: 플랫폼과 사람.
+ *
+ * 두 축을 한 타입으로 묶는 이유: 화면이 한 축만 싣고 다른 축을 잊는 사고가 이 레포에서
+ * 두 번 났다(둘 다 "서버가 그 축을 못 받는다"는 낡은 주석 때문이었다). 타입이 둘을 함께
+ * 들고 있으면 새 조회를 배선할 때 두 축이 같이 보인다.
+ */
+export interface ScopeParams extends PlatformParams, UserParams {}
+
+/** 스코프 두 축을 질의에 싣는다. 빈 값은 **키를 만들지 않는다**(=전체). */
+function withScope(path: string, p: ScopeParams = {}): string {
+  const q = new URLSearchParams();
+  setPlatform(q, p.platform);
+  if (p.user) q.set('user', p.user);
+  const qs = q.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
 function withUser(path: string, user?: string): string {
-  if (!user) return path;
-  return `${path}?${new URLSearchParams({ user }).toString()}`;
+  return withScope(path, { user });
 }
 
 /* ── 엔드포인트 ───────────────────────────────────────────────────────── */
@@ -280,23 +290,38 @@ export const getSummary = (p: UserParams = {}, o?: RequestOptions) =>
   request<Summary>(withUser('/api/usage/summary', p.user), o);
 export const getDispatch = (p: UserParams = {}, o?: RequestOptions) =>
   request<Dispatch>(withUser('/api/usage/dispatch', p.user), o);
-export const getSeats = (days = 30, o?: RequestOptions) =>
-  request<Seats>(`/api/usage/seats?days=${days}`, o);
-export const getTeams = (days = 30, o?: RequestOptions) =>
-  request<Teams>(`/api/usage/teams?days=${days}`, o);
-export const getDev = (days = 30, o?: RequestOptions) =>
-  request<Dev>(`/api/usage/dev?days=${days}`, o);
+/*
+ * seats·teams·dev — days + 스코프 두 축.
+ *
+ * ⚠ 예전 주석은 이 셋이 "platform 을 안 받는다"고 적었고 그래서 화면이 안 실었다. 사실이
+ *   아니다(2026-08-13 실측: ?platform=codex 로 본문이 647→261 바이트). user 축도 같은 날
+ *   서버에 배선했다. 두 축을 모두 싣는다.
+ */
+const scopeSuffix = (p: ScopeParams): string => {
+  const q = new URLSearchParams();
+  setPlatform(q, p.platform);
+  if (p.user) q.set('user', p.user);
+  const qs = q.toString();
+  return qs ? `&${qs}` : '';
+};
+
+export const getSeats = (days = 30, o?: RequestOptions, p: ScopeParams = {}) =>
+  request<Seats>(`/api/usage/seats?days=${days}${scopeSuffix(p)}`, o);
+export const getTeams = (days = 30, o?: RequestOptions, p: ScopeParams = {}) =>
+  request<Teams>(`/api/usage/teams?days=${days}${scopeSuffix(p)}`, o);
+export const getDev = (days = 30, o?: RequestOptions, p: ScopeParams = {}) =>
+  request<Dev>(`/api/usage/dev?days=${days}${scopeSuffix(p)}`, o);
 export const getIdentity = (o?: RequestOptions) => request<unknown>('/api/usage/identity', o);
 
 /* platform 축을 받는 조회. */
-export const getDistribution = (p: PlatformParams = {}, o?: RequestOptions) =>
-  request<Distribution>(withPlatform('/api/usage/distribution', p.platform), o);
-export const getQuality = (p: PlatformParams = {}, o?: RequestOptions) =>
-  request<Quality>(withPlatform('/api/usage/quality', p.platform), o);
-export const getCoverage = (p: PlatformParams = {}, o?: RequestOptions) =>
-  request<Coverage>(withPlatform('/api/usage/coverage', p.platform), o);
-export const getLeaderboard = (p: PlatformParams = {}, o?: RequestOptions) =>
-  request<Leaderboard>(withPlatform('/api/usage/leaderboard', p.platform), o);
+export const getDistribution = (p: ScopeParams = {}, o?: RequestOptions) =>
+  request<Distribution>(withScope('/api/usage/distribution', p), o);
+export const getQuality = (p: ScopeParams = {}, o?: RequestOptions) =>
+  request<Quality>(withScope('/api/usage/quality', p), o);
+export const getCoverage = (p: ScopeParams = {}, o?: RequestOptions) =>
+  request<Coverage>(withScope('/api/usage/coverage', p), o);
+export const getLeaderboard = (p: ScopeParams = {}, o?: RequestOptions) =>
+  request<Leaderboard>(withScope('/api/usage/leaderboard', p), o);
 
 /**
  * 플랫폼별 롤업 — "이 서버에 어떤 플랫폼의 데이터가 얼마나 있나".
@@ -310,13 +335,16 @@ export const getPlatforms = (o?: RequestOptions) =>
   request<PlatformsResponse>('/api/usage/platforms', o);
 
 export const getSessions = (
-  params: { sort?: string; top?: number } & PlatformParams = {},
+  params: { sort?: string; top?: number } & ScopeParams = {},
   o?: RequestOptions,
 ) => {
   const q = new URLSearchParams();
   if (params.sort) q.set('sort', params.sort);
   if (params.top != null) q.set('top', String(params.top));
   setPlatform(q, params.platform);
+  // user 축도 싣는다. 예전에는 PlatformParams 만 받아 호출부가 user 를 넘겨도 **조용히
+  // 버려졌다** — 타입이 excess property 를 스프레드로 통과시켜 컴파일도 통과했다.
+  if (params.user) q.set('user', params.user);
   const qs = q.toString();
   return request<SessionsResponse>(`/api/usage/sessions${qs ? `?${qs}` : ''}`, o);
 };

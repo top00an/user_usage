@@ -255,16 +255,24 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 	if !ok {
 		return true, nil
 	}
+	/*
+	 * user 필터도 **여기서 한 번만** 읽는다(platform 과 같은 규율). 갈래마다 따로 읽으면
+	 * 언젠가 한 갈래가 빠지고, 그 엔드포인트만 조용히 전사 값을 돌려준다 — platform 축에서
+	 * 실제로 났던 사고다. 아래 seats·teams·dev 갈래가 이 값을 함께 쓴다.
+	 *
+	 * 미지정이면 조건이 붙지 않는다 = 전체(현행과 같은 응답, 골든 무회귀).
+	 */
+	userParam := c.query.Get("user")
 
 	if p == "/api/usage/seats" {
-		return s.routeSeats(w, r, c, platform)
+		return s.routeSeats(w, r, c, platform, userParam)
 	}
 	if p == "/api/usage/teams" {
-		return s.routeTeams(w, r, c, platform)
+		return s.routeTeams(w, r, c, platform, userParam)
 	}
 	if p == "/api/usage/dev" {
 		days := clampInt(int(numOr(c.query.Get("days"), 30)), 1, 365)
-		tot, byDay, err := store.DevMetricsWithFilter(r.Context(), days, store.Filter{Platform: platform})
+		tot, byDay, err := store.DevMetricsWithFilter(r.Context(), days, store.Filter{Platform: platform, Username: userParam})
 		if err != nil {
 			return true, err
 		}
@@ -379,7 +387,8 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 		return true, nil
 	}
 
-	username := c.query.Get("user")
+	// 위에서 이미 읽었다(userParam) — 같은 값을 두 이름으로 두지 않는다.
+	username := userParam
 	model := c.query.Get("model")
 
 	// ── 플랫폼별 요약(신규) ───────────────────────────────────────────────
@@ -542,7 +551,9 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 	// ── 수집 커버리지 ─────────────────────────────────────────────────────
 	// "왜 데이터가 없나"를 화면이 답한다 — 발신처(머신)별 마지막 보고 시각·세션 수·신수집기 여부.
 	if p == "/api/usage/coverage" {
-		reporters, err := store.ReporterCoverage(ctx)
+		// 사용자 축을 함께 싣는다 — "이 사람의 PC 들이 언제 마지막으로 보고했나"가
+		// 개인 화면의 "왜 내 데이터가 없나"에 대한 답이다.
+		reporters, err := store.ReporterCoverageWithFilter(ctx, store.Filter{Platform: platform, Username: userParam})
 		if err != nil {
 			return true, err
 		}
