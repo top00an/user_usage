@@ -40,9 +40,10 @@ type SessionInput struct {
 	 * 불변식(0 <= long <= 총량)의 검증·계수는 인테이크가 한다(신뢰 경계는 거기다).
 	 * 여기서는 음수만 접는다(nonNeg).
 	 */
-	InputLong     int64
-	OutputLong    int64
-	CacheReadLong int64
+	InputLong       int64
+	OutputLong      int64
+	CacheReadLong   int64
+	CacheCreateLong int64 // 캐시 생성의 롱 몫 — OpenAI 5.6 계열만 값을 갖는다(0040)
 	/*
 	 * 고속 모드(fast mode) 분리분 — 총량의 부분집합이다(롱과 같은 계약).
 	 * 고속은 같은 모델에 2배 단가가 붙으므로(캐시 축까지) 이 몫을 따로 세지 않으면
@@ -81,9 +82,10 @@ type SeriesRow struct {
 	Turns       int64
 
 	// 계단(롱컨텍스트) 분리분 — SessionInput 과 같은 계약이다(총량의 부분집합).
-	InputLong     int64
-	OutputLong    int64
-	CacheReadLong int64
+	InputLong       int64
+	OutputLong      int64
+	CacheReadLong   int64
+	CacheCreateLong int64 // 캐시 생성의 롱 몫 — OpenAI 5.6 계열만 값을 갖는다(0040)
 	/*
 	 * 고속 모드(fast mode) 분리분 — 총량의 부분집합이다(롱과 같은 계약).
 	 * 고속은 같은 모델에 2배 단가가 붙으므로(캐시 축까지) 이 몫을 따로 세지 않으면
@@ -295,9 +297,10 @@ type Session struct {
 	CacheRead   int64
 	CacheCreate int64
 	// 계단(롱컨텍스트) 분리분 — 총량의 부분집합. 비용 계산이 이 값을 상위 단가로 매긴다.
-	InputLong     int64
-	OutputLong    int64
-	CacheReadLong int64
+	InputLong       int64
+	OutputLong      int64
+	CacheReadLong   int64
+	CacheCreateLong int64 // 캐시 생성의 롱 몫 — OpenAI 5.6 계열만 값을 갖는다(0040)
 	/*
 	 * 고속 모드(fast mode) 분리분 — 총량의 부분집합이다(롱과 같은 계약).
 	 * 고속은 같은 모델에 2배 단가가 붙으므로(캐시 축까지) 이 몫을 따로 세지 않으면
@@ -325,9 +328,10 @@ type PlatformModelRow struct {
 	CacheCreate int64
 	// 계단 분리분의 합. 이게 없으면 플랫폼 화면만 계단을 안 타서 같은 데이터의 비용이
 	// 좌석 화면과 달라진다 — 두 화면이 다른 값을 말하는 것이 이 축에서 가장 나쁜 실패다.
-	InputLong     int64
-	OutputLong    int64
-	CacheReadLong int64
+	InputLong       int64
+	OutputLong      int64
+	CacheReadLong   int64
+	CacheCreateLong int64 // 캐시 생성의 롱 몫 — OpenAI 5.6 계열만 값을 갖는다(0040)
 	/*
 	 * 고속 모드(fast mode) 분리분 — 총량의 부분집합이다(롱과 같은 계약).
 	 * 고속은 같은 모델에 2배 단가가 붙으므로(캐시 축까지) 이 몫을 따로 세지 않으면
@@ -369,9 +373,10 @@ type Bucket struct {
 	CacheCreate5m int64
 	CacheCreate1h int64
 	// 계단(롱컨텍스트) 분리분 — 총량의 부분집합. 시간 뷰의 비용이 이 값을 상위 단가로 매긴다.
-	InputLong     int64
-	OutputLong    int64
-	CacheReadLong int64
+	InputLong       int64
+	OutputLong      int64
+	CacheReadLong   int64
+	CacheCreateLong int64 // 캐시 생성의 롱 몫 — OpenAI 5.6 계열만 값을 갖는다(0040)
 	/*
 	 * 고속 모드(fast mode) 분리분 — 총량의 부분집합이다(롱과 같은 계약).
 	 * 고속은 같은 모델에 2배 단가가 붙으므로(캐시 축까지) 이 몫을 따로 세지 않으면

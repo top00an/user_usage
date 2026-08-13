@@ -143,9 +143,10 @@ type Bucket struct {
 	CC1h        int64
 
 	// 롱 구간 몫(총량의 부분집합). 상단 주석이 계약의 단일 출처다.
-	InputLong     int64
-	OutputLong    int64
-	CacheReadLong int64
+	InputLong       int64
+	OutputLong      int64
+	CacheReadLong   int64
+	CacheCreateLong int64 // 캐시 생성의 롱 몫(총량의 부분집합)
 	/*
 	 * 고속 모드 몫(총량의 부분집합). 롱과 **같은 종류의 몫**이라 같은 클램프(longNat)를 쓴다 —
 	 * 불변식도 같다: 0 <= fast <= 해당 총량. 위반은 LongClamped 에 함께 세어진다(둘 다
@@ -195,9 +196,10 @@ type Session struct {
 	Turns       int64
 
 	// 롱 구간 몫(총량의 부분집합). Bucket 위의 주석이 계약의 단일 출처다.
-	InputLong     int64
-	OutputLong    int64
-	CacheReadLong int64
+	InputLong       int64
+	OutputLong      int64
+	CacheReadLong   int64
+	CacheCreateLong int64 // 캐시 생성의 롱 몫(총량의 부분집합)
 	/*
 	 * 고속 모드 몫(총량의 부분집합). 롱과 **같은 종류의 몫**이라 같은 클램프(longNat)를 쓴다 —
 	 * 불변식도 같다: 0 <= fast <= 해당 총량. 위반은 LongClamped 에 함께 세어진다(둘 다
@@ -392,6 +394,7 @@ func NormSession(raw map[string]any, ctx ...Ctx) (Session, bool) {
 	// 고속 몫도 같은 순서 계약이다. cacheCreate 는 아래에서 다시 읽지만 여기서 상한으로 쓴다 —
 	// nat 은 순수 함수라 두 번 읽어도 같은 값이다.
 	ccTotal := nat(raw["cacheCreate"])
+	ccLong, c4 := longNat(raw["cacheCreateLong"], ccTotal)
 	inFast, f1 := longNat(raw["inputFast"], in)
 	outFast, f2 := longNat(raw["outputFast"], out)
 	crFast, f3 := longNat(raw["cacheReadFast"], cr)
@@ -413,11 +416,12 @@ func NormSession(raw map[string]any, ctx ...Ctx) (Session, bool) {
 		InputLong:       inLong,
 		OutputLong:      outLong,
 		CacheReadLong:   crLong,
+		CacheCreateLong: ccLong,
 		InputFast:       inFast,
 		OutputFast:      outFast,
 		CacheReadFast:   crFast,
 		CacheCreateFast: ccFast,
-		LongClamped:     countTrue(c1, c2, c3) + countTrue(f1, f2, f3, f4),
+		LongClamped:     countTrue(c1, c2, c3, c4) + countTrue(f1, f2, f3, f4),
 		CacheCreate:     nat(raw["cacheCreate"]),
 		WebSearch:       nat(raw["webSearch"]),
 		WebFetch:        nat(raw["webFetch"]),
@@ -489,6 +493,7 @@ func normSeries(v any) []Bucket {
 		boutLong, c2 := longNat(b["outputLong"], bout)
 		bcrLong, c3 := longNat(b["cacheReadLong"], bcr)
 		bcc := nat(b["cacheCreate"])
+		bccLong, c4 := longNat(b["cacheCreateLong"], bcc)
 		binFast, f1 := longNat(b["inputFast"], bin)
 		boutFast, f2 := longNat(b["outputFast"], bout)
 		bcrFast, f3 := longNat(b["cacheReadFast"], bcr)
@@ -499,9 +504,10 @@ func normSeries(v any) []Bucket {
 			Input: bin, Output: bout,
 			CacheRead: bcr, CacheCreate: bcc,
 			InputLong: binLong, OutputLong: boutLong, CacheReadLong: bcrLong,
-			InputFast: binFast, OutputFast: boutFast,
+			CacheCreateLong: bccLong,
+			InputFast:       binFast, OutputFast: boutFast,
 			CacheReadFast: bcrFast, CacheCreateFast: bccFast,
-			LongClamped: countTrue(c1, c2, c3) + countTrue(f1, f2, f3, f4),
+			LongClamped: countTrue(c1, c2, c3, c4) + countTrue(f1, f2, f3, f4),
 			CC5m:        nat(b["cc5m"]), CC1h: nat(b["cc1h"]),
 			Turns: nat(b["turns"]), ToolErrors: nat(b["toolErrors"]),
 			StopMaxTokens: nat(b["stopMaxTokens"]), StopRefusal: nat(b["stopRefusal"]),

@@ -73,7 +73,7 @@ var (
 	seriesSumCols = []string{
 		"input", "output", "cache_read", "cache_create",
 		"cc_5m", "cc_1h",
-		"input_long", "output_long", "cache_read_long",
+		"input_long", "output_long", "cache_read_long", "cache_create_long",
 		// 고속 모드 분리분도 **합**이다(총량의 부분집합이므로 병합 시 그대로 더해진다).
 		"input_fast", "output_fast", "cache_read_fast", "cache_create_fast",
 		"turns", "tool_errors", "stop_max_tokens", "stop_refusal",

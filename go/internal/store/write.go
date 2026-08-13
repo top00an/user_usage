@@ -25,7 +25,7 @@ var sessionCols = []string{
 	"input", "output", "cache_read", "cache_create",
 	// 계단(롱컨텍스트) 분리분. 총량 바로 뒤에 둔다 — 둘의 관계(부분집합)가 눈에 보여야
 	// 나중에 한쪽만 고치는 사고가 준다.
-	"input_long", "output_long", "cache_read_long",
+	"input_long", "output_long", "cache_read_long", "cache_create_long",
 	"input_fast", "output_fast", "cache_read_fast", "cache_create_fast",
 	"web_search", "web_fetch", "turns",
 	"started_at", "ended_at", "no_ts_turns",
@@ -60,7 +60,7 @@ func SessionUpsert(ctx context.Context, s SessionInput) error {
 		// 뜻이 여기서는 NULL 이 아니라 claude 다(NormalizePlatform 이 그 규칙의 단일 출처).
 		NormalizePlatform(s.Platform),
 		nonNeg(s.Input), nonNeg(s.Output), nonNeg(s.CacheRead), nonNeg(s.CacheCreate),
-		nonNeg(s.InputLong), nonNeg(s.OutputLong), nonNeg(s.CacheReadLong),
+		nonNeg(s.InputLong), nonNeg(s.OutputLong), nonNeg(s.CacheReadLong), nonNeg(s.CacheCreateLong),
 		nonNeg(s.InputFast), nonNeg(s.OutputFast), nonNeg(s.CacheReadFast), nonNeg(s.CacheCreateFast),
 		nonNeg(s.WebSearch), nonNeg(s.WebFetch), nonNeg(s.Turns),
 		nullStr(clip(s.StartedAt, 40)),
@@ -78,7 +78,7 @@ func SessionUpsert(ctx context.Context, s SessionInput) error {
 
 var seriesCols = []string{
 	"input", "output", "cache_read", "cache_create",
-	"input_long", "output_long", "cache_read_long",
+	"input_long", "output_long", "cache_read_long", "cache_create_long",
 	"input_fast", "output_fast", "cache_read_fast", "cache_create_fast",
 	"cc_5m", "cc_1h", "turns",
 	"tool_errors", "stop_max_tokens", "stop_refusal",
@@ -133,7 +133,7 @@ func SeriesUpsertN(ctx context.Context, in SeriesInput) (int, error) {
 		args := []any{
 			sid, hour, model,
 			nonNeg(r.Input), nonNeg(r.Output), nonNeg(r.CacheRead), nonNeg(r.CacheCreate),
-			nonNeg(r.InputLong), nonNeg(r.OutputLong), nonNeg(r.CacheReadLong),
+			nonNeg(r.InputLong), nonNeg(r.OutputLong), nonNeg(r.CacheReadLong), nonNeg(r.CacheCreateLong),
 			nonNeg(r.InputFast), nonNeg(r.OutputFast), nonNeg(r.CacheReadFast), nonNeg(r.CacheCreateFast),
 			nonNeg(r.CC5m), nonNeg(r.CC1h), nonNeg(r.Turns),
 			nonNeg(r.ToolErrors), nonNeg(r.StopMaxTokens), nonNeg(r.StopRefusal),

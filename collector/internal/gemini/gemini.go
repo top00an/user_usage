@@ -530,8 +530,10 @@ func (a *Aggregator) AddFileAt(path, fallbackID string, r io.Reader) error {
 // 확정된 뒤에야** 합계를 낼 수 있다. 중간에 더하면 되돌린 토큰이 남는다.
 type folded struct {
 	input, cacheRead, output int64
-	turns, noTsTurn          int64
-	webSearch, webFetch      int64
+	// 계단 몫(위 총량의 부분집합) — 세션 총량이 버킷 파생이 아니라 별도 누적이므로 같이 센다.
+	inputLong, cacheReadLong, outputLong int64
+	turns, noTsTurn                      int64
+	webSearch, webFetch                  int64
 
 	// 개발 지표(파생). write_file·replace 호출에서 **줄 수만** 센다(내용 미저장).
 	linesAdded, linesRemoved     int64
@@ -598,6 +600,17 @@ func (f *folded) addMessage(m *messageRec) {
 		f.input += in
 		f.cacheRead += t.Cached
 		f.output += out
+		/*
+		 * 롱 몫 — 총량에 더한 뒤 같은 값을 롱 쪽에도 더한다(부분집합이므로 빼지 않는다).
+		 * 버킷 쪽과 **같은 판정·같은 값**이어야 한다: 한쪽만 세면 세션 합계와 시간 뷰의
+		 * 비용이 갈리고 두 화면이 다른 값을 말한다.
+		 */
+		long := isLongRequest(t)
+		if long {
+			f.inputLong += in
+			f.cacheReadLong += t.Cached
+			f.outputLong += out
+		}
 		f.turns++
 		f.modelTokens[m.Model] += in + out + t.Cached
 
@@ -611,6 +624,11 @@ func (f *folded) addMessage(m *messageRec) {
 		b.Input += in
 		b.Output += out
 		b.CacheRead += t.Cached
+		if long {
+			b.InputLong += in
+			b.OutputLong += out
+			b.CacheReadLong += t.Cached
+		}
 		b.Turns++
 		// b.CacheCreate 는 건드리지 않는다 — Gemini 는 암시적 캐싱이라 캐시 **쓰기** 과금이 없다.
 
@@ -710,6 +728,28 @@ func (f *folded) bucket(hour, model string) *payload.Bucket {
 
 // netInput 은 캐시 히트를 뺀 순수 입력이다.
 //
+/*
+ * ── 계단(롱컨텍스트) 임계 ─────────────────────────────────────────────────
+ *
+ * Google 은 **한 요청의 입력 컨텍스트가 200K 토큰을 넘으면** 그 요청의 입력·출력을 함께 롱
+ * 단가로 매긴다. 공식 문구가 범위를 못 박는다:
+ *   "If a query input context is longer than 200K tokens, all tokens (input and output)
+ *    are charged at long context rates."
+ * OpenAI(272K)와 임계가 다르므로 상수를 각 수집기가 자기 것으로 갖는다.
+ *
+ * 계단이 있는 모델은 pro 계열뿐이지만(flash 는 없다) 모델별로 가르지 않는다 — 계단 단가를
+ * 가진 모델인지는 **서버 단가표가 판정한다**(cost.LongContextPrice). 계단이 없는 모델에서
+ * 이 몫이 올라와도 서버가 표준가로 계산하므로 비용이 부풀지 않는다(LongPricingFlat).
+ */
+const longContextThreshold = 200_000
+
+/*
+ * isLongRequest — 기준은 **promptTokenCount**(tokens.input)다. 캐시된 몫을 포함한 그 요청의
+ * 전체 입력 컨텍스트이고, 공식 임계도 컨텍스트 길이로 매겨진다. netInput(캐시 뺀 값)으로
+ * 재면 캐시가 많은 세션이 임계를 못 넘는 것으로 잘못 판정된다.
+ */
+func isLongRequest(t tokensRec) bool { return t.Input > longContextThreshold }
+
 // `tokens.input` 은 promptTokenCount 이고 여기에 cachedContentTokenCount 가 **포함**돼 있다.
 // Gemini CLI 자신도 표시할 때 같은 뺄셈을 한다. 빼지 않으면 입력이 이중 계상되어 그대로 비용이 된다.
 func netInput(t tokensRec) int64 {
@@ -795,6 +835,10 @@ func (a *Aggregator) Sessions() []payload.Session {
 			Input:     f.input,
 			Output:    f.output,
 			CacheRead: f.cacheRead,
+			// 계단 몫 — 서버가 이 값에 롱 단가를 매긴다(모델별 계단 유무는 서버 단가표가 판정).
+			InputLong:     f.inputLong,
+			OutputLong:    f.outputLong,
+			CacheReadLong: f.cacheReadLong,
 			// CacheCreate 는 항상 0 이다 — Gemini 는 암시적 캐싱이라 캐시 쓰기 과금 개념이
 			// **해당 없음**이다("미지원"이 아니다).
 			CacheCreate: 0,

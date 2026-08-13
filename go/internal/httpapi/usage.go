@@ -123,7 +123,7 @@ func (s *server) storeSessions(ctx context.Context, sessions []intake.Session, k
 			CacheRead: sess.CacheRead, CacheCreate: sess.CacheCreate,
 			// 계단 분리분 — 없으면 0 이고 그것이 현행 동작이다(전부 표준 구간).
 			InputLong: sess.InputLong, OutputLong: sess.OutputLong,
-			CacheReadLong: sess.CacheReadLong,
+			CacheReadLong: sess.CacheReadLong, CacheCreateLong: sess.CacheCreateLong,
 			// 고속 모드 분리분 — 없으면 0 이고 그것이 현행 동작이다(전부 표준 속도).
 			InputFast: sess.InputFast, OutputFast: sess.OutputFast,
 			CacheReadFast: sess.CacheReadFast, CacheCreateFast: sess.CacheCreateFast,
@@ -202,8 +202,8 @@ func toSeriesRows(bs []intake.Bucket) []store.SeriesRow {
 			Input: b.Input, Output: b.Output,
 			CacheRead: b.CacheRead, CacheCreate: b.CacheCreate,
 			InputLong: b.InputLong, OutputLong: b.OutputLong,
-			CacheReadLong: b.CacheReadLong,
-			InputFast:     b.InputFast, OutputFast: b.OutputFast,
+			CacheReadLong: b.CacheReadLong, CacheCreateLong: b.CacheCreateLong,
+			InputFast: b.InputFast, OutputFast: b.OutputFast,
 			CacheReadFast: b.CacheReadFast, CacheCreateFast: b.CacheCreateFast,
 			CC5m: b.CC5m, CC1h: b.CC1h, Turns: b.Turns,
 			ToolErrors: b.ToolErrors, StopMaxTokens: b.StopMaxTokens, StopRefusal: b.StopRefusal,

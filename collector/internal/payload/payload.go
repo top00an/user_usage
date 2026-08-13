@@ -59,6 +59,25 @@ type Session struct {
 	 * omitempty 를 쓰지 않는다 — 0 은 "표준 속도였다"는 관측이고, 필드가 사라지면 서버가
 	 * "안 보냈다"와 구분할 수 없다. 둘의 계산 결과는 같지만 의미가 달라서 그 구분을 남긴다.
 	 */
+
+	/*
+	 * 계단(롱컨텍스트) 몫 — 총량의 **부분집합**이다(서버 intake 의 longNat 이 같은 불변식으로
+	 * 검증한다: 0 <= long <= 해당 총량).
+	 *
+	 * 판정: 한 요청의 **입력 컨텍스트**가 임계를 넘으면 그 요청의 입력·출력·캐시가 **전부**
+	 * 롱 단가다(공식 문구: "all tokens (input and output) are charged at long context rates").
+	 * 임계는 공급사마다 다르다 — OpenAI 272K · Google 200K. Anthropic 4.6+ 는 1M 컨텍스트가
+	 * 표준가라 계단이 없어 claude 수집기는 이 값을 채우지 않는다.
+	 *
+	 * 판정을 수집기가 하는 이유: 서버는 **집계된 행**을 받아 "이 요청이 임계를 넘었는가"를
+	 * 알 수 없다(하루 합계가 272K 를 넘는 것과 한 요청이 넘는 것은 다른 얘기다).
+	 * 요청 단위를 보는 것은 세션 로그를 읽는 이쪽뿐이다.
+	 */
+	InputLong       int64 `json:"inputLong"`
+	OutputLong      int64 `json:"outputLong"`
+	CacheReadLong   int64 `json:"cacheReadLong"`
+	CacheCreateLong int64 `json:"cacheCreateLong"`
+
 	InputFast       int64 `json:"inputFast"`
 	OutputFast      int64 `json:"outputFast"`
 	CacheReadFast   int64 `json:"cacheReadFast"`
@@ -108,6 +127,25 @@ type Bucket struct {
 	 * omitempty 를 쓰지 않는다 — 0 은 "표준 속도였다"는 관측이고, 필드가 사라지면 서버가
 	 * "안 보냈다"와 구분할 수 없다. 둘의 계산 결과는 같지만 의미가 달라서 그 구분을 남긴다.
 	 */
+
+	/*
+	 * 계단(롱컨텍스트) 몫 — 총량의 **부분집합**이다(서버 intake 의 longNat 이 같은 불변식으로
+	 * 검증한다: 0 <= long <= 해당 총량).
+	 *
+	 * 판정: 한 요청의 **입력 컨텍스트**가 임계를 넘으면 그 요청의 입력·출력·캐시가 **전부**
+	 * 롱 단가다(공식 문구: "all tokens (input and output) are charged at long context rates").
+	 * 임계는 공급사마다 다르다 — OpenAI 272K · Google 200K. Anthropic 4.6+ 는 1M 컨텍스트가
+	 * 표준가라 계단이 없어 claude 수집기는 이 값을 채우지 않는다.
+	 *
+	 * 판정을 수집기가 하는 이유: 서버는 **집계된 행**을 받아 "이 요청이 임계를 넘었는가"를
+	 * 알 수 없다(하루 합계가 272K 를 넘는 것과 한 요청이 넘는 것은 다른 얘기다).
+	 * 요청 단위를 보는 것은 세션 로그를 읽는 이쪽뿐이다.
+	 */
+	InputLong       int64 `json:"inputLong"`
+	OutputLong      int64 `json:"outputLong"`
+	CacheReadLong   int64 `json:"cacheReadLong"`
+	CacheCreateLong int64 `json:"cacheCreateLong"`
+
 	InputFast       int64 `json:"inputFast"`
 	OutputFast      int64 `json:"outputFast"`
 	CacheReadFast   int64 `json:"cacheReadFast"`

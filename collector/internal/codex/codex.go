@@ -235,9 +235,12 @@ type sessionAgg struct {
 	model   string // 가장 최근 turn_context 의 모델 — 턴마다 바뀔 수 있다
 
 	input, cacheRead, output int64
-	taskStarted              int64
-	noTsTurn                 int64
-	turnIDs                  map[string]bool
+	// 계단 몫(위 총량의 부분집합). 세션 총량은 버킷에서 파생되지 않고 따로 누적되므로
+	// 버킷과 같은 자리에서 같이 더한다.
+	inputLong, cacheReadLong, outputLong int64
+	taskStarted                          int64
+	noTsTurn                             int64
+	turnIDs                              map[string]bool
 
 	modelTokens map[string]int64
 	buckets     map[string]*payload.Bucket
@@ -344,6 +347,9 @@ func (sa *sessionAgg) merge(src *sessionAgg) {
 	sa.input += src.input
 	sa.cacheRead += src.cacheRead
 	sa.output += src.output
+	sa.inputLong += src.inputLong
+	sa.cacheReadLong += src.cacheReadLong
+	sa.outputLong += src.outputLong
 	sa.taskStarted += src.taskStarted
 	sa.noTsTurn += src.noTsTurn
 	for k := range src.turnIDs {
@@ -642,6 +648,13 @@ func (sa *sessionAgg) addTokens(t tokenUsage, ts string) {
 	b.CacheRead += d.Cached
 	b.Output += d.Output
 	// b.CacheCreate 는 건드리지 않는다 — Codex 는 cache write 토큰을 기록하지 않는다.
+	// 롱 몫 — 총량에 더한 뒤 **같은 값**을 롱 쪽에도 더한다(부분집합이므로 빼지 않는다).
+	if isLongRequest(d) {
+		b.InputLong += netInput(d)
+		b.CacheReadLong += d.Cached
+		b.OutputLong += d.Output
+		// CacheCreateLong 은 채우지 않는다 — CacheCreate 자체가 0 이라 몫이 있을 수 없다.
+	}
 }
 
 // endStream 은 현재 스트림의 마지막 누적값을 세션 합계로 확정한다.
@@ -653,8 +666,40 @@ func (sa *sessionAgg) endStream() {
 	sa.input += netInput(*t)
 	sa.cacheRead += t.Cached
 	sa.output += t.Output // reasoning_output_tokens 는 여기 이미 들어 있다 — 더하지 않는다
+	// 버킷 쪽(addBucket)과 **같은 판정·같은 값**이어야 한다. 한쪽만 세면 세션 합계와 시간
+	// 뷰의 비용이 갈리고, 두 화면이 다른 값을 말하게 된다.
+	if isLongRequest(*t) {
+		sa.inputLong += netInput(*t)
+		sa.cacheReadLong += t.Cached
+		sa.outputLong += t.Output
+	}
 	sa.streamCur = nil
 }
+
+/*
+ * ── 계단(롱컨텍스트) 임계 ─────────────────────────────────────────────────
+ *
+ * OpenAI 는 **한 요청의 입력 컨텍스트가 272K 토큰을 넘으면** 그 요청 전체를 롱 단가로 매긴다
+ * (입력 2배 · 출력 1.5배). 계단이 있는 모델은 gpt-5.4 · gpt-5.5 · gpt-5.6 계열과 *-pro 다 —
+ * 어느 모델인지는 **서버 단가표가 판정한다**(cost.LongContextPrice). 수집기가 할 일은
+ * "이 요청이 임계를 넘었나"뿐이고, 그것은 요청 단위를 보는 이쪽만 알 수 있다.
+ *
+ * 모델별로 임계를 가르지 않는 이유: 공식 표의 계단 임계는 OpenAI 전체가 272K 로 같다.
+ * 계단이 **없는** 모델에서 이 몫이 올라와도 서버가 롱 단가를 안 갖고 있어 표준가로 계산한다
+ * (cost 의 LongPricingFlat) — 즉 여기서 넉넉하게 표시해도 비용이 부풀지 않는다.
+ * 반대로 임계를 모델별로 흉내내면 수집기와 서버 두 곳에 단가 지식이 갈라져 놓인다.
+ */
+const longContextThreshold = 272_000
+
+/*
+ * isLongRequest 는 이 턴이 계단 구간이었는지다.
+ *
+ * 기준은 **input_tokens** 다(캐시 히트를 포함한 그 요청의 전체 입력 컨텍스트). netInput 이
+ * 아니다 — 캐시된 프리픽스도 컨텍스트 길이에 들어가고, 공식 임계는 컨텍스트 길이로 매겨진다.
+ * netInput 으로 재면 캐시가 많은 세션이 임계를 못 넘는 것으로 잘못 판정된다(실측 워크로드에서
+ * 캐시읽기가 입력의 90% 이상이라 그 오판이 사실상 상시화된다).
+ */
+func isLongRequest(t tokenUsage) bool { return t.Input > longContextThreshold }
 
 // netInput 은 캐시 히트를 뺀 순수 입력이다. OpenAI 는 cached_input_tokens 를
 // input_tokens 의 **부분집합**으로 싣는다(실측 검증). 빼지 않으면 입력이 이중 계상된다.
@@ -777,6 +822,10 @@ func (a *Aggregator) Sessions() []payload.Session {
 			Input:     sa.input,
 			Output:    sa.output,
 			CacheRead: sa.cacheRead,
+			// 계단 몫 — 서버가 이 값에 롱 단가를 매긴다(모델별 계단 유무는 서버 단가표가 판정).
+			InputLong:     sa.inputLong,
+			OutputLong:    sa.outputLong,
+			CacheReadLong: sa.cacheReadLong,
 			// CacheCreate 는 항상 0 이다. Codex 롤아웃에 cache write 토큰이 없다 —
 			// 관측 불가이지 "0 이라고 관측한 것"이 아니다.
 			CacheCreate: 0,

@@ -120,6 +120,8 @@ var sqliteDDL = []string{
 		input_long INTEGER NOT NULL DEFAULT 0,
 		output_long INTEGER NOT NULL DEFAULT 0,
 		cache_read_long INTEGER NOT NULL DEFAULT 0,
+		-- 캐시 생성의 롱 몫(0040). OpenAI 5.6 계열만 값을 갖는다.
+		cache_create_long INTEGER NOT NULL DEFAULT 0,
 		-- 고속 모드(fast mode) 분리분 — 총량의 부분집합이다(롱과 같은 계약).
 		-- 고속은 같은 모델에 2배 단가가 붙는다(Opus 5 고속 $10/$50 vs 표준 $5/$25).
 		-- pg 는 migrations/pg/0039_fast_mode.sql 이 같은 컬럼을 소유한다(양 방언 동기).
@@ -153,6 +155,8 @@ var sqliteDDL = []string{
 		input_long INTEGER NOT NULL DEFAULT 0,
 		output_long INTEGER NOT NULL DEFAULT 0,
 		cache_read_long INTEGER NOT NULL DEFAULT 0,
+		-- 캐시 생성의 롱 몫(0040). OpenAI 5.6 계열만 값을 갖는다.
+		cache_create_long INTEGER NOT NULL DEFAULT 0,
 		-- 고속 모드 분리분 — 같은 계약. 세션 표에도 같은 넷이 있다.
 		input_fast INTEGER NOT NULL DEFAULT 0,
 		output_fast INTEGER NOT NULL DEFAULT 0,
@@ -301,7 +305,7 @@ func Init(ctx context.Context, d db.DB) error {
 	 */
 	for _, table := range []string{"usage_sessions", "usage_series"} {
 		for _, col := range []string{
-			"input_long", "output_long", "cache_read_long",
+			"input_long", "output_long", "cache_read_long", "cache_create_long",
 			// 고속 모드 분리분(0039). 기존 DB 에 없으면 여기서 붙는다 — DEFAULT 0 이라
 			// 붙는 순간의 기존 행은 "전부 표준 속도"가 되고 비용이 종전과 같다.
 			"input_fast", "output_fast", "cache_read_fast", "cache_create_fast",

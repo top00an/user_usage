@@ -417,9 +417,10 @@ func sessionUsage(s store.Session) cost.Usage {
 		CacheCreate: float64(s.CacheCreate),
 		// 계단(롱컨텍스트) 분리분. **세 변환 함수 전부**가 이걸 올려야 한다 — 하나라도 빠지면
 		// 그 화면만 계단을 안 타고, 같은 데이터의 비용이 화면마다 달라진다(dto_longcontext_test.go).
-		InputLong:     float64(s.InputLong),
-		OutputLong:    float64(s.OutputLong),
-		CacheReadLong: float64(s.CacheReadLong),
+		InputLong:       float64(s.InputLong),
+		OutputLong:      float64(s.OutputLong),
+		CacheReadLong:   float64(s.CacheReadLong),
+		CacheCreateLong: float64(s.CacheCreateLong),
 		// 고속 모드 분리분 — 계단과 같은 규율이다. 셋 다 올려야 한다.
 		InputFast:       float64(s.InputFast),
 		OutputFast:      float64(s.OutputFast),
@@ -469,6 +470,7 @@ func platformModelUsage(m store.PlatformModelRow) cost.Usage {
 		InputLong:       float64(m.InputLong),
 		OutputLong:      float64(m.OutputLong),
 		CacheReadLong:   float64(m.CacheReadLong),
+		CacheCreateLong: float64(m.CacheCreateLong),
 		InputFast:       float64(m.InputFast),
 		OutputFast:      float64(m.OutputFast),
 		CacheReadFast:   float64(m.CacheReadFast),
@@ -488,6 +490,7 @@ func bucketUsage(b store.Bucket) cost.Usage {
 		InputLong:       float64(b.InputLong),
 		OutputLong:      float64(b.OutputLong),
 		CacheReadLong:   float64(b.CacheReadLong),
+		CacheCreateLong: float64(b.CacheCreateLong),
 		InputFast:       float64(b.InputFast),
 		OutputFast:      float64(b.OutputFast),
 		CacheReadFast:   float64(b.CacheReadFast),
