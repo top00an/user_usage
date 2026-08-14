@@ -1,12 +1,11 @@
 'use client';
 
-import { useCallback, useId, useState } from 'react';
-import { ApiError, createUser, isAborted } from '@/lib/api';
-import type { AdminUser, UserRole } from '@/lib/types';
+import { useCallback, useState } from 'react';
+import type { AdminUser } from '@/lib/types';
 import { Card, TableWrap } from '@/components/ui';
-import { useToast } from '@/components/Toast';
 import { fmtTime, n } from '@/lib/format';
 import { adminCount as countAdmins, roleLabel } from '@/components/admin/derive';
+import AddUserForm from '@/components/admin/AddUserForm';
 
 /*
  * 사용자 표 — **읽기 전용이다.** 행을 누르면 그 사용자의 시트가 열리고, 변경은 거기서만 한다.
@@ -28,53 +27,13 @@ export default function UsersCard({
   onOpen: (username: string) => void;
   onCreated: () => void;
 }) {
-  const toast = useToast();
-  const nameId = useId();
-  const pwId = useId();
-  const roleId = useId();
-
+  /*
+   * 폼 자체는 AddUserForm 이 진다. 여기 남는 것은 **열렸는가**뿐이다 — 표와 폼이 한 컴포넌트에
+   * 있으면 폼의 검증 state 가 바뀔 때마다 사용자 표 전체가 다시 렌더된다.
+   */
   const [adding, setAdding] = useState(false);
-  const [name, setName] = useState('');
-  const [password, setPassword] = useState('');
-  const [role, setRole] = useState<UserRole>('member');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
   const admins = countAdmins(users);
-
-  const reset = useCallback(() => {
-    setAdding(false);
-    setName('');
-    setPassword('');
-    setRole('member');
-    setError(null);
-  }, []);
-
-  const submit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (busy) return; // 이중 제출 방지 — 느린 네트워크에서 엔터 연타가 두 번 만든다.
-    const u = name.trim();
-    if (!u || !password) {
-      // 빈 제출을 조용히 무시하지 않는다 — 눌렀는데 아무 일도 안 나면 고장으로 읽힌다.
-      setError('아이디와 비밀번호를 입력하세요.');
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await createUser({ username: u, password, role });
-      toast(`사용자 ${u} 를 만들었습니다.`);
-      reset();
-      onCreated();
-    } catch (err) {
-      if (isAborted(err)) return;
-      // 서버 사유를 그대로 보여준다(중복·비밀번호 길이·role 검증은 서버가 판정한다).
-      const why = err instanceof ApiError && err.body.error ? err.body.error : '';
-      setError(why ? `사용자를 만들지 못했습니다 — ${why}` : '사용자를 만들지 못했습니다.');
-    } finally {
-      setBusy(false);
-    }
-  }, [busy, name, onCreated, password, reset, role, toast]);
+  const reset = useCallback(() => setAdding(false), []);
 
   return (
     <Card
@@ -90,24 +49,12 @@ export default function UsersCard({
       }
     >
       {adding && (
-        <form className="row mb" noValidate onSubmit={submit}>
-          <label className="help" htmlFor={nameId}>아이디</label>
-          <input id={nameId} type="text" value={name} autoComplete="off" autoCapitalize="none" spellCheck={false}
-            disabled={busy} onChange={(e) => { setName(e.target.value); setError(null); }} />
-          <label className="help" htmlFor={pwId}>비밀번호</label>
-          <input id={pwId} type="password" value={password} autoComplete="new-password"
-            disabled={busy} onChange={(e) => { setPassword(e.target.value); setError(null); }} />
-          <label className="help" htmlFor={roleId}>역할</label>
-          <select id={roleId} value={role} disabled={busy} onChange={(e) => setRole(e.target.value as UserRole)}>
-            <option value="member">구성원</option>
-            <option value="admin">관리자</option>
-          </select>
-          <button type="submit" className="primary" disabled={busy} aria-busy={busy}>
-            {busy ? '만드는 중…' : '만들기'}
-          </button>
-        </form>
+        <AddUserForm
+          users={users}
+          onCancel={reset}
+          onCreated={() => { reset(); onCreated(); }}
+        />
       )}
-      {error && <p className="help txt-err mb" role="alert">{error}</p>}
 
       <TableWrap>
         <table>

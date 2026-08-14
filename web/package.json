@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "node scripts/preview.mjs",
-    "verify:live": "node scripts/verify-live.mjs"
+    "verify:live": "node scripts/verify-live.mjs",
+    "verify:canvas": "node scripts/verify-canvas.mjs"
   },
   "dependencies": {
     "echarts": "^6.1.0",

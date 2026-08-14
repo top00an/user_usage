@@ -41,9 +41,14 @@ export default function UserFilter({
   return (
     <div className="pf-bar">
       <label htmlFor="user-filter">사용자</label>
+      {/*
+        * 클래스를 주지 않는다 — 전역 `input, select, textarea` 규칙이 받는다.
+        * 예전엔 `.builder-input`(차트 빌더 모달 전용)을 빌려 썼는데, 그 결과 이 칸만
+        * 앱의 다른 어떤 칸과도 높이가 달랐고 채움이 `--surface` 라 다크에서는 카드와
+        * 섞여 사라지고 라이트에서는 혼자 튀었다. 너비는 `.pf-bar select` 가 잡는다.
+        */}
       <select
         id="user-filter"
-        className="builder-input"
         value={known ? value : ''}
         onChange={(e) => onChange(e.target.value)}
       >

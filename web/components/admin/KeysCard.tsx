@@ -100,7 +100,10 @@ export default function KeysCard({
       {open && (
         <div className="mb">
           <div className="row">
-            <label className="help" htmlFor={ownerId}>이 키의 소유자</label>
+            {/* `.help` 는 **보조 설명**(--fg-faint) 클래스다 — 라벨에 붙이면 라벨과 그 아래 설명문이
+                10.92px/400/faint 로 완전히 같은 글자가 되어 위계가 사라진다. 라벨의 모양은
+                globals.css 의 `.row > label` 이 준다. */}
+            <label htmlFor={ownerId}>이 키의 소유자</label>
             <select id={ownerId} value={owner} disabled={issuing} onChange={(e) => setOwner(e.target.value)}>
               {users.map((u) => (
                 <option key={u.username} value={u.username}>{u.username}</option>
@@ -111,7 +114,13 @@ export default function KeysCard({
               {issuing ? '발급 중…' : '발급'}
             </button>
           </div>
-          <p className={`help mt-sm ${owner ? '' : 'txt-warn'}`}>
+          {/*
+            발급을 누르기 **전에** 그 키가 무엇이 될지 말하는 자리다. 소유자를 고르면 확인(상시
+            안내), '묶지 않음'을 고르면 경고다 — 그래서 politeness 도 함께 바뀐다. 결속 없는 키는
+            사용량이 PC 이름으로 잡히는 되돌리기 어려운 선택이라, 그 순간만 낭독을 끊는다(alert).
+            화면에서는 색(txt-warn)이 이미 그 차이를 말하지만, 스크린리더에는 아무 신호가 없었다.
+          */}
+          <p className={`help mt-sm ${owner ? '' : 'txt-warn'}`} role={owner ? 'status' : 'alert'}>
             {owner
               ? `이 키로 들어온 사용량은 ${owner} 님의 것으로 잡힙니다 — 그 PC 가 보내는 이름보다 우선합니다.`
               : '⚠ 이 키의 사용량은 보고한 PC 가 주장하는 이름으로 잡힙니다 — 사람 계정과 일치한다는 보장이 없습니다. 사람에게 묶으려면 위에서 소유자를 고르세요.'}

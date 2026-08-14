@@ -45,6 +45,19 @@ export function removePanel(id: string): void {
   write(read().filter((p) => p.id !== id));
 }
 
+/**
+ * 지웠던 패널을 **있던 자리에** 되돌린다(되돌리기 전용).
+ *
+ * addPanel 로 되살리면 id 가 새로 만들어져 서버에 저장된 그 패널의 배치와 끊어진다 — 사람에게는
+ * "되돌렸는데 엉뚱한 데 붙었다"로 보인다. 그래서 id 를 그대로 쓰고 순서도 되돌린다.
+ * 같은 id 가 이미 있으면(두 번 되돌리기 같은 경우) 중복으로 늘리지 않고 자리만 맞춘다.
+ */
+export function insertPanel(panel: CustomPanel, index: number): void {
+  const rest = read().filter((p) => p.id !== panel.id);
+  const at = Math.max(0, Math.min(Math.trunc(index), rest.length));
+  write([...rest.slice(0, at), panel, ...rest.slice(at)]);
+}
+
 /** 컴포넌트가 패널 목록 변화를 구독한다(useSyncExternalStore 용). */
 export function subscribePanels(cb: () => void): () => void {
   listeners.add(cb);

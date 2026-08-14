@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   GRID_COLS, ROW_H, GRID_GAP, MAX_PANELS,
   type DashLayout,
-  clampBox, moveBox, resizeBox, normalizeLayout, resolveLayout, parseLayout,
+  clampBox, moveBox, resizeBox, normalizeLayout, compactLayout, resolveLayout, overlappingIds, parseLayout,
   sameLayout, colStep, pxToCells, describeBox,
 } from '@/lib/dashLayout';
 
@@ -64,17 +64,30 @@ describe('moveBox / resizeBox — 칸 단위로만 움직인다', () => {
   });
 });
 
-describe('normalizeLayout — 겹침 해소와 위로 당기기', () => {
-  it('같은 자리에 겹친 둘 중 하나가 아래로 밀린다', () => {
+describe('normalizeLayout — 자리는 손대지 않는다 (겹침 허용)', () => {
+  /*
+   * 이 describe 가 지키는 단 하나의 성질: **내가 만지지 않은 패널은 움직이지 않는다.**
+   * 예전 두 판이 각각 반대를 못 박고 있었다(① 전부 맨 위로 끌어올리기 → ② 겹친 것만 아래로
+   * 밀기). 둘 다 사용자에게는 같은 증상 하나로 도착했다 — "혼자 배치된다".
+   */
+  it('같은 자리에 겹쳐도 겹친 채로 남는다 — 아무도 밀려나지 않는다', () => {
     const out = normalizeLayout([
       { id: 'a', x: 0, y: 0, w: 6, h: 2 },
       { id: 'b', x: 0, y: 0, w: 6, h: 2 },
     ]);
     expect(at(out, 'a')).toMatchObject({ x: 0, y: 0 });
-    expect(at(out, 'b')).toMatchObject({ x: 0, y: 2 });
+    expect(at(out, 'b')).toMatchObject({ x: 0, y: 0 });
   });
 
-  it('옆으로 나란한 패널은 서로 밀지 않는다', () => {
+  it('일부만 물려도 그대로다', () => {
+    const out = normalizeLayout([
+      { id: 'a', x: 0, y: 0, w: 6, h: 3 },
+      { id: 'b', x: 3, y: 2, w: 6, h: 3 },
+    ]);
+    expect(at(out, 'b')).toMatchObject({ x: 3, y: 2 });
+  });
+
+  it('옆으로 나란한 패널도 그대로다', () => {
     const out = normalizeLayout([
       { id: 'a', x: 0, y: 0, w: 6, h: 2 },
       { id: 'b', x: 6, y: 0, w: 6, h: 2 },
@@ -82,19 +95,25 @@ describe('normalizeLayout — 겹침 해소와 위로 당기기', () => {
     expect(at(out, 'b')).toMatchObject({ x: 6, y: 0 });
   });
 
-  it('위가 비면 끌어올린다(compact) — 빈 행이 남지 않는다', () => {
+  it('위가 비어도 끌어올리지 않는다 — 놓은 자리에 그대로 있다', () => {
     const out = normalizeLayout([{ id: 'a', x: 0, y: 40, w: 4, h: 2 }]);
-    expect(at(out, 'a').y).toBe(0);
+    expect(at(out, 'a').y).toBe(40);
   });
 
-  it('priorityId 는 자기 자리를 지키고 나머지가 비켜 준다', () => {
-    // b 를 a 위(같은 자리)로 끌어다 놓은 순간 — 놓은 쪽이 이긴다.
+  it('한 장을 겹쳐 놓아도 나머지는 한 칸도 안 움직인다', () => {
     const out = normalizeLayout([
-      { id: 'a', x: 0, y: 0, w: 6, h: 2 },
-      { id: 'b', x: 0, y: 0, w: 6, h: 2 },
-    ], 'b');
-    expect(at(out, 'b')).toMatchObject({ x: 0, y: 0 });
-    expect(at(out, 'a')).toMatchObject({ x: 0, y: 2 });
+      { id: 'a', x: 0, y: 0, w: 4, h: 2 },
+      { id: 'b', x: 4, y: 6, w: 4, h: 2 },
+      { id: 'c', x: 4, y: 6, w: 4, h: 2 },   // b 위에 겹쳐 놓았다
+    ]);
+    expect(at(out, 'a')).toMatchObject({ x: 0, y: 0 });
+    expect(at(out, 'b')).toMatchObject({ x: 4, y: 6 });
+    expect(at(out, 'c')).toMatchObject({ x: 4, y: 6 });
+  });
+
+  it('캔버스 밖 값만 안으로 들여놓는다 — 자리가 바뀌는 유일한 이유다', () => {
+    const out = normalizeLayout([{ id: 'a', x: 10, y: 0, w: 8, h: 2 }]);
+    expect(at(out, 'a')).toMatchObject({ x: 10, w: 2 });
   });
 
   it('입력 순서를 그대로 돌려준다 — 저장·비교가 순서로 흔들리지 않는다', () => {
@@ -112,6 +131,45 @@ describe('normalizeLayout — 겹침 해소와 위로 당기기', () => {
     ]);
     expect(out).toHaveLength(1);
     expect(at(out, 'a')).toMatchObject({ x: 0, y: 0 });
+  });
+});
+
+/*
+ * 자동 배치를 없앤 대가로, 겹쳐서 가려진 패널을 되찾는 **한 번의 조작**이 필요해졌다.
+ * 그 조작이 compactLayout 이다 — 툴바의 "겹침·빈 줄 정리"가 이것을 부른다.
+ */
+describe('compactLayout — 사람이 누를 때만 도는 정리', () => {
+  it('빈 줄을 걷어내 위로 당긴다', () => {
+    const out = compactLayout([{ id: 'a', x: 0, y: 40, w: 4, h: 2 }]);
+    expect(at(out, 'a').y).toBe(0);
+  });
+
+  it('겹친 것을 풀어 아래로 내린다 — 가려진 패널이 다시 보인다', () => {
+    const out = compactLayout([
+      { id: 'a', x: 0, y: 0, w: 6, h: 2 },
+      { id: 'b', x: 0, y: 0, w: 6, h: 2 },
+    ]);
+    expect(at(out, 'a')).toMatchObject({ x: 0, y: 0 });
+    expect(at(out, 'b')).toMatchObject({ x: 0, y: 2 });
+  });
+
+  it('나란한 패널은 옆으로 밀지 않는다 — 위로만 당긴다', () => {
+    const out = compactLayout([
+      { id: 'a', x: 0, y: 4, w: 6, h: 2 },
+      { id: 'b', x: 6, y: 4, w: 6, h: 2 },
+    ]);
+    expect(at(out, 'a')).toMatchObject({ x: 0, y: 0 });
+    expect(at(out, 'b')).toMatchObject({ x: 6, y: 0 });
+  });
+
+  it('입력 순서를 그대로 돌려준다 (sameLayout 비교가 순서로 흔들리지 않게)', () => {
+    const out = compactLayout([
+      { id: 'a', x: 0, y: 9, w: 4, h: 1 },
+      { id: 'b', x: 0, y: 3, w: 4, h: 1 },
+    ]);
+    expect(out.map((b) => b.id)).toEqual(['a', 'b']);
+    expect(at(out, 'b').y).toBe(0);   // 위에 있던 b 가 첫 줄로
+    expect(at(out, 'a').y).toBe(1);
   });
 });
 
@@ -150,6 +208,53 @@ describe('resolveLayout — 저장된 레이아웃 + 지금 코드의 패널', (
 
   it('items 가 비면 빈 레이아웃이다', () => {
     expect(resolveLayout([{ id: 'cost', x: 0, y: 0, w: 6, h: 3 }], [])).toEqual([]);
+  });
+
+  /*
+   * 겹침을 허용한 뒤 새로 필요해진 두 계약. 둘 다 "새로 붙는 패널" 에만 적용된다 —
+   * 이미 자리를 가진 패널은 여전히 한 칸도 움직이지 않는다.
+   */
+  it('새 패널이 남의 카드 밑에 정확히 숨지 않는다 (빈 자리로 내려 붙는다)', () => {
+    const out = resolveLayout(
+      // 저장된 cost 가 tokens 의 기본 자리(6열 0행)를 통째로 덮고 있다.
+      [{ id: 'cost', x: 6, y: 0, w: 6, h: 3 }],
+      items,
+    );
+    expect(at(out, 'cost')).toEqual({ x: 6, y: 0, w: 6, h: 3 });   // 저장된 것은 그대로
+    expect(at(out, 'tokens')).toEqual({ x: 6, y: 3, w: 6, h: 3 }); // 새 패널만 아래로
+  });
+
+  it('저장된 배열 순서를 그대로 물려준다 — 그 순서가 겹칠 때의 앞뒤다', () => {
+    const out = resolveLayout(
+      [{ id: 'tokens', x: 6, y: 0, w: 6, h: 3 }, { id: 'cost', x: 0, y: 0, w: 6, h: 3 }],
+      items,
+    );
+    // items 순서(cost, tokens)가 아니라 저장 순서(tokens, cost)를 따른다.
+    expect(out.map((b) => b.id)).toEqual(['tokens', 'cost']);
+  });
+
+  it('저장에 없던 패널은 맨 뒤에 붙는다 — 새 그래프가 남의 아래로 숨지 않게', () => {
+    const out = resolveLayout([{ id: 'tokens', x: 6, y: 0, w: 6, h: 3 }], items);
+    expect(out.map((b) => b.id)).toEqual(['tokens', 'cost']);
+  });
+});
+
+describe('overlappingIds — 몇 장이 가려져 있는지 말할 수 있어야 한다', () => {
+  it('겹친 둘을 모두 센다', () => {
+    const ids = overlappingIds([
+      { id: 'a', x: 0, y: 0, w: 6, h: 2 },
+      { id: 'b', x: 3, y: 1, w: 6, h: 2 },
+      { id: 'c', x: 0, y: 8, w: 6, h: 2 },
+    ]);
+    expect(ids.sort()).toEqual(['a', 'b']);
+  });
+
+  it('맞닿기만 한 것은 겹친 것이 아니다 (경계는 공유해도 된다)', () => {
+    expect(overlappingIds([
+      { id: 'a', x: 0, y: 0, w: 6, h: 2 },
+      { id: 'b', x: 6, y: 0, w: 6, h: 2 },
+      { id: 'c', x: 0, y: 2, w: 6, h: 2 },
+    ])).toEqual([]);
   });
 });
 
@@ -201,12 +306,21 @@ describe('parseLayout — 서버가 준 값을 믿지 않는다', () => {
 });
 
 describe('sameLayout — 값이 같으면 저장하지 않는다', () => {
-  it('순서가 달라도 자리가 같으면 같다고 본다', () => {
-    const a: DashLayout = [{ id: 'a', x: 0, y: 0, w: 6, h: 2 }, { id: 'b', x: 6, y: 0, w: 6, h: 2 }];
-    const b: DashLayout = [{ id: 'b', x: 6, y: 0, w: 6, h: 2 }, { id: 'a', x: 0, y: 0, w: 6, h: 2 }];
-    expect(sameLayout(a, b)).toBe(true);
+  const a: DashLayout = [{ id: 'a', x: 0, y: 0, w: 6, h: 2 }, { id: 'b', x: 6, y: 0, w: 6, h: 2 }];
+
+  it('같은 값·같은 순서면 같다', () => {
+    expect(sameLayout(a, [...a.map((p) => ({ ...p }))])).toBe(true);
     expect(sameLayout(a, [{ id: 'a', x: 1, y: 0, w: 6, h: 2 }, { id: 'b', x: 6, y: 0, w: 6, h: 2 }])).toBe(false);
     expect(sameLayout(a, a.slice(0, 1))).toBe(false);
+  });
+
+  /*
+   * 순서가 뜻을 갖게 된 뒤의 계약. 겹칠 때 배열 뒤가 위에 그려지므로, 순서만 바뀐 변경을 "같다"고
+   * 접으면 사용자가 위로 올린 패널이 저장되지 않고 다음 방문에 다시 뒤로 간다.
+   */
+  it('자리가 같아도 순서가 다르면 다르다 — 겹칠 때 앞뒤가 바뀐 것이다', () => {
+    const swapped: DashLayout = [{ id: 'b', x: 6, y: 0, w: 6, h: 2 }, { id: 'a', x: 0, y: 0, w: 6, h: 2 }];
+    expect(sameLayout(a, swapped)).toBe(false);
   });
 });
 

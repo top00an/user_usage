@@ -99,78 +99,140 @@ function overlaps(a: PanelBox, b: PanelBox): boolean {
 }
 
 /**
- * 겹침 해소 + 위로 당기기(compact).
+ * 서로 겹친 패널의 id — 겹침을 허용한 대가로 필요해진 함수다.
  *
- * 위(y 작은 쪽)부터 차례로 "가장 위의 빈 자리"에 놓는 한 번의 스캔이다. 겹침 해소와 compact 가
- * 따로 도는 두 단계가 아니라 같은 규칙의 결과라, 두 단계가 서로의 결과를 되돌리는 사고
- * (밀어냈더니 다시 끌어올려져 또 겹침)가 구조적으로 생기지 않는다.
- *
- * @param priorityId 드래그로 방금 놓인 패널. 이 패널이 **먼저** 자리를 잡고 나머지가 비켜 준다 —
- *   놓은 자리에 원래 있던 패널이 이기면 사람은 "안 놓아졌다"로 읽는다.
+ * 겹치면 위 카드가 아래를 **완전히 가린다**(카드는 불투명하다). 화면에는 아무 흔적도 남지 않아,
+ * 실수로 겹친 사람은 그것을 "패널이 사라졌다 / 데이터가 없다"로 읽는다. 그래서 화면이 몇 장이
+ * 가려져 있는지 말할 수 있어야 한다(툴바 안내 + "겹침·빈 줄 정리" 버튼으로 복구).
  */
-export function normalizeLayout(layout: DashLayout, priorityId?: string): DashLayout {
-  const uniq: PanelBox[] = [];
+export function overlappingIds(layout: DashLayout): string[] {
+  const out: string[] = [];
+  for (const a of layout) {
+    if (layout.some((b) => b.id !== a.id && overlaps(a, b))) out.push(a.id);
+  }
+  return out;
+}
+
+/**
+ * 이 칸을 놓을 수 있는 **가장 가까운 아래쪽 빈 자리**의 y. 안 겹치면 그 자리 그대로다.
+ *
+ * 새로 붙는 패널에만 쓴다(resolveLayout). 이미 자리를 가진 패널은 절대 이 함수를 지나지 않는다 —
+ * 그러면 "내가 만지지 않은 패널이 움직인다"가 되살아난다.
+ */
+function firstFreeY(box: PanelBox, placed: readonly PanelBox[]): number {
+  let y = box.y;
+  for (;;) {
+    const hit = placed.filter((p) => overlaps({ ...box, y }, p));
+    if (hit.length === 0) return y;
+    const next = Math.min(...hit.map((p) => p.y + p.h));
+    if (next > MAX_ROW) return MAX_ROW;
+    y = next;
+  }
+}
+
+/**
+ * 캔버스에 올릴 수 있는 값으로 다듬는다 — **자리는 손대지 않는다.**
+ *
+ * 하는 일은 둘뿐이다: 같은 id 는 첫 것만 남기고, 각 칸을 캔버스 안으로 클램프한다.
+ * 겹침은 **허용한다.** 겹쳤다고 누군가를 밀어내지 않는다.
+ *
+ * 왜 아무것도 안 미는가. 이 함수는 두 번 자리를 옮기는 규칙을 가졌었고 둘 다 사고였다:
+ *   ① 전부 맨 위로 끌어올리기(compact) — 아래 빈 곳에 놓으면 위로 날아갔다.
+ *   ② 겹친 것만 아래로 밀기 — 한 장을 놓았을 뿐인데 이웃이 내려가고, 크기를 줄여도 그 이웃은
+ *      돌아오지 않아 여러 번 만지는 동안 배치가 계속 흘러내렸다.
+ * 둘의 공통점은 **내가 만지지 않은 패널이 움직인다**는 것이고, 사람은 그것을 하나같이
+ * "혼자 배치된다"로 읽는다. 그래서 지금 규칙은 하나다 — *놓은 그 자리에 그대로 둔다.*
+ *
+ * 겹쳐서 가린 것을 정리하고 싶을 때 쓰는 도구는 compactLayout 이다(툴바 버튼).
+ */
+export function normalizeLayout(layout: DashLayout): DashLayout {
+  const out: PanelBox[] = [];
   const seen = new Set<string>();
   for (const b of layout) {
     if (typeof b?.id !== 'string' || seen.has(b.id)) continue;
     seen.add(b.id);
-    uniq.push(clampBox(b));
+    out.push(clampBox(b));
   }
+  return out;
+}
 
-  const order = uniq
-    .map((b, i) => ({ b, i }))
-    .sort((p, q) => {
-      const pr = (p.b.id === priorityId ? 0 : 1) - (q.b.id === priorityId ? 0 : 1);
-      return pr || p.b.y - q.b.y || p.b.x - q.b.x || p.i - q.i;
-    });
+/**
+ * 겹침을 풀고 빈 줄을 걷어내 위로 당긴다(compact).
+ *
+ * **사람이 버튼을 눌렀을 때만 돈다.** 예전에는 normalizeLayout 이 이 일을 배치가 바뀔 때마다
+ * 자동으로 했고, 그것이 "패널이 혼자 배치된다"의 정체였다. 같은 계산이라도 내가 시켜서 도는
+ * 것과 저절로 도는 것은 다른 기능이다 — 전자는 도구고 후자는 사고다.
+ *
+ * 자유 겹침을 허용한 뒤로 이 함수의 쓸모가 하나 늘었다: 겹쳐서 **가려진 패널을 다시 드러내는**
+ * 유일한 한 번의 조작이다(겹친 것은 아래 빈 자리로 내려간다). 그래서 툴바 이름도 "겹침·빈 줄 정리"다.
+ *
+ * 결과는 다른 변경과 똑같이 되돌릴 수 있어야 한다(호출부가 히스토리에 쌓는다). 한 번의 클릭이
+ * 배치 전체를 바꾸는데 되돌릴 수 없으면, 그건 눌러 보기 무서운 버튼이다.
+ */
+export function compactLayout(layout: DashLayout): DashLayout {
+  const order = layout
+    .map((b, i) => ({ b: clampBox(b), i }))
+    .sort((p, q) => p.b.y - q.b.y || p.b.x - q.b.x || p.i - q.i);
 
   const placed: PanelBox[] = [];
   for (const { b } of order) {
-    let y = 0;
+    let y = 0;   // 여기가 normalizeLayout 과 갈리는 유일한 지점이다 — 무조건 맨 위부터 찾는다.
     for (;;) {
       const probe = { ...b, y };
       const hit = placed.filter((p) => overlaps(probe, p));
       if (hit.length === 0) break;
-      // 한 행씩 세는 대신 부딪힌 것들의 **가장 이른 바닥**으로 건너뛴다. 바닥은 반드시 y 보다
-      // 크므로(겹쳤다는 것이 그 뜻이다) 루프는 끝난다.
       y = Math.min(...hit.map((p) => p.y + p.h));
       if (y > MAX_ROW) { y = MAX_ROW; break; }
     }
     placed.push({ ...b, y });
   }
 
-  // 입력 순서를 그대로 돌려준다 — 저장 값과 비교(sameLayout)나 테스트가 순서로 흔들리지 않는다.
   const byId = new Map(placed.map((p) => [p.id, p]));
-  return uniq.map((b) => byId.get(b.id)).filter((b): b is PanelBox => b !== undefined);
+  return layout.map((b) => byId.get(b.id)).filter((b): b is PanelBox => b !== undefined);
 }
 
 /**
  * 저장된 레이아웃 + 지금 코드가 가진 패널 → 실제 배치.
  *
  * - `saved` 에만 있는 id 는 **버린다**(패널이 코드에서 사라진 경우).
- * - `items` 에만 있는 id 는 `defaultBox` 로 붙인다 — **여기가 이 기능의 가장 위험한 자리다.**
- *   새로 넣은 패널이 저장된 레이아웃에 없다고 안 그려지면, 사람은 그것을 "데이터가 없다"로
- *   읽고 수집기·API 를 뒤진다. 화면에서 사라지는 것보다는 자리가 어긋나는 편이 낫다.
+ * - `items` 에만 있는 id 는 `defaultBox` 자리에 붙이되, 그 자리가 이미 찬 경우 **바로 아래 빈
+ *   자리**로 내려 붙인다. 겹침을 허용한 뒤로 이게 필요해졌다: 새 그래프가 남의 카드 밑에 정확히
+ *   숨으면 사람은 "추가가 안 됐다"로 읽고 빌더를 다시 누른다(그리고 유령 패널이 쌓인다).
+ *   **이미 자리를 가진 패널은 이 규칙을 지나지 않는다** — 새로 붙는 것만 비켜 앉는다.
+ *
+ * ── 배열 순서 = 그리는 순서(겹칠 때 앞뒤) ────────────────────────────────
+ *
+ * 반환 순서는 `saved` 의 순서를 따르고, 저장에 없던 패널은 뒤에 붙는다. 뒤에 있는 것이 위에
+ * 그려진다(CanvasGrid 가 이 순서로 렌더한다). 그래서 "방금 올린 패널이 위" 라는 사실이 **서버에
+ * 저장되는 배열 순서 그 자체**로 남는다 — z 필드를 새로 만들지 않았고, 서버 검증도 그대로다.
  */
 export function resolveLayout(
   saved: DashLayout | null,
   items: readonly LayoutItem[],
-  priorityId?: string,
 ): DashLayout {
-  const savedById = new Map<string, PanelBox>();
-  for (const b of saved ?? []) {
-    if (typeof b?.id === 'string' && b.id !== '' && !savedById.has(b.id)) savedById.set(b.id, b);
+  const wanted = new Map<string, LayoutItem>();
+  for (const it of items) {
+    if (it?.id && !wanted.has(it.id)) wanted.set(it.id, it);
   }
 
-  const merged: DashLayout = [];
-  const seen = new Set<string>();
-  for (const it of items) {
-    if (!it?.id || seen.has(it.id)) continue;
-    seen.add(it.id);
-    const s = savedById.get(it.id);
-    merged.push(clampBox(s ? { ...s, id: it.id } : { id: it.id, ...it.defaultBox }));
+  const out: DashLayout = [];
+  const done = new Set<string>();
+
+  // ① 저장된 순서대로 — 이 순서가 겹칠 때의 앞뒤다.
+  for (const b of saved ?? []) {
+    if (typeof b?.id !== 'string' || !wanted.has(b.id) || done.has(b.id)) continue;
+    done.add(b.id);
+    out.push(clampBox({ ...b, id: b.id }));
   }
-  return normalizeLayout(merged, priorityId);
+
+  // ② 저장에 없던 패널(코드에 새로 들어온 것) — 빈 자리를 찾아 뒤에 붙인다.
+  for (const it of items) {
+    if (!it?.id || done.has(it.id)) continue;
+    done.add(it.id);
+    const box = clampBox({ id: it.id, ...it.defaultBox });
+    out.push({ ...box, y: clampInt(firstFreeY(box, out), 0, MAX_ROW) });
+  }
+  return out;
 }
 
 function parseBox(v: unknown): PanelBox | null {
@@ -207,14 +269,19 @@ export function parseLayout(raw: unknown): DashLayout | null {
   return out;
 }
 
-/** 자리가 같은가(순서는 무시). 같으면 저장하지 않는다 — 불필요한 PUT 을 막는 자리다. */
+/**
+ * 배치가 같은가. 같으면 저장하지 않는다 — 불필요한 PUT 을 막는 자리다.
+ *
+ * **순서도 본다.** 예전에는 순서를 무시했다(같은 자리면 같다). 겹침을 허용한 뒤로 배열 순서가
+ * 곧 앞뒤(그리는 순서)라는 뜻을 갖게 되었으므로, 순서만 바뀐 변경을 "같다"고 접으면 사용자가
+ * 위로 올린 패널이 저장되지 않고 다음 방문에 다시 뒤로 간다.
+ */
 export function sameLayout(a: DashLayout | null, b: DashLayout | null): boolean {
   if (a === b) return true;
   if (!a || !b || a.length !== b.length) return false;
-  const byId = new Map(b.map((p) => [p.id, p]));
-  return a.every((p) => {
-    const q = byId.get(p.id);
-    return !!q && q.x === p.x && q.y === p.y && q.w === p.w && q.h === p.h;
+  return a.every((p, i) => {
+    const q = b[i];
+    return !!q && q.id === p.id && q.x === p.x && q.y === p.y && q.w === p.w && q.h === p.h;
   });
 }
 

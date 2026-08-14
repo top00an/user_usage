@@ -25,6 +25,15 @@
  * 저장을 못 하는 것이 대시보드를 못 보는 이유가 되어서는 안 된다.
  * 다만 401 은 삼키지 않는다: lib/api.ts 의 request 가 전역 401 훅(셸의 로그인 복귀)을 이미
  * 부르고 있고, 여기서 skipUnauthorizedHook 을 켜면 그 복구 경로가 조용히 끊긴다.
+ *
+ * ── 되돌리기는 여기 없다 ──────────────────────────────────────────────────
+ *
+ * 사람이 되돌리고 싶어 하는 것은 "배치"가 아니라 **방금 한 일**이다. 그 일에는 배치 변경도,
+ * 기본 배치로 되돌리기도, 커스텀 패널 삭제도 섞여 있고 순서가 있다. 이 훅은 그중 배치만
+ * 알므로 히스토리를 여기 두면 **삭제한 그래프는 영영 못 돌아온다.** 그래서 한 벌의 히스토리는
+ * 세 경로를 모두 가진 GrafanaDash 가 들고, 이 훅은 값을 받아 적용·저장만 한다.
+ * 되돌린 값도 save()/reset() 을 그대로 타므로 서버까지 간다 — 화면에서만 되돌아가면 다음
+ * 방문에 옛 배치가 되살아나고, 사람은 되돌리기가 고장 났다고 읽는다.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { request } from '@/lib/api';
@@ -133,6 +142,7 @@ export function useDashLayout(): DashLayoutPrefs {
     body: { layout: next },
   }).then(() => { serverRef.current = next; }), []);
 
+  /** 되돌리기도 이 함수를 그대로 탄다 — 되돌린 값 역시 저장돼야 한다(위 머리말). */
   const save = useCallback((next: DashLayout) => {
     setLayout(next);                       // 로컬이 먼저다(위 머리말).
     if (sameLayout(next, serverRef.current)) {

@@ -161,8 +161,6 @@ b  { font-weight: 650; }
   flex: none;
   background: linear-gradient(135deg, var(--accent-from), var(--accent-to));
 }
-.spacer { flex: 1; }
-
 .main { padding: 20px; }
 .view { max-width: 1180px; margin: 0 auto; }
 
@@ -180,6 +178,27 @@ b  { font-weight: 650; }
 
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .between { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+
+/*
+ * 남는 가로 공간을 먹는 스페이서. **한 줄이 전부다** — 전에는 같은 일을 하는 것이 넷이었다
+ * (`.spacer` 죽음 · `.gdash-top .sp` 죽음 · `.dc-bar .sp` 살아있음 · GrafanaDash 인라인).
+ * 죽은 둘은 지웠다. `.dc-bar .sp` 는 이 전역이 덮으므로 그쪽 선언도 걷었다.
+ * (인라인 하나를 걷는 일은 comp-admin 오너 몫이다 — 걷어도 이 전역이 받는다.)
+ */
+.sp { flex: 1; }
+
+/*
+ * 액션 줄 — 오른쪽에 8px 간격으로 붙는 버튼 무리. 선언 세 벌이 **글자 하나까지 같았다**
+ * (`.uform-actions` 정본 · `.builder-actions` · `.modal .actions`). 셋을 여기로 모으고 각자
+ * 다른 것(위 여백 12 / 4 / 20px)만 자기 자리에 남긴다 — 그 숫자는 위에 뭐가 오는지에 달렸다.
+ */
+.uform-actions,
+.builder-actions,
+.modal .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 
 .mt     { margin-top: var(--gap); }
 .mt-sm  { margin-top: 6px; }
@@ -266,13 +285,25 @@ button {
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--fg);
-  padding: 7px 14px;
+  /*
+   * 7px → 8px. 한 줄에 선 input·select·button 이 **같은 높이**여야 한다(실측 크로미움 1280px:
+   * button 37.7 / select 36.0 / input 39.7px — 세 개가 다 달랐다). 아래 컨트롤 블록이 잡은
+   * 39.7px 에 버튼도 맞춘다: 1.55×14 + 세로패딩 16 + 테두리 2 = 39.7.
+   * 자기 padding 을 가진 버튼(.tab·.segbtn·.sm·.side-item·.login-submit…)은 여기 영향이 없다.
+   */
+  padding: 8px 14px;
   transition: background .12s ease, border-color .12s ease, opacity .12s ease;
 }
 button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled { opacity: .45; cursor: default; }
+/*
+ * select·textarea 가 빠져 있었다. 그러면 그 둘만 **브라우저 기본 링**을 받아 다크에서 흰 링,
+ * 라이트에서 검은 링이 나온다 — 같은 줄의 input 은 accent 링인데 옆 select 만 색이 다르다.
+ */
 button:focus-visible,
 input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
 a:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--accent);
@@ -289,13 +320,69 @@ button.ghost  { background: transparent; }
 button.danger { background: transparent; border-color: var(--err-bd); color: var(--err); }
 button.sm     { padding: 4px 10px; font-size: .8rem; }
 
-input, select, textarea {
+/*
+ * 컨트롤 높이는 **한 값으로 못 박는다** — 39.7px.
+ *
+ * 실측(크로미움 1280px, 다크·라이트 동일)에서 셋이 다 달랐다: input 39.7 / select 36.0 /
+ * button 37.7px. 한 필터 줄에 나란히 서는 것들이라 이 3.7px 차이가 "폼이 안 맞는다"의 정체다.
+ *
+ * ⚠ line-height 만으로는 안 된다. `font: inherit` 은 line-height 까지 상속하므로 input 은 이미
+ *   1.55(=21.7px)를 받고 있었고, select 는 **크로미움이 UA 단계에서 line-height 를 normal 로
+ *   덮어쓴다** — 여기에 1.55 를 적어도 computed 값은 normal 이고 높이는 36.00px 그대로였다
+ *   (실측으로 확인했다). 그래서 select 를 끌어올리는 실제 레버는 min-height 다.
+ *
+ * min-height 는 세 컨트롤이 공유하는 **바닥**이다(box-sizing:border-box 라 패딩·테두리 포함):
+ *   1.55em(21.7) + 세로패딩 16 + 테두리 2 = 39.7px.
+ * input·textarea 는 이미 그 높이라 값이 변하지 않고, select 만 36.0 → 39.7 로 올라온다.
+ * line-height 를 명시로 남기는 이유는 따로다 — body 상속에 기대면 상위 폰트 규칙이 바뀌는 날
+ * 컨트롤 높이가 **말없이 따라 움직인다**. 이 줄이 그 연결을 끊는다.
+ *
+ * ⚠ 체크박스·라디오는 제외한다. 그것들은 글자가 없는 **정사각 과녁**이라 39.7px 바닥을 주면
+ *   `.uform-roles` 의 역할 카드(라디오 + 제목 + 설명 2행 그리드)가 통째로 늘어난다.
+ *   제외를 `:where()` 안에 두는 것은 특정도 때문이다 — `:not()` 을 그냥 쓰면 이 규칙이 0,1,1 로
+ *   올라가 `.login-field > input`·`.uform-field input` 과 동급이 되고, 그때부터 순서 싸움이 된다.
+ *   `:where()` 는 특정도가 0 이라 이 규칙은 지금처럼 타입 선택자(0,0,1)로 남는다.
+ */
+input:where(:not([type="checkbox"], [type="radio"])), select, textarea {
   font: inherit;
+  line-height: 1.55;
+  min-height: calc(1.55em + 18px);
   color: var(--fg);
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
+}
+
+/*
+ * ── 폼 라벨 한 벌 ────────────────────────────────────────────────────────
+ *
+ * 라벨이 **다섯 가지 크기**로 갈려 있었다(실측 크로미움 1280px):
+ *   .pf-bar label        11.76px / 400 / muted
+ *   .builder-row > span  11.76px / 400 / muted
+ *   .row > label.help    10.92px / 400 / faint
+ *   .login-field > label 10.92px / 550 / muted
+ *   .uform-field > label 10.36px / 600 / muted   ← 이것을 정본으로 삼는다
+ *
+ * 정본을 가장 작은 쪽으로 고른 이유: 라벨은 **읽는 대상이 아니라 찾는 대상**이다. 사람이 읽는
+ * 것은 그 아래 값이고, 라벨은 눈이 스캔하다 걸리기만 하면 된다. 그래서 크기로 존재를 주장하는
+ * 대신 굵기로 갈린다 — 캡션(`.help` = .78rem / 400 / --fg-faint)과 **크기가 아니라 굵기**로
+ * 구분되는 것이 핵심이다. 라벨은 600/muted, 캡션은 400/faint: 같은 줄에 나란히 놓아도 어느
+ * 쪽이 지시고 어느 쪽이 부연인지 형태만으로 읽힌다(색만으로 나누면 색각 이상에서 사라진다).
+ *
+ * `.row > label` 이 목록에 있는 이유: 관리 탭이 그 자리에 `<label className="help">` 를 쓰고
+ * 있었다 — 라벨을 캡션 스타일로 그린 자리다. comp-admin 오너가 그 `.help` 를 뗄 때 받아 줄
+ * 규칙이 **먼저 있어야** 그 변경이 착지한다. `.row > label`(0,1,1)은 `.help`(0,1,0)를 이기므로
+ * 두 오너의 순서가 어긋나도 화면은 어느 쪽이든 이 값이 된다.
+ */
+.pf-bar label,
+.builder-row > span:first-child,
+.row > label,
+.login-field > label,
+.uform-field > label {
+  font-size: .74rem;
+  font-weight: 600;
+  color: var(--fg-muted);
 }
 
 /* ── 탭 ──────────────────────────────────────────────────────────────── */
@@ -479,12 +566,7 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
   padding: 20px;
 }
 .modal-body { margin-top: 12px; }
-.modal .actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 20px;
-}
+.modal .actions { margin-top: 20px; }
 
 /* 모션을 원치 않는 사용자에게는 전환을 걷어낸다 — 상태 변화는 그대로 보인다. */
 @media (prefers-reduced-motion: reduce) {
@@ -530,7 +612,7 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
  */
 .brand-mark {
   width: 26px; height: 26px; flex: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);   /* 값이 같다(8px) — 리터럴만 없앤다 */
   background:
     url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Cg%20fill='%23fff'%20fill-opacity='.92'%3E%3Crect%20x='2.25'%20y='9'%20width='3'%20height='4.75'%20rx='1.5'/%3E%3Crect%20x='6.5'%20y='6'%20width='3'%20height='7.75'%20rx='1.5'/%3E%3Crect%20x='10.75'%20y='2.5'%20width='3'%20height='11.25'%20rx='1.5'/%3E%3C/g%3E%3C/svg%3E")
       center / 15px 15px no-repeat,
@@ -765,10 +847,21 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
 
 /* ── Grafana 메인 대시보드 (GrafanaDash) ────────────────────────────────── */
 .gdash-top { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
-.gdash-top .sp { flex:1; }
 .gsect { margin-top:16px; }
-.gsect-h { display:flex; align-items:center; gap:6px; color:var(--fg-faint); font-size:.8rem; font-weight:600; letter-spacing:.03em; padding:4px 2px; }
-.gsect-h .caret { color:var(--fg-faint); }
+/*
+ * 섹션 머리글은 button 이다(접기 토글). 버튼처럼 보이면 안 되지만 **눌리는 곳**이라는 것은
+ * 보여야 하므로, 테두리·배경은 지우고 커서와 호버 색만 남긴다.
+ */
+.gsect-h {
+  display:flex; align-items:center; gap:6px;
+  color:var(--fg-faint); font-size:.8rem; font-weight:600; letter-spacing:.03em;
+  padding:4px 2px;
+  border:0; background:none; cursor:pointer; text-align:left;
+}
+.gsect-h:hover { color:var(--fg-muted); }
+.gsect-h .caret { color:inherit; transition:transform .15s ease; }
+/* 접히면 캐럿이 오른쪽을 본다 — 상태를 글자 없이 말하는 유일한 표시다. */
+.gsect-h .caret.closed { transform:rotate(-90deg); }
 /* 그리드 열 */
 .grid.g6 { grid-template-columns:repeat(6,1fr); }
 .grid.g-cost { grid-template-columns:5fr 7fr; }
@@ -832,14 +925,32 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
 /* cursor:grab 은 여기서도 뺐다 — 이유는 위 .gpanel-head 주석과 같다. */
 .gstat { min-height:92px; container-type:inline-size; display:flex; flex-direction:column; justify-content:center; gap:2px; color:#fff; border-radius:var(--radius-sm); padding:12px 14px; }
 .gstat-gauge { justify-content:flex-start; padding:8px 8px 4px; }
-.gstat-k { font-size:.8rem; opacity:.95; font-weight:600; }
+/*
+ * ── 히어로 타일의 흰 글씨는 **읽혀야 한다** ─────────────────────────────────
+ *
+ * opacity 를 걷었다(`.gstat-k` .95 · `.gstat-s` .85). 이 타일의 글씨는 흰색이고 배경은 색이라,
+ * opacity 로 만든 위계는 그대로 **대비 손실**이다 — 아래 t-* 의 밝은 스톱을 어둡게 잡아 색으로
+ * 위계를 만들었으므로 opacity 로 다시 흐릴 이유가 없다. 위계는 굵기(600 대 400)와 크기가 진다.
+ *
+ * 작은 글자 기준선은 4.5:1 이고, 그라디언트의 **밝은 스톱**이 최악의 자리다.
+ *   전(opacity 반영): t-orange 2.97/2.67 · t-teal 3.11/2.80 · t-purple 4.14/3.65 ← 셋 다 미달
+ *   후: opacity 가 없으므로 k·s 가 같은 순수 #fff 다 — 값은 아래 t-* 주석 하나로 족하다.
+ */
+.gstat-k { font-size:.8rem; font-weight:600; }
 /* 값 폰트는 타일 폭에 맞춰 축소 — 긴 금액($2,759.00)이 박스를 넘지 않게(cqi = 타일 폭 기준). */
 .gstat-v { font-size:clamp(1.1rem, 16cqi, 1.9rem); font-weight:800; letter-spacing:-.02em; line-height:1.05; white-space:nowrap; }
-.gstat-s { font-size:.72rem; opacity:.85; }
-.t-teal { background:linear-gradient(120deg,#2e9e8f,#1f7a6e); }
-.t-blue { background:linear-gradient(120deg,#3b5bdb,#2f43a8); }
-.t-orange { background:linear-gradient(120deg,#e0742f,#b85718); }
-.t-purple { background:linear-gradient(120deg,#8f5fd6,#6b3fb0); }
+.gstat-s { font-size:.72rem; }
+/*
+ * 타일 색 — 밝은 스톱을 낮춰 흰 글씨가 4.5:1 을 넘게 한다. 값은 지어낸 것이 아니라 **같은 역할의
+ * 옛 블록**(`.stat-tile.tone-*`)이 쓰던 것이다. 그쪽은 처음부터 통과하고 있었고, 새 타일이 색만
+ * 화사하게 바꾸면서 대비를 잃었다 — 같은 화면의 두 세대가 다른 답을 들고 있던 자리다.
+ * t-blue 는 이미 통과하므로(5.67 / 8.44) 손대지 않는다.
+ * 괄호 안은 #fff 대비(밝은 스톱 / 어두운 스톱) — 실측 계산값이다.
+ */
+.t-teal { background:linear-gradient(120deg,#0f766e,#115e59); }   /* 5.47 / 7.58 (전 3.28 / 5.16) */
+.t-blue { background:linear-gradient(120deg,#3b5bdb,#2f43a8); }   /* 5.67 / 8.44 — 그대로 */
+.t-orange { background:linear-gradient(120deg,#b45309,#92400e); } /* 5.02 / 7.09 (전 3.13 / 4.76) */
+.t-purple { background:linear-gradient(120deg,#7e22ce,#6b21a8); } /* 6.98 / 8.72 (전 4.40 / 7.09) */
 /* 컬러바 테이블 */
 .gtable { width:100%; border-collapse:collapse; font-size:.8rem; }
 .gtable th { text-align:left; color:var(--fg-muted); font-weight:500; padding:4px 6px; border-bottom:1px solid var(--border); }
@@ -914,12 +1025,40 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
   transition: none;
 }
 
-/* 놓일 자리. 패널 위에 겹쳐 보여도 되도록 옅게 — 어디에 앉는지만 말하면 된다. */
+/*
+ * 놓일 자리. **끌고 있는 패널보다 위**다(.dragging 은 3) — 아래 있으면 크기를 줄일 때 패널에
+ * 완전히 가려 얼마나 줄어드는지 볼 수 없다. 대신 옅게 깔아 아래 내용을 가리지 않는다.
+ */
 .dc-cell.ghost {
-  z-index: 2;
+  z-index: 4;
   pointer-events: none;
+  overflow: visible;   /* 좁게 줄일 때 숫자 배지가 잘리지 않게 */
   border: 1px dashed color-mix(in srgb, var(--accent) 70%, transparent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/*
+ * 리사이즈 미리보기는 **채색된 패널 위에 겹쳐 그려진다**(줄일 때). 이동용과 같은 옅은 점선으로
+ * 두면 카드 색에 묻혀 "안 보인다"가 되므로, 여기서만 실선 2px + 안쪽 그림자로 못 박는다.
+ */
+.dc-cell.ghost.resize {
+  border: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 65%, transparent);
+}
+
+/* 지금 크기·자리를 숫자로. 점선만으로는 "몇 칸"인지 눈으로 세야 한다. */
+.dc-ghost-size {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--bg);
+  background: color-mix(in srgb, var(--accent) 88%, transparent);
 }
 
 /*
@@ -950,18 +1089,40 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
   .dashcanvas.editing .dc-handle { opacity: .65; }
 }
 
-/* 편집 툴바(저장 상태·초기화). 캔버스 위 한 줄. */
+/*
+ * 편집 툴바(저장 상태·정리·되돌리기). 캔버스 위 한 줄.
+ *
+ * 위쪽 여백은 장식이 아니다 — 바로 위가 플랫폼 롤업 표라, 붙여 두면 표의 마지막 줄과 툴바가
+ * 한 덩어리로 읽혀 "배치 편집"이 그 표에 딸린 버튼처럼 보인다. 이 버튼이 지배하는 것은 아래
+ * 캔버스이므로, 위와는 떨어지고 아래와는 가까워야 한다.
+ */
 .dc-bar {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   min-height: 30px;
+  margin-top: 18px;
   margin-bottom: 10px;
   font-size: .78rem;
   color: var(--fg-muted);
 }
-.dc-bar .sp { flex: 1; }
+/*
+ * 툴바 버튼의 크기는 **의도한 것이어야 한다.**
+ *
+ * 위 `.dc-bar { font-size:.78rem }`(툴바 안내 문구용)과 전역 `button { font: inherit }` 이 만나
+ * 이 줄의 버튼만 10.92px / 32.9px 였다 — 앱에서 가장 작은 버튼인데 그렇게 정한 사람이 없다
+ * (`button.sm` 은 11.2px / 27.4px 다). 툴바 버튼은 작아야 맞지만, 그 작음은 `.sm` 과 같은 값으로
+ * 못 박아 두어야 다음에 툴바 문구 크기를 건드리는 사람이 버튼 크기를 모르고 바꾸지 않는다.
+ */
+.dc-bar button { font-size: .8rem; padding: 4px 10px; }
+/* 겹쳐 가려진 패널이 있다는 사실 — 경고지 오류는 아니다(사용자가 일부러 겹칠 수도 있다). */
+.dc-warn {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
 
 /*
  * 좁은 화면에서는 12칸이 손가락보다 작다 — 한 열로 쌓고 드래그 affordance 를 걷는다.
@@ -986,12 +1147,18 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
 /* ── 차트 빌더 · 커스텀 패널 ─────────────────────────────────────────────── */
 .builder { display: flex; flex-direction: column; gap: 12px; }
 .builder-row { display: grid; grid-template-columns: 52px 1fr; align-items: center; gap: 10px; }
-.builder-row > span:first-child { color: var(--fg-muted); font-size: .84rem; }
+/* 첫 span 이 라벨 자리다(둘째는 `.seg-group`). 색·크기는 「폼 라벨 한 벌」이 정한다. */
 .seg-group { display: flex; flex-wrap: wrap; gap: 6px; }
 .segbtn { padding: 5px 11px; font-size: .82rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--fg-muted); }
 .segbtn.on { border-color: var(--accent); color: var(--fg); background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); font-weight: 600; }
-.builder-input { padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); font: inherit; }
-.builder-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+/*
+ * `.builder-input` 규칙은 지웠다. 전역 `input, select, textarea` 를 근거 없이 되돌리던 클래스다 —
+ * 배경을 --surface-2 → --surface 로 바꾸고(다크에서 --surface 는 --bg 와 거의 같아 칸 경계가
+ * 옅어진다) 세로 패딩을 8px → 7px 로 1px 줄여 **이 클래스가 붙은 select 만 34.0px**, 옆의 전역
+ * select 는 36.0px 이 됐다. 주석도 없었다. 지우면 세 자리 모두 전역 컨트롤 규칙(39.7px)을 받는다.
+ * ⚠ JSX 에서 클래스명을 떼는 일은 comp-filters 오너 몫이다. 순서가 어긋나도 전역이 받으므로 안전하다.
+ */
+.builder-actions { margin-top: 4px; }
 .panel-x { border: none; background: transparent; color: var(--fg-faint); padding: 2px 6px; font-size: .8rem; }
 .panel-x:hover { color: var(--err); border: none; }
 
@@ -1294,8 +1461,44 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
   flex-wrap: wrap;
   margin-bottom: var(--gap);
 }
-.pf-bar label { color: var(--fg-muted); font-size: .84rem; }
+/* `.pf-bar label` 의 색·크기는 위 「폼 라벨 한 벌」이 정한다(11.76px/400 → .74rem/600). */
 .pf-bar select { min-width: 120px; }
+
+/*
+ * ── 좁은 화면에서 두 필터 줄의 **구조**를 같게 ──────────────────────────────
+ *
+ * 실측 390px: 플랫폼 줄 66.9px, 사용자 줄 77.8px. 둘은 같은 것(라벨 + 셀렉트 + 꼬리말)인데
+ * 꼬리말이 한쪽은 배지(`PlatformScope`), 한쪽은 문장(`UserFilter` 의 `.help`)이라 **접히는 줄
+ * 수가 달라** 높이가 들쭉날쭉했다. 나란히 놓인 두 줄이 다른 높이면 같은 종류로 안 읽힌다.
+ *
+ * 꼬리말을 **항상 자기 줄**로 내린다. 그러면 두 줄 모두 [라벨 + 셀렉트] / [꼬리말] 로 같아지고,
+ * 꼬리말 길이와 무관하게 구조가 고정된다(문구가 바뀌어도 다시 어긋나지 않는다 — 이것이 폭에
+ * 기대는 wrap 보다 나은 이유다).
+ *
+ * ⚠ 줄을 내리는 수단이 `flex-basis:100%` 가 아니라 grid 인 이유. flex 에서 줄바꿈을 강제하려면
+ *   그 아이템의 main size 를 100% 로 만들어야 하는데, 그러면 배지가 **화면 폭을 가로지르는
+ *   알약**이 된다(`.badge` 는 테두리·배경·999px 반경을 가진 상자다). max-width:fit-content 로
+ *   되돌릴 수도 없다 — flex 의 줄바꿈 판단은 min/max 로 조인 **뒤의** 크기를 보므로 줄이 다시
+ *   안 내려간다. grid 에서는 `grid-column:1/-1` 로 줄만 차지하고 `justify-self:start` 로 배지가
+ *   제 폭을 지킨다. 두 꼬리말(문장·배지)에 같은 규칙 한 벌을 쓸 수 있는 쪽은 이것뿐이다.
+ *
+ * 두 줄 사이 간격은 본문 간격(--gap 16px)보다 좁힌다. 필터 둘은 **한 묶음**이고, 아래 본문과
+ * 벌어지는 것보다 서로 붙는 쪽이 그 사실을 말한다. 앞 형제를 고를 방법은 `:has()` 뿐이다
+ * (음수 margin 으로 흉내내면 다음 사람이 왜 -8px 인지 알 수 없다).
+ *
+ * ⚠ 이 720px 은 **이미 있는 중단점을 재사용한 것**이고(6번째를 만들지 않으려고), 캔버스 쪽
+ *   `@media (max-width:720px)` 가 `lib/dashLayout.ts` 의 STACK_MAX_W 와 묶여 있는 것과 달리
+ *   여기는 그 상수와 아무 관계가 없다. 저쪽 상수가 바뀌어도 이 블록은 따라갈 이유가 없다.
+ */
+@media (max-width: 720px) {
+  .pf-bar { display: grid; grid-template-columns: auto minmax(0, 1fr); }
+  .pf-bar > .help,
+  .pf-bar > .badge {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+  .pf-bar:has(+ .pf-bar) { margin-bottom: 8px; }
+}
 
 .pf-cards {
   display: grid;
@@ -1480,12 +1683,11 @@ tbody th[scope="row"] { font-weight: 500; color: var(--fg); }
 .login-form { margin-top: 22px; }
 .login-field { display: grid; gap: 6px; }
 .login-field + .login-field { margin-top: 14px; }
-.login-field > label {
-  font-size: .78rem;
-  font-weight: 550;
-  color: var(--fg-muted);
-  letter-spacing: .005em;
-}
+/*
+ * 라벨 크기·굵기·색은 「폼 라벨 한 벌」이 정한다(10.92px/550 → .74rem/600).
+ * letter-spacing 도 걷었다 — 로그인만 자기 값을 갖는 근거가 없었고(주석도 없었다), 남겨 두면
+ * "라벨은 한 벌"이라는 말이 반만 참이 된다.
+ */
 /*
  * 입력칸은 카드보다 **어둡게**(다크) · **회색으로**(라이트) 들어간다. 둘 다 --bg 를 섞으면
  * 테마 한 벌로 같은 "파인" 인상이 나온다 — 카드와 같은 밝기면 칸이 어디까지인지 안 보인다.
@@ -1574,4 +1776,111 @@ tbody th[scope="row"] { font-weight: 500; color: var(--fg); }
 @media (max-width: 420px) {
   .login-wrap { padding: 16px; }
   .login-card { padding: 26px 20px 24px; border-radius: 18px; }
+}
+
+/* ── 사용자 추가 폼(관리) ────────────────────────────────────────────────────
+ *
+ * 계정 생성은 **되돌리기가 비싼 조작**이다(지우면 세션·인제스트 키까지 함께 거둬진다).
+ * 그래서 표 위에 끼운 한 줄이 아니라, 규칙과 확인 입력을 가진 자기 영역으로 그린다.
+ * 입력 스타일은 로그인 화면(.login-field)의 규칙을 따르되 관리 화면 밀도에 맞게 줄인다.
+ * ──────────────────────────────────────────────────────────────────────── */
+.uform {
+  padding: 14px 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.uform-legend {
+  margin: 0 0 10px;
+  font-size: .82rem;
+  font-weight: 700;
+  letter-spacing: .01em;
+}
+/*
+ * 두 열까지만 — 좁아지면 한 열로 접힌다(라벨과 입력은 언제나 세로로 붙어 있다).
+ * max-width 가 열 수의 상한이다: 넓은 화면에서 네 열로 퍼지면 아이디·팀·비밀번호·확인이 한 줄에
+ * 늘어서 **짝(비밀번호/확인)이 눈으로 묶이지 않는다.**
+ */
+.uform-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px 14px;
+  max-width: 720px;
+}
+.uform-field { display: grid; gap: 4px; align-content: start; }
+/* `.uform-field > label` 이 라벨 **정본**이다 — 선언은 「폼 라벨 한 벌」로 올렸다. */
+.uform-field .req { color: var(--err); }
+.uform-field .opt { font-weight: 400; color: var(--fg-faint); }
+.uform-field input {
+  width: 100%;
+  min-width: 0;
+}
+.uform-field input[aria-invalid="true"] { border-color: var(--err); }
+/*
+ * 힌트와 오류가 같은 자리를 쓴다 — 번갈아 나타나도 폼 높이가 흔들리지 않게 최소 높이를 준다.
+ *
+ * 크기는 .7rem(=9.8px, **앱에서 가장 작은 글자**였다) → .78rem 로 올렸다. 이 자리에 오는 문구는
+ * "이미 있는 아이디입니다" 같은 **조작을 막는 이유**다. 그것이 화면에서 가장 안 읽히는 글자인 것은
+ * 앞뒤가 바뀐 것이고, 캡션(`.help` = .78rem)과 같은 역할이라 같은 기준선을 쓴다.
+ * min-height 는 한 줄 높이를 따라 올린다: 1.5 × .78rem = 1.17rem(=16.38px). 이 값이 뒤처지면
+ * 힌트↔오류가 바뀔 때 폼이 한 줄만큼 튀고, 사람은 그 움직임을 "뭔가 더 생겼다"로 읽는다.
+ */
+.uform-hint, .uform-err {
+  margin: 0;
+  min-height: 1.17rem;
+  font-size: .78rem;
+  line-height: 1.5;
+}
+.uform-hint { color: var(--fg-faint); }
+.uform-err { color: var(--err); }
+.uform-strength.s1 { color: var(--err); }
+.uform-strength.s2 { color: var(--warn); }
+.uform-strength.s3 { color: var(--ok); }
+/* 비밀번호 + 보기 토글이 한 줄. 토글은 줄어들지도, 글자가 접히지도 않는다("보/기"가 됐다). */
+.uform-pw { display: flex; gap: 6px; align-items: center; }
+.uform-pw input { flex: 1 1 auto; min-width: 0; }
+.uform-pw > button { flex: 0 0 auto; white-space: nowrap; }
+
+/*
+ * 역할 — 라디오 두 장. 권한이 무엇을 뜻하는지 그 자리에서 읽혀야 하므로 select 가 아니다.
+ * 카드 전체가 라벨이라 클릭 과녁이 크고, 선택된 쪽만 테두리로 말한다.
+ */
+.uform-roles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+}
+.uform-roles > legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: .74rem;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+.uform-roles > label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.uform-roles > label:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.uform-roles > label.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.uform-roles input { grid-row: 1 / span 2; align-self: center; margin: 0; }
+.uform-roles .t { font-size: .8rem; font-weight: 600; }
+.uform-roles .d { grid-column: 2; font-size: .7rem; color: var(--fg-faint); }
+
+.uform-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
 }

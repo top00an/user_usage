@@ -183,7 +183,8 @@ export function barOption(
     yAxis: { type: 'category', data: sorted.map((r) => r.name), axisLine: { lineStyle: { color: AXISLINE } }, axisLabel: { color: MUTED, fontSize: 11 }, axisTick: { show: false } },
     series: [{
       type: 'bar', data: sorted.map((r) => r.value),
-      itemStyle: { color: '#5794f2', borderRadius: [0, 3, 3, 0] },
+      // 팔레트 첫 색의 사본(#5794f2)이 여기 박혀 있었다 — 팔레트를 바꾸면 이 막대만 옛 색으로 남는다.
+      itemStyle: { color: PALETTE[0]!, borderRadius: [0, 3, 3, 0] },
       label: { show: true, position: 'right', color: INK, fontSize: 11, formatter: (p: { value: number }) => fmt(p.value) },
       barMaxWidth: 18,
     }],
