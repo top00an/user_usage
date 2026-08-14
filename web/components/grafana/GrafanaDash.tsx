@@ -2,7 +2,18 @@
 
 /*
  * Grafana 스타일 메인 대시보드. 실데이터(getSummary + getSeats)를 ECharts 패널로 그린다.
- * 섹션별 그리드, 패널은 드래그로 재배치(DragGrid). 사진의 레이아웃을 따른다.
+ * 패널은 **하나의 자유 캔버스**(CanvasGrid)에 얹히고, 편집 모드에서 어디로든 옮기고 칸 단위로
+ * 크기를 바꾼다. 배치는 유저별로 서버에 저장된다(lib/layoutPrefs.ts).
+ *
+ * ── 섹션 제목이 사라진 이유 ───────────────────────────────────────────────
+ *
+ * 예전에는 7개 섹션(`실시간 현황`·`비용 · 토큰` …)이 각자 그리드를 들고, 패널은 **자기 섹션
+ * 안에서만** 순서가 바뀌었다. 자유 캔버스에서는 패널이 섹션 밖으로 나간다 — 그러면 남은 제목은
+ * 아래 있는 것을 설명하지 못하는 **거짓말**이 된다("비용 · 토큰" 아래에 도구 도넛이 앉는다).
+ * 그래서 제목은 지우고, 그 제목들이 하던 일은 둘로 나눠 흡수했다:
+ *   ① 무엇이 있는 화면인가 → 캔버스 위 한 줄(CanvasBar)이 말한다.
+ *   ② 이 패널이 무엇인가   → 패널 제목이 이미 말한다(스탯 타일은 라벨 자체가 제목이다).
+ * 패널 id 는 **저장된 레이아웃의 키**라 하나도 바꾸지 않았다.
  *
  * LOC·편집 수락/거부는 **백엔드가 실제로 수집한다**(실측: 추가 26,328줄 · 수락 279 · 거부 1).
  * 다만 아직 보고가 없는 팀이나 구버전 수집기에서는 그 축이 통째로 비어 온다. 그때 0 을 그리면
@@ -21,7 +32,8 @@ import PlatformSummary from '@/components/platform/PlatformSummary';
 import { usePlatformFilter } from '@/lib/platformFilter';
 import { COST_DISCLAIMER, COST_LABEL, COST_WHY } from '@/lib/costLabels';
 import EChart from '@/components/charts/EChart';
-import DragGrid, { resetLayout, type GridItem } from './DragGrid';
+import CanvasGrid, { type CanvasItem } from './CanvasGrid';
+import { useDashLayout, type SaveStatus } from '@/lib/layoutPrefs';
 import { areaOption, gaugeOption, donutOption, barOption, hasValues, hasSeriesValues, short, fmtInt } from './options';
 import ChartBuilder from './ChartBuilder';
 import CustomPanelView from './CustomPanelView';
@@ -39,6 +51,26 @@ interface Data {
 }
 
 const usd = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/*
+ * ── 기본 배치(defaultBox) ────────────────────────────────────────────────
+ *
+ * 저장된 레이아웃이 없을 때의 첫 화면이다. **지금까지 보던 화면과 같아 보이게** 옛 섹션의 열
+ * 수를 그대로 12칸으로 옮겼다: `.g6`→2칸 · `.g-cost`(5fr 7fr)→5칸+7칸 · `.g3`→4칸 ·
+ * `.g2`→6칸 · `.g1`→12칸.
+ *
+ * y 는 **순서 힌트**다. normalizeLayout 이 위로 당기므로(compact) 절대값이 아니라 블록 사이의
+ * 상대 순서만 맞으면 된다 — 그래서 블록마다 10씩 벌려 둔다. 사이에 패널을 하나 끼워 넣을 때
+ * 아래 전부를 다시 세지 않아도 된다.
+ *
+ * 높이는 ROW_H=56 기준이고, 안의 차트/표가 **잘리지 않을 만큼** 넉넉히 준다 —
+ * `.dc-cell` 은 overflow:hidden 이라 모자라면 조용히 잘린다(빈 칸보다 나쁜 쪽이다).
+ */
+const ROW = {
+  live: 0, cost: 10, dev: 20, cache: 30, tools: 40, rates: 50, top: 60,
+  /** 커스텀 패널은 **맨 아래**에 붙인다 — 새로 만든 패널이 남의 배치를 밀어내지 않게. */
+  custom: 900,
+} as const;
 
 /*
  * ── 상단 액션 슬롯(#head-actions) ────────────────────────────────────────
@@ -64,11 +96,22 @@ function subscribeHeadSlot(onChange: () => void): () => void {
   return () => mo.disconnect();
 }
 
-/* ── 패널 껍데기(드래그 핸들 = 제목바) ── */
+/*
+ * ── 패널 껍데기 ──────────────────────────────────────────────────────────
+ *
+ * 옛 제목바에 있던 `⋮⋮` 그립을 걷었다. 자유 캔버스에서는 **카드 전체가** 드래그 대상이고
+ * 그것도 편집 모드에서만이다 — 그립은 "여기만 잡힌다"고 말하고, 읽기 전용일 때는 아예 거짓이다.
+ * 잡을 수 있다는 신호는 편집 모드의 격자·호버 링·리사이즈 핸들이 준다(globals.css 의 .dashcanvas).
+ *
+ * ⚠ **본문은 넘치면 스크롤한다.** 캔버스의 칸은 높이가 정해져 있고 `.dc-cell`·`.gpanel-card` 는
+ * overflow:hidden 이라, 그냥 두면 표의 아래 몇 줄이 **말없이 잘린다**. 그 규칙은 여기가 아니라
+ * `globals.css` 의 `.gpanel-card` 에 있다 — 앞으로 생길 패널과 커스텀 패널이 자동으로 같은
+ * 규율을 타야 하기 때문이다(근거는 그 자리에 적혀 있다).
+ */
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="gpanel-card">
-      <div className="gpanel-head"><span className="grip" aria-hidden="true">⋮⋮</span> {title}</div>
+      <div className="gpanel-head">{title}</div>
       <div className="gpanel-body">{children}</div>
     </div>
   );
@@ -130,21 +173,48 @@ function GaugeTile({ tone, label, value, color }: { tone: string; label: string;
     </div>
   );
 }
+
 /*
- * 섹션 껍데기.
+ * ── 편집 툴바 ────────────────────────────────────────────────────────────
  *
- * ⚠ 이 컴포넌트는 **모듈 스코프에 있어야 한다.** GrafanaDash 의 렌더 함수 안에서 선언하면 매
- * 렌더마다 새 타입이 되고, React 는 같은 자리를 다른 컴포넌트로 보아 섹션 서브트리를 통째로
- * 언마운트·리마운트한다. 그러면 안에 있는 DragGrid 가 상태(드래그 순서·하이라이트)를 잃고
- * DOM 노드가 새로 생긴다 — 화면에서는 패널이 깜빡이고 애니메이션이 끊긴다
- * (react-hooks/static-components · test/grafana-layout.test.tsx 가 노드 동일성으로 잰다).
+ * 평소에는 읽기 전용이다. 대시보드는 **보러 오는 화면**이라 상시 드래그 가능하면 스크롤하다
+ * 패널을 잘못 옮기고, 그걸 되돌리는 방법을 사람은 모른다. "편집"을 눌러야 열린다.
+ *
+ * 저장 상태는 항상 렌더한다(편집을 끈 뒤에 PUT 이 실패할 수 있다 — 그때 알릴 자리가 없어지면
+ * 사람은 저장된 줄 안다). role="status" 라 화면을 못 봐도 결과가 들린다.
+ *
+ * ⚠ 이 컴포넌트는 **모듈 스코프에 있어야 한다.** 렌더 함수 안에서 선언하면 매 렌더마다 새
+ * 타입이 되고 React 가 서브트리를 리마운트한다(react-hooks/static-components).
  */
-function Sect({ title, gid, cls, items }: { title: string; gid: string; cls?: string; items: GridItem[] }) {
+const STATUS_TEXT: Record<SaveStatus, string> = {
+  idle: '',
+  saving: '저장 중…',
+  saved: '배치 저장됨',
+  // 저장이 안 된 것과 화면이 죽은 것은 다르다 — 무엇이 사실인지 그대로 말한다.
+  error: '저장 실패 — 이 배치는 이 화면에만 남습니다',
+};
+
+function CanvasBar({
+  editing, onToggle, onReset, status,
+}: { editing: boolean; onToggle: () => void; onReset: () => void; status: SaveStatus }) {
   return (
-    <section className="gsect">
-      <div className="gsect-h"><span className="caret">▾</span> {title}</div>
-      <DragGrid gridId={gid} className={cls} items={items} />
-    </section>
+    <div className="dc-bar">
+      <span className="help">
+        {editing
+          ? '패널을 끌어 옮기고 우하단 모서리로 크기를 바꿉니다 · 키보드는 화살표(이동) · Shift+화살표(크기)'
+          : '실시간 현황 · 비용 · 토큰 · 개발 지표 · 도구 분석이 한 캔버스에 있습니다'}
+      </span>
+      <span className="sp" />
+      <span className={status === 'error' ? 'txt-err' : undefined} role="status" aria-live="polite">
+        {STATUS_TEXT[status]}
+      </span>
+      {editing && (
+        <button className="ghost" type="button" onClick={onReset}>기본 배치로 되돌리기</button>
+      )}
+      <button className="ghost" type="button" aria-pressed={editing} onClick={onToggle}>
+        {editing ? '편집 완료' : '배치 편집'}
+      </button>
+    </div>
   );
 }
 
@@ -179,6 +249,13 @@ export default function GrafanaDash() {
    */
   const [user, setUser] = useState('');
   const platform = usePlatformFilter();
+
+  /*
+   * 배치 — 서버가 주인이다. `ready` 전에는 캔버스를 그리지 않는다: 저장된 배치가 도착하기 전에
+   * 기본 배치를 한 프레임 그리면 패널이 혼자 움직인 것처럼 보인다(lib/layoutPrefs.ts 머리말).
+   */
+  const { layout, save, reset, status, ready: layoutReady } = useDashLayout();
+  const [editing, setEditing] = useState(false);
 
   /* 명단은 **필터를 절대 싣지 않는** 조회로 받는다 — 걸린 응답으로 만들면 갈아탈 수 없다. */
   const rosterLoad = useCallback(
@@ -235,7 +312,8 @@ export default function GrafanaDash() {
     if (p) { setPrefill(p); setBuilderOpen(true); }
   }, []);
 
-  if (state.status === 'loading') return <Loading />;
+  // 저장된 배치를 아직 못 읽었으면 기다린다 — 기본 배치를 한 프레임 그렸다가 튀지 않게.
+  if (state.status === 'loading' || !layoutReady) return <Loading />;
   if (state.status === 'error') return <ErrorState what="대시보드를 불러오지 못했습니다." error={state.error} onRetry={reload} />;
 
   const { summary, seats, dev, platforms } = state.data;
@@ -260,19 +338,26 @@ export default function GrafanaDash() {
 
   const cost = seats?.summary?.totalUsd ?? null;
 
-  // ── 섹션별 아이템 ──
+  // ── 패널 ──
   /*
+   * 옛 섹션 단위로 묶어 둔다. 캔버스는 하나지만 **기본 배치**는 여전히 이 묶음 순서대로 위에서
+   * 아래로 쌓이므로, 여기서 순서를 읽을 수 있어야 첫 화면을 눈으로 예측할 수 있다.
+   *
+   * `label` 은 스크린리더가 읽는 이름이다(CanvasGrid 가 "<이름> · 3열 2행 · 4칸 폭 · 2행" 으로
+   * 읽어 준다). 안 주면 `live-cost` 같은 id 를 소리로 듣게 된다.
+   *
    * 라벨은 한국어로 통일한다. 비용 타일만 한글(COST_LABEL)이고 나머지가 영어면, 한 행 안에서
    * 두 언어가 섞여 사람은 그 차이를 **의미의 차이**로 읽는다("한글 타일만 우리가 계산한 값인가?").
-   * 여기서 바꾸는 것은 표시 문자열뿐이다 — 패널 id(DragGrid 레이아웃 키)는 건드리지 않는다.
+   * 여기서 바꾸는 것은 표시 문자열뿐이다 — 패널 id(저장된 레이아웃의 키)는 건드리지 않는다.
    */
-  const live: GridItem[] = [
-    { id: 'live-sessions', node: <StatTile tone="t-teal" k="활성 세션" v={fmtInt(t.sessions)} s={`사용자 ${t.users} · 머신 ${t.machines}`} /> },
+  const live: CanvasItem[] = [
+    { id: 'live-sessions', label: '활성 세션', defaultBox: { x: 0, y: ROW.live, w: 2, h: 2 },
+      node: <StatTile tone="t-teal" k="활성 세션" v={fmtInt(t.sessions)} s={`사용자 ${t.users} · 머신 ${t.machines}`} /> },
     /*
      * 'Total Cost' 였던 자리. 그 이름은 청구액으로 읽힌다 — 우리 값은 환산 추정치다(lib/costLabels.ts).
      * 부제의 '90-day' 도 사실이 아니었다: 이 타일은 getSeats(3650) 의 합계라 전체 기간이다.
      */
-    { id: 'live-cost', node: (
+    { id: 'live-cost', label: COST_LABEL, defaultBox: { x: 2, y: ROW.live, w: 2, h: 2 }, node: (
       <StatTile
         tone="t-blue"
         k={COST_LABEL}
@@ -281,15 +366,21 @@ export default function GrafanaDash() {
         title={`${COST_DISCLAIMER}. ${COST_WHY}`}
       />
     ) },
-    { id: 'live-tokens', node: <StatTile tone="t-orange" k="전체 토큰" v={short(tokensTotal)} s={`캐시읽기 ${short(t.cacheRead)}`} /> },
-    { id: 'live-output', node: <StatTile tone="t-purple" k="출력 토큰" v={short(t.output)} s={`입력 ${short(t.input)}`} /> },
-    { id: 'live-hit', node: <GaugeTile tone="t-teal" label="캐시 적중률" value={cacheHit} color="#73bf69" /> },
-    { id: 'live-share', node: <GaugeTile tone="t-blue" label="캐시읽기 비중" value={cacheReadShare} color="#5794f2" /> },
+    { id: 'live-tokens', label: '전체 토큰', defaultBox: { x: 4, y: ROW.live, w: 2, h: 2 },
+      node: <StatTile tone="t-orange" k="전체 토큰" v={short(tokensTotal)} s={`캐시읽기 ${short(t.cacheRead)}`} /> },
+    { id: 'live-output', label: '출력 토큰', defaultBox: { x: 6, y: ROW.live, w: 2, h: 2 },
+      node: <StatTile tone="t-purple" k="출력 토큰" v={short(t.output)} s={`입력 ${short(t.input)}`} /> },
+    { id: 'live-hit', label: '캐시 적중률', defaultBox: { x: 8, y: ROW.live, w: 2, h: 2 },
+      node: <GaugeTile tone="t-teal" label="캐시 적중률" value={cacheHit} color="#73bf69" /> },
+    { id: 'live-share', label: '캐시읽기 비중', defaultBox: { x: 10, y: ROW.live, w: 2, h: 2 },
+      node: <GaugeTile tone="t-blue" label="캐시읽기 비중" value={cacheReadShare} color="#5794f2" /> },
   ];
 
-  const cost2: GridItem[] = [
-    { id: 'cost-models', node: <Panel title="모델별 토큰 분포"><BarTable rows={modelRows} unit="토큰" fmt={short} /></Panel> },
-    { id: 'cost-rate', node: <Panel title="일별 토큰 추이"><EChart option={areaOption(x, [{ name: '토큰', color: '#73bf69', data: days.map((d) => d.input + d.output + d.cacheRead + d.cacheCreate) }], short)} height={180} /></Panel> },
+  const cost2: CanvasItem[] = [
+    { id: 'cost-models', label: '모델별 토큰 분포', defaultBox: { x: 0, y: ROW.cost, w: 5, h: 6 },
+      node: <Panel title="모델별 토큰 분포"><BarTable rows={modelRows} unit="토큰" fmt={short} /></Panel> },
+    { id: 'cost-rate', label: '일별 토큰 추이', defaultBox: { x: 5, y: ROW.cost, w: 7, h: 6 },
+      node: <Panel title="일별 토큰 추이"><EChart option={areaOption(x, [{ name: '토큰', color: '#73bf69', data: days.map((d) => d.input + d.output + d.cacheRead + d.cacheCreate) }], short)} height={180} /></Panel> },
   ];
 
   /*
@@ -305,15 +396,15 @@ export default function GrafanaDash() {
     { name: '추가', color: '#73bf69', data: devDays.map((d) => d.linesAdded) },
     { name: '삭제', color: '#e0523e', data: devDays.map((d) => d.linesRemoved) },
   ];
-  const dev2: GridItem[] = [
-    { id: 'dev-loc', node: (
+  const dev2: CanvasItem[] = [
+    { id: 'dev-loc', label: '일별 LOC', defaultBox: { x: 0, y: ROW.dev, w: 4, h: 4 }, node: (
       <Panel title="일별 LOC (추가 · 삭제)">
         {hasSeriesValues(locSeries)
           ? <EChart option={areaOption(devX, locSeries, fmtInt)} height={180} />
           : <NoData height={180} why="이 기간에 보고된 LOC 변경이 없습니다. 구버전 수집기이거나 아직 보고가 없는 팀입니다 — 0 줄을 썼다는 뜻이 아닙니다." />}
       </Panel>
     ) },
-    { id: 'dev-edit', node: (
+    { id: 'dev-edit', label: '코드 편집 결정', defaultBox: { x: 4, y: ROW.dev, w: 4, h: 4 }, node: (
       <DonutPanel
         title="코드 편집 결정 (수락 · 거부)"
         rows={[
@@ -323,40 +414,57 @@ export default function GrafanaDash() {
         why="이 기간에 보고된 편집 수락·거부가 없습니다. 구버전 수집기이거나 아직 보고가 없는 팀입니다 — 0 건이라는 뜻이 아닙니다."
       />
     ) },
-    { id: 'dev-io', node: <Panel title="토큰 입출력 추이"><EChart option={areaOption(x, [{ name: '입력', color: '#5794f2', data: days.map((d) => d.input) }, { name: '출력', color: '#73bf69', data: days.map((d) => d.output) }], short)} height={180} /></Panel> },
+    { id: 'dev-io', label: '토큰 입출력 추이', defaultBox: { x: 8, y: ROW.dev, w: 4, h: 4 },
+      node: <Panel title="토큰 입출력 추이"><EChart option={areaOption(x, [{ name: '입력', color: '#5794f2', data: days.map((d) => d.input) }, { name: '출력', color: '#73bf69', data: days.map((d) => d.output) }], short)} height={180} /></Panel> },
   ];
 
-  const cache: GridItem[] = [
-    { id: 'cache-usage', node: <Panel title="일별 캐시 읽기 · 생성"><EChart option={areaOption(x, [{ name: '캐시읽기', color: '#73bf69', data: days.map((d) => d.cacheRead) }, { name: '캐시생성', color: '#5794f2', data: days.map((d) => d.cacheCreate) }], short)} height={200} /></Panel> },
+  const cache: CanvasItem[] = [
+    { id: 'cache-usage', label: '일별 캐시 읽기 · 생성', defaultBox: { x: 0, y: ROW.cache, w: 12, h: 5 },
+      node: <Panel title="일별 캐시 읽기 · 생성"><EChart option={areaOption(x, [{ name: '캐시읽기', color: '#73bf69', data: days.map((d) => d.cacheRead) }, { name: '캐시생성', color: '#5794f2', data: days.map((d) => d.cacheCreate) }], short)} height={200} /></Panel> },
   ];
 
   /* 세 도넛도 편집 결정과 같은 경로다 — 비면 빈 회색 링 대신 무엇이 없는지 말한다. */
   const notReported = (what: string) =>
     `이 기간에 보고된 ${what} 기록이 없습니다. 구버전 수집기이거나 이 축을 기록하지 않는 플랫폼입니다.`;
-  const tools: GridItem[] = [
-    { id: 'tool-usage', node: <DonutPanel title="도구 사용" rows={donutRows(summary.top?.tool).slice(0, 10)} why={notReported('내장 도구')} /> },
-    { id: 'tool-agents', node: <DonutPanel title="서브에이전트" rows={donutRows(summary.top?.agent)} why={notReported('서브에이전트')} /> },
-    { id: 'tool-skills', node: <DonutPanel title="스킬" rows={donutRows((summary.top?.skill ?? []).map((k) => ({ key: k.key.replace(/^superpowers:/, ''), count: k.count })))} why={notReported('스킬')} /> },
+  const tools: CanvasItem[] = [
+    { id: 'tool-usage', label: '도구 사용', defaultBox: { x: 0, y: ROW.tools, w: 4, h: 4 },
+      node: <DonutPanel title="도구 사용" rows={donutRows(summary.top?.tool).slice(0, 10)} why={notReported('내장 도구')} /> },
+    { id: 'tool-agents', label: '서브에이전트', defaultBox: { x: 4, y: ROW.tools, w: 4, h: 4 },
+      node: <DonutPanel title="서브에이전트" rows={donutRows(summary.top?.agent)} why={notReported('서브에이전트')} /> },
+    { id: 'tool-skills', label: '스킬', defaultBox: { x: 8, y: ROW.tools, w: 4, h: 4 },
+      node: <DonutPanel title="스킬" rows={donutRows((summary.top?.skill ?? []).map((k) => ({ key: k.key.replace(/^superpowers:/, ''), count: k.count })))} why={notReported('스킬')} /> },
   ];
 
-  const rates: GridItem[] = [
-    { id: 'rate-sessions', node: <Panel title="일별 세션 수"><EChart option={areaOption(x, [{ name: '세션', color: '#73bf69', data: days.map((d) => d.sessions) }], fmtInt)} height={170} /></Panel> },
-    { id: 'rate-bash', node: <Panel title="개발 명령"><BarTable rows={(summary.top?.bash ?? []).slice(0, 10).map((k) => ({ label: k.key, value: k.count }))} unit="횟수" fmt={fmtInt} /></Panel> },
-    { id: 'rate-mcp', node: <Panel title="MCP 호출"><BarTable rows={(summary.top?.mcp ?? []).slice(0, 10).map((k) => ({ label: k.key.replace(/^mcp__/, '').slice(0, 24), value: k.count }))} unit="횟수" fmt={fmtInt} /></Panel> },
+  const rates: CanvasItem[] = [
+    { id: 'rate-sessions', label: '일별 세션 수', defaultBox: { x: 0, y: ROW.rates, w: 4, h: 6 },
+      node: <Panel title="일별 세션 수"><EChart option={areaOption(x, [{ name: '세션', color: '#73bf69', data: days.map((d) => d.sessions) }], fmtInt)} height={170} /></Panel> },
+    { id: 'rate-bash', label: '개발 명령', defaultBox: { x: 4, y: ROW.rates, w: 4, h: 6 },
+      node: <Panel title="개발 명령"><BarTable rows={(summary.top?.bash ?? []).slice(0, 10).map((k) => ({ label: k.key, value: k.count }))} unit="횟수" fmt={fmtInt} /></Panel> },
+    { id: 'rate-mcp', label: 'MCP 호출', defaultBox: { x: 8, y: ROW.rates, w: 4, h: 6 },
+      node: <Panel title="MCP 호출"><BarTable rows={(summary.top?.mcp ?? []).slice(0, 10).map((k) => ({ label: k.key.replace(/^mcp__/, '').slice(0, 24), value: k.count }))} unit="횟수" fmt={fmtInt} /></Panel> },
   ];
 
   const topTools = (summary.top?.tool ?? []).slice(0, 10).map((k) => ({ name: k.key, value: k.count }));
-  const top: GridItem[] = [
-    { id: 'top-tools', node: <Panel title="상위 도구 (호출 수)"><EChart option={barOption(topTools, fmtInt)} height={Math.max(120, topTools.length * 30)} /></Panel> },
+  const top: CanvasItem[] = [
+    { id: 'top-tools', label: '상위 도구', defaultBox: { x: 0, y: ROW.top, w: 12, h: 7 },
+      node: <Panel title="상위 도구 (호출 수)"><EChart option={barOption(topTools, fmtInt)} height={Math.max(120, topTools.length * 30)} /></Panel> },
   ];
 
-  // '내 그래프' — 사용자가 만든 커스텀 패널. 각 패널에 삭제 버튼.
-  const customItems: GridItem[] = customPanels.map((p) => ({
+  /*
+   * '내 그래프' — 사용자가 만든 커스텀 패널. 각 패널에 삭제 버튼(편집 모드에서도 눌린다:
+   * CanvasGrid 는 button 에서 시작한 포인터를 드래그로 뺏지 않는다).
+   *
+   * 기본 자리는 **맨 아래**다(ROW.custom). 위에 두면 새로 만든 패널이 이미 저장된 배치의
+   * 패널들과 자리를 다투고, 사람은 그래프 하나를 추가했을 뿐인데 화면 전체가 흔들리는 것을 본다.
+   */
+  const customItems: CanvasItem[] = customPanels.map((p, i) => ({
     id: p.id,
+    label: p.title,
+    defaultBox: { x: (i % 2) * 6, y: ROW.custom + Math.floor(i / 2), w: 6, h: 5 },
     node: (
       <div className="gpanel-card">
         <div className="gpanel-head">
-          <span className="grip" aria-hidden="true">⋮⋮</span> {p.title}
+          {p.title}
           <span style={{ flex: 1 }} />
           <button className="panel-x" type="button" title="삭제" onClick={() => removePanel(p.id)}>✕</button>
         </div>
@@ -365,46 +473,44 @@ export default function GrafanaDash() {
     ),
   }));
 
+  const items: CanvasItem[] = [...live, ...cost2, ...dev2, ...cache, ...tools, ...rates, ...top, ...customItems];
+
   return (
     <div className="gdash">
       {headSlot && createPortal(
-        <>
-          <button className="primary" type="button" onClick={() => { setPrefill(undefined); setBuilderOpen(true); }}>＋ 그래프 추가</button>
-          <button className="ghost" type="button" onClick={resetLayout}>⤢ 레이아웃 초기화</button>
-        </>,
+        <button className="primary" type="button" onClick={() => { setPrefill(undefined); setBuilderOpen(true); }}>＋ 그래프 추가</button>,
         headSlot,
       )}
 
       {/*
-        플랫폼 선택 — 이 탭의 패널들(summary·seats·dev)은 서버가 platform 축으로 거르지 못한다.
-        그래서 applies={false} 로 두고 화면이 그 사실을 말한다. 선택은 탭을 넘어 유지되므로
-        여기서 고른 값이 '사용 관측'의 조회에 그대로 실린다.
-      */}
-      {/*
-        * applies 를 true 로 바꿨다(2026-08-13). 예전에는 false 로 두고 "이 패널은 플랫폼 축으로
-        * 걸러지지 않는다"고 말했는데, 서버는 summary·seats·dev 모두 platform 을 받는다 —
-        * 화면이 안 싣고 있었을 뿐이다. 이제 싣는다.
+        * 플랫폼 선택 — applies 를 true 로 바꿨다(2026-08-13). 예전에는 false 로 두고 "이 패널은
+        * 플랫폼 축으로 걸러지지 않는다"고 말했는데, 서버는 summary·seats·dev 모두 platform 을
+        * 받는다 — 화면이 안 싣고 있었을 뿐이다. 이제 싣는다.
         */}
       <PlatformFilter rows={platformRows} applies what="아래 패널은 이 플랫폼만 집계합니다" />
       <UserFilter users={roster} value={user} onChange={setUser} />
 
+      {/*
+        * 플랫폼 롤업은 캔버스 **밖**에 남긴다. 옛 화면에서도 이것만은 드래그 대상이 아니었고
+        * (그리드 밖이라 패널 id 가 없다), 조회 범위를 고르는 필터 바로 아래에서 "지금 무엇을
+        * 보고 있는가"를 말하는 머리글이다. 캔버스에 넣으면 그 맥락이 아무 데로나 끌려간다.
+        */}
       <section className="gsect">
         <div className="gsect-h"><span className="caret">▾</span> 플랫폼</div>
         <PlatformSummary rows={platformRows} />
       </section>
 
-      {customItems.length > 0 && (
-        <Sect title="내 그래프" gid="custom" cls="g2" items={customItems} />
-      )}
-
-      {/* 섹션 제목도 한국어로 통일한다 — '플랫폼'·'내 그래프'가 이미 한국어라 영어 제목만 섞여 있었다. */}
-      <Sect title="실시간 현황" gid="live" cls="g6" items={live} />
-      <Sect title="비용 · 토큰" gid="cost" cls="g-cost" items={cost2} />
-      <Sect title="개발 지표" gid="dev" cls="g3" items={dev2} />
-      <Sect title="캐시 토큰 사용" gid="cache" cls="g1" items={cache} />
-      <Sect title="도구 · 에이전트 분석" gid="tools" cls="g3" items={tools} />
-      <Sect title="추이 · 상세" gid="rates" cls="g3" items={rates} />
-      <Sect title="상위 도구" gid="top" cls="g1" items={top} />
+      <CanvasBar
+        editing={editing}
+        onToggle={() => setEditing((v) => !v)}
+        onReset={reset}
+        status={status}
+      />
+      {/*
+        * 자리를 바꾸면 save 가 로컬 배치를 즉시 갈아끼우고 PUT 은 디바운스로 뒤따른다.
+        * CanvasGrid 는 controlled 라 여기서 layout 을 갱신하지 않으면 놓는 순간 제자리로 튄다.
+        */}
+      <CanvasGrid items={items} layout={layout} editable={editing} onLayoutChange={save} />
 
       {builderOpen && (
         <ChartBuilder

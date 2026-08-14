@@ -1,0 +1,281 @@
+'use client';
+
+/*
+ * 12열 자유 캔버스. 패널을 섹션 경계 없이 어디로든 끌어 옮기고 칸 단위로 크기를 바꾼다.
+ *
+ * ── 이 컴포넌트는 수학을 하지 않는다 ─────────────────────────────────────
+ *
+ * 겹침 해소·경계 클램프·픽셀→칸 스냅은 전부 lib/dashLayout.ts 의 순수 함수가 진다. 여기 남는
+ * 것은 DOM 과 포인터뿐이다. 그래서 "한 칸 어긋남" 류의 버그는 브라우저 없이 잡히고, 이 파일은
+ * 이벤트 배선만 읽으면 된다.
+ *
+ * ── 자리의 주인은 부모다(controlled) ─────────────────────────────────────
+ *
+ * 배치는 `layout` prop + `items` 에서 **렌더 중 파생**한다. 여기에 사본 state 를 두면 저장된
+ * 레이아웃이 늦게 도착했을 때 화면이 기본 배치를 한 프레임 그린 뒤 튀고, 사람은 그 튐을 데이터
+ * 변화로 읽는다(옛 DragGrid 가 순서를 useState 로 들었다가 겪은 사고와 같다 — 그 파일은 이제
+ * 없고, 교훈만 여기로 옮겨 왔다). 드래그 중의
+ * 픽셀 오프셋만 임시 state 이고, 그것도 놓는 순간 사라진다.
+ *
+ * ── onLayoutChange 는 놓는 순간 1회 ──────────────────────────────────────
+ *
+ * 드래그 매 프레임마다 부르면 저장 훅이 프레임마다 PUT 을 쏜다. 그래서 이동 중에는 ghost 로만
+ * 보여 주고, 커밋은 pointerup 한 번이다(값이 실제로 달라졌을 때만).
+ */
+import { useEffect, useRef, useState } from 'react';
+import {
+  GRID_COLS, ROW_H, GRID_GAP, STACK_MAX_W,
+  type DashLayout, type PanelBox, type BoxSpec,
+  resolveLayout, normalizeLayout, moveBox, resizeBox, pxToCells, sameLayout, describeBox,
+} from '@/lib/dashLayout';
+
+export interface CanvasItem {
+  id: string;
+  node: React.ReactNode;
+  /** 저장된 레이아웃에 이 id 가 없을 때 쓸 기본 자리. */
+  defaultBox: BoxSpec;
+  /**
+   * 접근성 안내(aria-label · aria-live)에 쓸 사람이 읽는 이름. 계약 §3 에 대한 **선택적** 추가라
+   * 안 주면 id 를 읽는다 — 다만 "live-cost" 를 소리로 듣는 사람에게는 제목이 훨씬 낫다.
+   */
+  label?: string;
+}
+
+type Mode = 'move' | 'resize';
+
+/** 드래그 한 판의 불변 정보 + 마지막 목표 자리. 렌더에 안 쓰이므로 ref 에 산다. */
+interface Session {
+  id: string;
+  mode: Mode;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  base: PanelBox;          // 잡은 순간의 자리(여기에 델타를 더한다 — 누적 오차가 없다)
+  snapshot: DashLayout;    // 잡은 순간의 전체 배치
+  containerW: number;      // 잡은 순간의 캔버스 폭(드래그 중에는 안 바뀐다)
+  ghost: PanelBox;         // 지금 놓으면 갈 자리
+  moved: boolean;          // 임계값을 넘어 실제 드래그가 됐는가
+  target: HTMLElement | null;
+}
+
+/** 화면에 그려야 하는 드래그 상태만. */
+interface Preview { id: string; mode: Mode; dxPx: number; dyPx: number; ghost: PanelBox; active: boolean }
+
+/*
+ * 이만큼 움직이기 전에는 드래그로 치지 않는다. 편집 모드에서도 패널 안의 버튼은 눌려야 하는데,
+ * 손이 1~2px 흔들렸다고 클릭이 드래그로 먹히면 "버튼이 안 눌린다"가 된다.
+ */
+const DRAG_SLOP = 4;
+
+const ARROW: Record<string, { x: number; y: number }> = {
+  ArrowLeft: { x: -1, y: 0 },
+  ArrowRight: { x: 1, y: 0 },
+  ArrowUp: { x: 0, y: -1 },
+  ArrowDown: { x: 0, y: 1 },
+};
+
+/** 패널 안의 조작 요소에서 시작한 포인터는 드래그가 아니라 그 요소의 것이다. */
+function isInteractive(t: EventTarget | null): boolean {
+  if (!(t instanceof Element)) return false;
+  return t.closest('button, a, input, select, textarea, [role="button"], [role="tab"]') !== null;
+}
+
+/*
+ * 크기가 바뀐 뒤 안의 차트에 새 폭을 알린다.
+ *
+ * EChart 는 자기 컨테이너를 ResizeObserver 로 보고 있어서 대개는 스스로 따라오지만, 캔버스가
+ * 커밋되는 순간과 캔버스 내부의 다른 렌더(패널이 교체되는 경우)가 겹치면 옛 폭으로 그려진
+ * 채 남는다. 옛 DragGrid 가 재배치 뒤에 window resize 를 쏘던 것과 **같은 이유·같은 방법**
+ * 이다 — 관측되는 증상은 "패널만 넓어지고 그래프는 잘려 있다"이고, 눈으로만 잡히는 종류다.
+ * 커밋 다음 프레임에 보내야 새 크기가 반영된 뒤 재측정된다.
+ */
+function bumpCharts(): void {
+  requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+}
+
+function cellStyle(b: PanelBox): React.CSSProperties {
+  // CSS Grid 의 열·행은 1부터 센다.
+  return { gridColumn: `${b.x + 1} / span ${b.w}`, gridRow: `${b.y + 1} / span ${b.h}` };
+}
+
+export default function CanvasGrid({
+  items, layout, editable, onLayoutChange,
+}: {
+  items: CanvasItem[];
+  /** null = 저장된 것이 없다 → 전부 defaultBox 로 배치 */
+  layout: DashLayout | null;
+  /** 편집 모드에서만 드래그·리사이즈 핸들이 붙는다 */
+  editable: boolean;
+  /** 칸으로 스냅된 결과만 올라온다. 드래그 중에는 부르지 않는다(커밋 시 1회). */
+  onLayoutChange: (next: DashLayout) => void;
+}): React.JSX.Element {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const sessionRef = useRef<Session | null>(null);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [announce, setAnnounce] = useState('');
+
+  // 배치는 렌더 중 파생 — 첫 프레임부터 옳다.
+  const boxes = resolveLayout(layout, items);
+  const byId = new Map(boxes.map((b) => [b.id, b]));
+
+  /*
+   * window 리스너는 드래그가 시작될 때만 붙는다. 그 콜백이 최신 onLayoutChange 를 보게 ref 로
+   * 넘긴다 — prop 을 deps 에 넣으면 부모가 매 렌더 새 함수를 주는 흔한 경우에 드래그 도중
+   * 리스너가 떼였다 붙어 한 판이 끊긴다.
+   */
+  const commitRef = useRef(onLayoutChange);
+  useEffect(() => { commitRef.current = onLayoutChange; });
+
+  const dragging = preview !== null;
+  useEffect(() => {
+    if (!dragging) return;
+
+    const onMove = (ev: PointerEvent) => {
+      const s = sessionRef.current;
+      if (!s) return;
+      const dxPx = ev.clientX - s.startX;
+      const dyPx = ev.clientY - s.startY;
+      if (!s.moved && Math.hypot(dxPx, dyPx) < DRAG_SLOP) return;
+      s.moved = true;
+      const { dx, dy } = pxToCells(dxPx, dyPx, s.containerW);
+      s.ghost = s.mode === 'move' ? moveBox(s.base, dx, dy) : resizeBox(s.base, dx, dy);
+      setPreview({ id: s.id, mode: s.mode, dxPx, dyPx, ghost: s.ghost, active: true });
+    };
+
+    const finish = (commit: boolean) => {
+      const s = sessionRef.current;
+      sessionRef.current = null;
+      setPreview(null);
+      if (!s) return;
+      const el = s.target;
+      if (el && typeof el.releasePointerCapture === 'function'
+        && typeof el.hasPointerCapture === 'function' && el.hasPointerCapture(s.pointerId)) {
+        el.releasePointerCapture(s.pointerId);
+      }
+      if (!commit || !s.moved) return;
+      // 놓은 패널이 priorityId — 자리를 양보하는 쪽은 원래 있던 패널이다.
+      const next = normalizeLayout(s.snapshot.map((b) => (b.id === s.id ? s.ghost : b)), s.id);
+      if (sameLayout(next, s.snapshot)) return;   // 제자리에 놓았다 — 저장할 일이 없다.
+      commitRef.current(next);
+      bumpCharts();
+    };
+
+    const onUp = () => finish(true);
+    const onCancel = () => finish(false);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+    };
+  }, [dragging]);
+
+  const startDrag = (e: React.PointerEvent<HTMLElement>, id: string, mode: Mode) => {
+    if (!editable || sessionRef.current) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (mode === 'move' && isInteractive(e.target)) return;
+    /*
+     * 좁은 화면에서는 CSS 가 캔버스를 한 열로 쌓는다. 그때도 12칸 좌표로 끌면 손가락이 간 곳과
+     * 패널이 가는 곳이 어긋나므로, 아예 드래그를 시작하지 않는다(키보드 경로는 살아 있다).
+     */
+    if (window.innerWidth <= STACK_MAX_W) return;
+    const base = byId.get(id);
+    const root = rootRef.current;
+    if (!base || !root) return;
+
+    const el = e.currentTarget;
+    sessionRef.current = {
+      id, mode, pointerId: e.pointerId,
+      startX: e.clientX, startY: e.clientY,
+      base, snapshot: boxes,
+      containerW: root.getBoundingClientRect().width,
+      ghost: base, moved: false, target: el,
+    };
+    setPreview({ id, mode, dxPx: 0, dyPx: 0, ghost: base, active: false });
+    // 포인터가 패널 밖으로 나가도 이벤트를 계속 받는다(jsdom 에는 이 API 가 없다).
+    if (typeof el.setPointerCapture === 'function') el.setPointerCapture(e.pointerId);
+  };
+
+  const labelOf = (it: CanvasItem) => it.label ?? it.id;
+
+  /*
+   * 키보드 경로. 드래그 전용 UI 는 키보드 사용자에게 **기능이 통째로 없는 것**과 같다.
+   * ←/→/↑/↓ 한 칸 이동, Shift 를 더하면 한 칸 리사이즈. 매 키가 곧 커밋이다(드래그와 달리
+   * 중간 상태가 없다). 자리가 벽에 막혀 안 바뀌면 저장하지 않고 읽어 주기만 한다.
+   */
+  const onKeyDown = (e: React.KeyboardEvent<HTMLElement>, it: CanvasItem) => {
+    if (!editable) return;
+    const dir = ARROW[e.key];
+    if (!dir) return;
+    const cur = byId.get(it.id);
+    if (!cur) return;
+    e.preventDefault();   // 화살표로 페이지가 스크롤되지 않게
+    const moved = e.shiftKey ? resizeBox(cur, dir.x, dir.y) : moveBox(cur, dir.x, dir.y);
+    const next = normalizeLayout(boxes.map((b) => (b.id === it.id ? moved : b)), it.id);
+    const applied = next.find((b) => b.id === it.id) ?? moved;
+    setAnnounce(describeBox(labelOf(it), applied));
+    if (sameLayout(next, boxes)) return;
+    onLayoutChange(next);
+    bumpCharts();
+  };
+
+  return (
+    <div
+      ref={rootRef}
+      className={`dashcanvas${editable ? ' editing' : ''}`}
+      /* 칸 크기의 단일 출처는 lib/dashLayout.ts 다 — CSS 는 이 변수를 읽는다(두 벌이 되지 않게). */
+      style={{
+        '--dc-cols': GRID_COLS,
+        '--dc-row-h': `${ROW_H}px`,
+        '--dc-gap': `${GRID_GAP}px`,
+      } as React.CSSProperties}
+    >
+      {items.map((it) => {
+        const box = byId.get(it.id);
+        if (!box) return null;   // items 안에 같은 id 가 두 번 있을 때만 — 첫 것만 그린다.
+        const isDragging = preview?.id === it.id && preview.active;
+        const style = cellStyle(box);
+        if (isDragging && preview && preview.mode === 'move') {
+          // 이동은 손을 따라오게 보여 준다(칸 스냅된 목표는 ghost 가 말한다).
+          // 리사이즈는 늘려 보여 주면 안의 내용이 찌그러지므로 ghost 만 움직인다.
+          style.transform = `translate(${preview.dxPx}px, ${preview.dyPx}px)`;
+        }
+        return (
+          <div
+            key={it.id}
+            data-pid={it.id}
+            className={`dc-cell${isDragging ? ' dragging' : ''}`}
+            style={style}
+            role="group"
+            aria-label={describeBox(labelOf(it), box)}
+            tabIndex={editable ? 0 : undefined}
+            onPointerDown={editable ? (e) => startDrag(e, it.id, 'move') : undefined}
+            onKeyDown={editable ? (e) => onKeyDown(e, it) : undefined}
+          >
+            {it.node}
+            {editable && (
+              /*
+               * 핸들은 포인터 전용이다. 키보드에는 Shift+화살표라는 같은 값을 내는 경로가 이미
+               * 있으므로 탭 순서에 빈 정거장을 하나 더 만들지 않는다(그래서 aria-hidden).
+               */
+              <span
+                className="dc-handle"
+                aria-hidden="true"
+                onPointerDown={(e) => { e.stopPropagation(); startDrag(e, it.id, 'resize'); }}
+              />
+            )}
+          </div>
+        );
+      })}
+
+      {preview?.active && (
+        <div className="dc-cell ghost" style={cellStyle(preview.ghost)} aria-hidden="true" />
+      )}
+
+      {/* 키보드로 옮긴 자리를 소리로 읽어 준다 — 화면을 못 보면 이것 말고 확인할 방법이 없다. */}
+      <div className="sr-only" role="status" aria-live="polite">{announce}</div>
+    </div>
+  );
+}

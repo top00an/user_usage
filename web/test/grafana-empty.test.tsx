@@ -45,7 +45,10 @@ function dashRoutes(extra: [string, RouteSpec][] = []): [string, RouteSpec][] {
   ];
 }
 
-/** 패널 하나(DragGrid 의 data-pid)를 좁혀 잡는다 — 제목 문구가 다듬어져도 깨지지 않게. */
+/*
+ * 패널 하나를 좁혀 잡는다 — 제목 문구가 다듬어져도 깨지지 않게 id 로 잡는다.
+ * 옛 DragGrid 든 지금의 CanvasGrid 든 패널 id 는 같은 `data-pid` 로 나온다(저장된 레이아웃의 키).
+ */
 function panel(pid: string): HTMLElement {
   const el = document.querySelector<HTMLElement>(`[data-pid="${pid}"]`);
   if (!el) throw new Error(`패널 ${pid} 이 렌더되지 않았다`);
