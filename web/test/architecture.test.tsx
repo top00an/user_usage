@@ -169,6 +169,13 @@ describe('아키텍처 — 4개 플랫폼 · 2가지 수집 방식', () => {
     expect(cellsOf(METRIC_LABEL.tool)?.[2]).toBe('수집됨');
     expect(cellsOf(METRIC_LABEL.skill)?.[2]).toBe('수집됨');
     expect(cellsOf(METRIC_LABEL.slash)?.[2]).toBe('미수집');
+    /*
+     * Gemini 의 캐시생성은 **Codex 가 아니라 Antigravity 와 같은 칸**이다(2026-08-14 정정).
+     * 같은 Google 모델·같은 암시적 캐싱이라 캐시 쓰기 과금 개념 자체가 없다. 이 열은 한 화면에
+     * 세 판정이 나란히 서는 자리라, 셋을 함께 못 박아야 다음에 한쪽만 고치는 일이 안 생긴다.
+     */
+    expect(cellsOf(METRIC_LABEL.cacheCreate)?.[2]).toBe('해당 없음');   // Gemini  — 개념 없음
+    expect(cellsOf(METRIC_LABEL.cacheCreate)?.[0]).toBe('수집됨');      // Claude  — 관측된 값
     expect(screen.queryByText('준비 중')).not.toBeInTheDocument();
     // Claude 는 행동 축까지 전부 수집된다.
     expect(cellsOf(METRIC_LABEL.mcp)?.[0]).toBe('수집됨');

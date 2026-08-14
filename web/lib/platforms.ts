@@ -52,9 +52,18 @@
  *     그래서 'yes' 로 단정하지 않고 **'conditional'** 이다 — 값이 오면 관측이고, 안 와도 버그가
  *     아니다. 이 둘을 'yes' 라고 하면 빈 화면이 고장으로 읽히고, 'unmeasured' 라고 하면
  *     실제로 올라온 slash·keyword 를 화면이 숨긴다.
- *   · codex·antigravity 의 cacheCreate: 캐시 **쓰기** 과금이라는 개념이 없다(OpenAI 는 과금하지
- *     않고, Gemini 의 암시적 캐싱에는 그 개념 자체가 없다) → 값이 존재하지 않는다(해당 없음).
- *     응답에 0 이 와도 그건 관측이 아니다. 같은 결론, 다른 근거다.
+ *   · cacheCreate 는 플랫폼마다 **결론도 근거도 다르다.** 응답에는 셋 다 0 이 오지만 그 0 의
+ *     뜻이 셋 다 다르므로, 한 결론으로 묶으면 반드시 한쪽이 틀린다(실제로 두 번 틀렸다):
+ *       - codex             → **미수집.** OpenAI 는 2026-07-09 GPT-5.6 GA 부터 캐시 쓰기에
+ *         입력가의 1.25배를 청구한다. 청구는 되는데 롤아웃 로그에 필드가 없다(실측: token_count
+ *         페이로드의 캐시 관련 키는 cached_input 하나뿐). 값이 아니라 공백이다.
+ *       - gemini·antigravity → **해당 없음.** 둘 다 Google 암시적 캐싱이라 캐시 쓰기 과금이라는
+ *         개념 자체가 없다(collector/internal/gemini/gemini.go:26,842 · seed_google.go 의
+ *         cacheWriteMult 0 이 같은 사실을 적는다). 0 도 공백도 아니고, 그런 값이 없다.
+ *     ⚠ 이 줄은 한때 "codex·antigravity 는 개념이 없다"고 적혀 있었다. codex 가 미수집으로
+ *       갈라진 뒤에도 그대로 남아 **gemini 가 어느 쪽인지 아무도 다시 묻지 않았고**, 표에서
+ *       gemini 만 'yes' 로 남아 관측되지 않은 0 을 "수집된 0"으로 그렸다. 근거가 갈라지면
+ *       이 줄부터 갈라 적는다.
  *   · other: 허용목록 밖 이름으로 보고된 세션의 자리(서버가 claude 로 접지 않고 남긴다).
  *     무엇을 기록하는 도구인지 우리는 모른다(미상).
  *
@@ -192,8 +201,10 @@ const UNKNOWN: Support = {
 /**
  * 캐시 쓰기 과금 개념이 **없는** 플랫폼의 cacheCreate.
  *
- * ⚠ 이제 antigravity(Gemini) 전용이다. Google 은 암시적 캐싱이라 쓰기 비용을 청구하지 않는다 —
- *   go/internal/cost/seed_google.go 가 cacheWriteMult 0 으로 같은 사실을 적고 있다.
+ * ⚠ Google 계열 둘(gemini · antigravity)이 여기에 온다. 암시적 캐싱이라 쓰기 비용을 청구하지
+ *   않는다 — go/internal/cost/seed_google.go 가 cacheWriteMult 0 으로, 수집기
+ *   collector/internal/gemini/gemini.go:842 가 `CacheCreate: 0` 으로 같은 사실을 적고 있다.
+ *   **모델이 같은 두 도구라 근거도 같다** — 한쪽만 고치면 다시 어긋난다.
  *
  * ⚠ **codex 는 여기서 빠졌다.** 예전에는 codex 도 이 결론을 공유했는데 사실이 바뀌었다:
  *   2026-07-09 GPT-5.6 GA 부터 OpenAI 는 캐시 쓰기에 **입력가의 1.25배**를 청구한다
@@ -234,10 +245,20 @@ const SUPPORT: Record<PlatformId, Record<MetricId, Support>> = {
       + '없어서 이 화면의 비용에 그 몫이 빠져 있습니다(0 이 아니라 공백입니다).',
     ),
   },
-  // collector/internal/gemini/gemini.go — **수집기는 이미 있다.** codex 와 같은 범위(slash 만 없다).
+  /*
+   * collector/internal/gemini/gemini.go — **수집기는 이미 있다.** 행동 축은 codex 와 같은
+   * 범위(slash 만 없다). cacheCreate 는 codex 가 아니라 **antigravity 와 같은 편**이다:
+   * 같은 Google 모델·같은 암시적 캐싱이라 쓰기 과금이라는 개념이 없다(gemini.go:842 가
+   * `CacheCreate: 0` 을 상수로 적는다). 여기를 'yes' 로 두면 보내지지도 않은 0 을 화면이
+   * "관측된 0"이라고 말하게 된다 — 이 파일이 막으려는 바로 그 거짓말이다.
+   */
   gemini: {
     ...fill('yes', 'Gemini CLI 수집기가 보고합니다(collector/internal/gemini).'),
     slash: NO_SLASH('Gemini CLI'),
+    cacheCreate: NO_CACHE_WRITE_BILLING(
+      'Gemini 의 암시적 캐싱에는 캐시 쓰기 과금이라는 개념이 없습니다 — 수집기가 이 축을 상수 0 으로 '
+      + '두고 있어(collector/internal/gemini) 응답의 0 은 관측이 아닙니다(Antigravity 와 같은 근거입니다).',
+    ),
   },
   /*
    * antigravity — 행동 축이 '미수집'인 것이 핵심이다("그 도구가 안 남겨서 올 수 없다").

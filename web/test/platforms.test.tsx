@@ -136,6 +136,34 @@ describe('lib/platforms — 0 과 "모른다"를 가르는 사실표', () => {
     expect(supportOf('codex', 'cacheCreate').state).toBe('unmeasured');
   });
 
+  /*
+   * gemini 의 캐시생성 — codex 를 미수집으로 가르던 날(2026-08-13) 함께 검토되지 않아 표에
+   * 'yes' 로 남아 있었다. 수집기는 이 축을 상수 0 으로 두는데(gemini.go:842 `CacheCreate: 0`,
+   * :26 "'미지원'이 아니라 **해당 없음**") 표만 "수집됨"이라 화면이 보내지지도 않은 0 을
+   * **관측된 0** 으로 그렸다. gemini 는 codex 편이 아니라 antigravity 편이다 — 같은 Google
+   * 모델·같은 암시적 캐싱이라 근거가 같다.
+   */
+  it('gemini 의 캐시생성은 해당 없음이다 — Google 암시적 캐싱에는 쓰기 과금 개념이 없다', () => {
+    const s = supportOf('gemini', 'cacheCreate');
+    expect(s.state).toBe('na');
+    // 'yes' 로 되돌아가면 빨개진다 — 그 순간 화면이 상수 0 을 관측이라고 말한다.
+    expect(s.state).not.toBe('yes');
+    // codex 와 **같은 결론으로 묶는 것**도 막는다: 저쪽은 청구되는데 로그가 없는 공백이다.
+    expect(s.state).not.toBe('unmeasured');
+    expect(s.why).not.toBe('');
+    // 캐시읽기는 반대로 수집된다(gemini.go:601 이 t.Cached 를 더한다) — 둘을 뭉치면 안 된다.
+    expect(supportOf('gemini', 'cacheRead').state).toBe('yes');
+  });
+
+  /*
+   * Google 계열 둘은 캐시생성에서 **같은 판정**이어야 한다. 한쪽만 고치면 다시 어긋난다 —
+   * 실제로 그렇게 어긋나 있었다. 근거가 모델 공통(암시적 캐싱)이라 이 동치를 못 박는다.
+   */
+  it('gemini 와 antigravity 의 캐시생성 판정은 같다 — 근거가 같기 때문이다', () => {
+    expect(supportOf('gemini', 'cacheCreate').state)
+      .toBe(supportOf('antigravity', 'cacheCreate').state);
+  });
+
   it('모르는 플랫폼은 미상이다 — 단정하지 않는다', () => {
     expect(supportOf('grok', 'tool').state).toBe('unknown');
     expect(supportOf('other', 'tool').state).toBe('unknown');
