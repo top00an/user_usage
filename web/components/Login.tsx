@@ -68,71 +68,70 @@ export default function Login({
 
   return (
     <div className="login-wrap">
-      <main className="card glass" style={{ maxWidth: 400, width: '100%' }} aria-labelledby="login-title">
-        <div className="brand" style={{ padding: '0 0 4px' }}>
-          <span className="brand-mark" aria-hidden="true" />
-          <span className="brand-name" id="login-title">
-            사용량 대시보드
-          </span>
+      <main className="login-card" aria-labelledby="login-title">
+        <div className="login-head">
+          {/* 마크는 사이드바와 같은 글리프(.brand-mark)를 쓰고 크기·광채만 .login-mark 가 키운다. */}
+          <span className="brand-mark login-mark" aria-hidden="true" />
+          <div>
+            <h1 className="login-title" id="login-title">사용량 대시보드</h1>
+            <p className="login-sub">계속하려면 로그인하세요.</p>
+          </div>
         </div>
-        <p className="help mt-sm">계속하려면 로그인하세요.</p>
 
         {note && (
-          <div className="card mt" style={{ borderColor: 'var(--err-bd)' }} role="status">
-            <div className="txt-err" style={{ fontWeight: 600, fontSize: 13 }}>{note}</div>
-          </div>
+          <div className="login-note" role="status">{note}</div>
         )}
 
-        <form className="mt" noValidate onSubmit={submit}>
-          <label className="help" htmlFor={userId}>아이디</label>
-          <input
-            id={userId}
-            ref={userRef}
-            name="username"
-            type="text"
-            autoComplete="username"
-            autoCapitalize="none"
-            spellCheck={false}
-            disabled={pending}
-            style={{ width: '100%' }}
-            value={username}
-            aria-invalid={error ? true : undefined}
-            aria-describedby={error ? errId : undefined}
-            onChange={(e) => {
-              setUsername(e.target.value);
-              if (error) setError(null);
-            }}
-          />
+        <form className="login-form" noValidate onSubmit={submit}>
+          <div className="login-field">
+            <label htmlFor={userId}>아이디</label>
+            <input
+              id={userId}
+              ref={userRef}
+              name="username"
+              type="text"
+              autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+              disabled={pending}
+              value={username}
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? errId : undefined}
+              onChange={(e) => {
+                setUsername(e.target.value);
+                if (error) setError(null);
+              }}
+            />
+          </div>
 
-          <label className="help mt" htmlFor={pwId} style={{ display: 'block' }}>비밀번호</label>
-          <input
-            id={pwId}
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            spellCheck={false}
-            disabled={pending}
-            style={{ width: '100%' }}
-            value={password}
-            aria-invalid={error ? true : undefined}
-            aria-describedby={error ? errId : undefined}
-            onChange={(e) => {
-              setPassword(e.target.value);
-              if (error) setError(null);
-            }}
-          />
+          <div className="login-field">
+            <label htmlFor={pwId}>비밀번호</label>
+            <input
+              id={pwId}
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              spellCheck={false}
+              disabled={pending}
+              value={password}
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? errId : undefined}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (error) setError(null);
+              }}
+            />
+          </div>
 
           {error && (
-            <div id={errId} className="help txt-err mt-sm" role="alert">
+            <div id={errId} className="login-err" role="alert">
               {error}
             </div>
           )}
 
-          <div className="row mt">
-            <button className="primary" type="submit" disabled={pending} aria-busy={pending || undefined} style={{ width: '100%', justifyContent: 'center' }}>
-              {pending ? '로그인 중…' : '로그인'}
-            </button>
-          </div>
+          <button className="login-submit" type="submit" disabled={pending} aria-busy={pending || undefined}>
+            {pending ? '로그인 중…' : '로그인'}
+          </button>
         </form>
       </main>
     </div>
