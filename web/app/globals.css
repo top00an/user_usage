@@ -780,13 +780,32 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
 .gcell { min-width:0; }
 .gcell.over { outline:2px dashed var(--accent); outline-offset:-2px; border-radius:var(--radius-sm); }
 /* 패널 */
-.gpanel-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); overflow:hidden; }
-.gpanel-head { display:flex; align-items:center; gap:6px; padding:6px 10px; font-size:.78rem; color:var(--fg-muted); cursor:grab; user-select:none; }
+/*
+ * 패널 카드 — 캔버스의 칸을 **세로로 꽉 채우고, 넘치는 본문은 그 안에서 스크롤한다.**
+ *
+ * 옛 섹션 그리드는 내용에 맞춰 자라 주었지만 캔버스의 칸은 높이가 정해져 있고 여기는
+ * overflow:hidden 이다 — 그냥 두면 표의 아래 몇 줄이 **말없이 잘린다**(모델 수·MCP 종류는
+ * 테넌트마다 달라 기본 높이로는 못 맞춘다). 잘린 표는 "그 모델은 안 썼다"로 읽힌다.
+ * 그래서 잘리는 대신 스크롤한다 — 사람이 더 있다는 것을 알 수 있는 쪽이다.
+ *
+ * 규칙이 카드 클래스에 있는 이유: 앞으로 생길 패널과 커스텀 패널이 **자동으로 같은 규율**을
+ * 타야 한다. 패널마다 인라인으로 붙이면 새로 만든 패널 하나가 조용히 잘리는 날이 온다.
+ */
+.gpanel-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); overflow:hidden; display:flex; flex-direction:column; min-height:0; }
+.gpanel-card > .gpanel-head { flex:0 0 auto; }
+.gpanel-card > .gpanel-body { flex:1 1 auto; min-height:0; overflow:auto; }
+/*
+ * ⚠ cursor:grab 이 여기 있었다(옛 DragGrid 시절 — 그때는 제목바가 항상 잡히는 손잡이였다).
+ *   지금은 **편집 모드에서 카드 전체가** 잡히므로 그 선언은 `.dashcanvas.editing .dc-cell` 하나가
+ *   진다. 여기 남겨 두면 읽기 전용 화면에서도 손 커서가 떠서 **못 끄는데 끌 수 있다고 말한다.**
+ */
+.gpanel-head { display:flex; align-items:center; gap:6px; padding:6px 10px; font-size:.78rem; color:var(--fg-muted); user-select:none; }
 .gpanel-head:hover { background:var(--surface-2); }
 .gpanel-head .grip { color:var(--fg-faint); letter-spacing:-2px; }
 .gpanel-body { padding:8px 10px 10px; }
 /* 스탯 타일 */
-.gstat { min-height:92px; container-type:inline-size; display:flex; flex-direction:column; justify-content:center; gap:2px; color:#fff; border-radius:var(--radius-sm); padding:12px 14px; cursor:grab; }
+/* cursor:grab 은 여기서도 뺐다 — 이유는 위 .gpanel-head 주석과 같다. */
+.gstat { min-height:92px; container-type:inline-size; display:flex; flex-direction:column; justify-content:center; gap:2px; color:#fff; border-radius:var(--radius-sm); padding:12px 14px; }
 .gstat-gauge { justify-content:flex-start; padding:8px 8px 4px; }
 .gstat-k { font-size:.8rem; opacity:.95; font-weight:600; }
 /* 값 폰트는 타일 폭에 맞춰 축소 — 긴 금액($2,759.00)이 박스를 넘지 않게(cqi = 타일 폭 기준). */
@@ -805,6 +824,139 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
 .gbarcell { position:relative; padding:5px 6px; }
 .gbar { position:absolute; left:0; top:2px; bottom:2px; border-radius:2px; opacity:.4; }
 .glab { position:relative; }
+
+/* ── 자유 캔버스 (CanvasGrid) ────────────────────────────────────────────
+ *
+ * 12열 격자에 패널을 칸 단위로 얹는다. 칸 크기(--dc-cols/--dc-row-h/--dc-gap)는 컴포넌트가
+ * lib/dashLayout.ts 의 상수에서 인라인 변수로 내려 준다 — **숫자의 주인은 한 군데**여야
+ * 드래그가 계산한 칸과 화면이 그리는 칸이 어긋나지 않는다. 아래 fallback 값은 그 변수가
+ * 없을 때(정적 프리렌더 등)를 위한 것이지 두 번째 진실이 아니다.
+ * ──────────────────────────────────────────────────────────────────────── */
+.dashcanvas {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--dc-cols, 12), minmax(0, 1fr));
+  grid-auto-rows: var(--dc-row-h, 56px);
+  gap: var(--dc-gap, 12px);
+}
+
+/*
+ * 편집 모드에서만 격자를 깐다. 이게 없으면 놓는 순간 패널이 "튀는" 것으로 보이고, 있으면
+ * 같은 동작이 "칸에 붙는" 것으로 읽힌다 — 스냅은 보여 줘야 이해되는 규칙이다.
+ * 세로줄 피치는 (100% + 간격) / 열수 로, 그리드가 실제로 쓰는 식과 같다.
+ */
+.dashcanvas.editing {
+  background-image:
+    linear-gradient(to right,
+      color-mix(in srgb, var(--accent) 6%, transparent) 0 calc(100% - var(--dc-gap, 12px)),
+      transparent 0),
+    linear-gradient(to bottom,
+      color-mix(in srgb, var(--border) 60%, transparent) 0 1px,
+      transparent 1px);
+  background-size:
+    calc((100% + var(--dc-gap, 12px)) / var(--dc-cols, 12)) 100%,
+    100% calc(var(--dc-row-h, 56px) + var(--dc-gap, 12px));
+  border-radius: var(--radius-sm);
+}
+
+.dc-cell {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  /* 칸보다 큰 내용은 잘린다 — 넘치게 두면 아래 패널을 덮어 그쪽을 못 읽게 만든다. */
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  transition: box-shadow .15s ease, opacity .15s ease;
+}
+/* 패널 카드가 칸을 꽉 채운다(높이를 늘린 만큼 실제로 커져야 리사이즈가 의미를 갖는다). */
+.dc-cell > *:not(.dc-handle) { flex: 1 1 auto; min-width: 0; }
+
+.dashcanvas.editing .dc-cell {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;   /* 터치로 끄는 동안 페이지가 같이 스크롤되지 않게 */
+}
+.dashcanvas.editing .dc-cell:hover {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.dc-cell.dragging {
+  z-index: 3;
+  cursor: grabbing;
+  opacity: .92;
+  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+  /* 손을 따라오는 이동은 장식이 아니라 직접 조작이다 — 여기에 전환을 걸면 손보다 늦게 온다. */
+  transition: none;
+}
+
+/* 놓일 자리. 패널 위에 겹쳐 보여도 되도록 옅게 — 어디에 앉는지만 말하면 된다. */
+.dc-cell.ghost {
+  z-index: 2;
+  pointer-events: none;
+  border: 1px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/*
+ * 우하단 리사이즈 핸들. 포인터 전용이고(키보드는 Shift+화살표라는 같은 값의 경로가 있다),
+ * 평소에는 숨었다가 그 패널을 겨눌 때만 나온다 — 읽는 화면에 조작 부호를 상시로 뿌리지 않는다.
+ */
+.dc-handle {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 14px;
+  height: 14px;
+  opacity: 0;
+  cursor: nwse-resize;
+  touch-action: none;
+  border-right: 2px solid color-mix(in srgb, var(--fg-faint) 75%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--fg-faint) 75%, transparent);
+  border-bottom-right-radius: 4px;
+  transition: opacity .15s ease, border-color .15s ease;
+}
+.dashcanvas.editing .dc-cell:hover .dc-handle,
+.dashcanvas.editing .dc-cell:focus-within .dc-handle { opacity: 1; }
+.dashcanvas.editing .dc-cell:hover .dc-handle:hover {
+  border-color: var(--accent);
+}
+/* 호버가 없는 입력(터치)에는 숨길 방법이 없다 — 옅게 상시 노출한다. */
+@media (hover: none) {
+  .dashcanvas.editing .dc-handle { opacity: .65; }
+}
+
+/* 편집 툴바(저장 상태·초기화). 캔버스 위 한 줄. */
+.dc-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 30px;
+  margin-bottom: 10px;
+  font-size: .78rem;
+  color: var(--fg-muted);
+}
+.dc-bar .sp { flex: 1; }
+
+/*
+ * 좁은 화면에서는 12칸이 손가락보다 작다 — 한 열로 쌓고 드래그 affordance 를 걷는다.
+ * 인라인 style 로 들어온 칸 좌표를 이겨야 하므로 여기서만 !important 를 쓴다.
+ * 이 720px 은 lib/dashLayout.ts 의 STACK_MAX_W 와 **같은 값이어야 한다**(포인터 드래그를
+ * 끄는 판단이 그 상수를 읽는다).
+ */
+@media (max-width: 720px) {
+  .dashcanvas { grid-template-columns: 1fr; grid-auto-rows: auto; background-image: none; }
+  .dashcanvas > .dc-cell {
+    grid-column: 1 / -1 !important;
+    grid-row: auto !important;
+    transform: none !important;
+    min-height: 150px;
+    touch-action: auto;
+    cursor: default;
+  }
+  .dashcanvas > .dc-cell.ghost { display: none; }
+  .dc-handle { display: none; }
+}
 
 /* ── 차트 빌더 · 커스텀 패널 ─────────────────────────────────────────────── */
 .builder { display: flex; flex-direction: column; gap: 12px; }

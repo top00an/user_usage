@@ -76,6 +76,17 @@ var memberSelfEndpoints = map[string]bool{
 var memberSelfKeys = map[string]bool{
 	"/api/me/keys":        true,
 	"/api/me/keys/revoke": true,
+	/*
+	 * 대시보드 배치(/api/me/dashboard-layout)도 같은 규율의 셀프서비스다 — **자기** 화면
+	 * 설정이라 member 도 저장·초기화할 수 있어야 하고, 이 맵에 없으면 아래 게이트의
+	 * `case mutating:` 에 걸려 member 의 PUT/DELETE 가 403 이다(조회는 되는데 저장만 안 되는,
+	 * 원인이 화면에 안 보이는 실패다). 로그인 세션만 태우는 조건은 여기서도 그대로 맞다:
+	 * 나눠 준 개인 열람 토큰이 남의 브라우저에서 화면 배치를 바꿔 놓을 이유가 없다.
+	 *
+	 * ⚠ 맵 이름은 "Keys" 지만 실제 의미는 **"member 가 상태변경까지 할 수 있는 셀프 경로"** 다.
+	 *   이름을 바꾸지 않은 것은 계약(CONTRACT §2)이 이 이름을 지목하고 있어서다.
+	 */
+	layoutPath: true,
 }
 
 // route 는 `내가 응답했다` 를 bool 로, 예상 못 한 실패를 error 로 돌려준다.
@@ -115,6 +126,15 @@ func New(cfg config.Config) http.Handler {
 		s.limiter = newRateLimiter(cfg.IntakeRate, cfg.IntakeBurst)
 	}
 	if cfg.ReadOnly {
+		/*
+		 * 셀프서비스(/api/me/*)는 이 모드에 **없다** — 종전의 routeSelfKeys 도, 새로 붙은
+		 * routeSelfPrefs 도 등록하지 않는다. 근거는 위 readOnly 주석 그대로다: 이 배포는 남의
+		 * 운영 DB 를 조회만 하고, 대시보드 배치 저장은 그 DB 에 **쓰는** 일이다.
+		 * 조회(GET)만 열어 두는 선택지도 있었지만, 그러면 "읽기는 되는데 저장은 404" 라는
+		 * 반쪽 상태를 프론트가 따로 다뤄야 한다. 없는 편이 정직하다 — 프론트는 비-200 을
+		 * "저장된 것 없음"으로 접고 기본 배치를 그리면 되고, 그 처리는 로그아웃·구버전 서버를
+		 * 위해 어차피 필요하다.
+		 */
 		s.routes = []route{s.routeAnalytics, s.readOnlyAdmin}
 	} else {
 		/*
@@ -123,10 +143,16 @@ func New(cfg config.Config) http.Handler {
 		 * 뒤로 가면 사용자 관리 API 가 통째로 404 가 된다(analytics 가 admin 앞인 것과 같은 규율).
 		 *
 		 * routeSelfKeys 는 /api/me 를 소유한다 — 누구와도 접두사가 겹치지 않는다.
+		 *
+		 * ⚠ 그래서 **routeSelfPrefs 가 routeSelfKeys 보다 앞이다**(세 번째 순서 계약).
+		 *   routeSelfKeys 는 /api/me/ 접두사를 소유하고 안 걸리면 404 를 직접 내므로, 뒤에 두면
+		 *   /api/me/dashboard-layout 이 통째로 404 가 된다 — 위 두 건(analytics/admin,
+		 *   adminusers/onboarding)과 같은 사고다. 반대 방향의 위험은 routeSelfPrefs 쪽이 막는다:
+		 *   그쪽은 접두사가 아니라 **정확 경로 하나**만 잡고 나머지를 흘려 보낸다(prefs.go 주석).
 		 */
 		s.routes = []route{
 			s.routeIntake, s.routeAnalytics,
-			s.routeSelfKeys, s.routeAdminUsers, s.routeOnboarding,
+			s.routeSelfPrefs, s.routeSelfKeys, s.routeAdminUsers, s.routeOnboarding,
 			s.routeAdmin,
 		}
 	}

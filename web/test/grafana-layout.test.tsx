@@ -1,24 +1,52 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import GrafanaDash from '@/components/grafana/GrafanaDash';
 import { Donut } from '@/components/charts';
-import { addPanel } from '@/lib/customPanels';
-import { golden, mockFetch, platformRoutes, type RouteSpec } from './helpers';
+import { addPanel, removePanel } from '@/lib/customPanels';
+import { LAYOUT_PATH, SAVE_DEBOUNCE_MS } from '@/lib/layoutPrefs';
+import { GRID_GAP, ROW_H, type DashLayout } from '@/lib/dashLayout';
+import { golden, PLATFORMS_FIXTURE, type RouteSpec } from './helpers';
 
 /*
- * ── 레이아웃이 리렌더를 견딘다 ────────────────────────────────────────────
+ * ── 대시보드 배치가 사람을 배신하지 않는다 ────────────────────────────────
  *
- * 이 파일이 지키는 것은 **컴포넌트 정체(identity)** 다. 렌더 함수 안에서 컴포넌트를 만들면
- * 매 렌더마다 새 타입이 되고, React 는 같은 자리를 "다른 컴포넌트"로 보아 서브트리를 통째로
- * 언마운트·리마운트한다. 그러면 DOM 노드가 새로 생기고 그 안의 상태·포커스·스크롤이 날아간다
- * (여기서는 DragGrid 의 드래그 순서와 드래그중 하이라이트).
+ * 이 파일은 원래 DragGrid(섹션 안 순서 바꾸기 + localStorage)를 재고 있었다. 화면이 12열 자유
+ * 캔버스 + 서버 저장으로 바뀌면서 **저장소와 조작 방식은 통째로 달라졌지만, 지켜야 할 것은
+ * 그대로다.** 그래서 테스트를 지우지 않고 같은 의도에 다시 겨눴다:
  *
- * 그 사고는 화면에서 "가끔 패널이 깜빡인다" 정도로만 보여서 눈으로는 못 잡는다. 그래서
- * **DOM 노드 동일성**으로 잰다 — 리마운트는 정의상 노드를 새로 만든다.
+ *   ① 패널이 사라지지 않는다 · 서브트리가 리마운트되지 않는다(노드 동일성으로 잰다 —
+ *      리마운트는 정의상 DOM 노드를 새로 만들고, 화면에서는 "가끔 깜빡인다"로만 보인다)
+ *   ② 리렌더가 방금 바꾼 배치를 되돌리지 않는다      (옛: 드래그 순서 유지)
+ *   ③ 저장이 막혀도 이번 세션의 조작은 먹는다        (옛: localStorage 가 던져도 순서가 남는다)
+ *   ④ 저장된 배치가 **첫 프레임부터** 옳다           (옛: 기본 순서를 한 프레임 그리고 튀지 않는다)
  *
- * setup.ts 가 EChart 를 null 로 모킹하므로 여기서는 껍데기(패널 DOM)만 본다 — 이 파일이 재는
- * 것이 정체이지 차트가 아니다.
+ * 여기에 서버 저장이 새로 들여온 것 셋을 더한다: 디바운스(드래그 한 번 = PUT 한 번) ·
+ * 되돌리기(DELETE) · 읽기 전용이 기본(편집을 눌러야 핸들이 생긴다).
+ *
+ * setup.ts 가 EChart 를 null 로 모킹하므로 여기서는 껍데기(패널 DOM)만 본다.
  */
+
+/** jsdom 에는 PointerEvent 가 없다 — MouseEvent 위에 pointerId/pointerType 만 얹은 최소 폴리필. */
+beforeAll(() => {
+  if (typeof window.PointerEvent === 'undefined') {
+    class PointerEventPolyfill extends MouseEvent {
+      readonly pointerId: number;
+      readonly pointerType: string;
+      constructor(type: string, init: PointerEventInit = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 1;
+        this.pointerType = init.pointerType ?? 'mouse';
+      }
+    }
+    Object.defineProperty(window, 'PointerEvent', { value: PointerEventPolyfill, configurable: true });
+  }
+});
+
+/** jsdom 은 레이아웃을 하지 않아 폭이 0 이다 — 그대로 두면 가로 드래그가 항상 0칸이 된다. */
+const CANVAS_W = 1200;
+const COL_STEP = (CANVAS_W + GRID_GAP) / 12;
+const ROW_STEP = ROW_H + GRID_GAP;
 
 /** PM 이 실제 수집기로 확인한 값 — 개발 지표 패널이 '미수집' 자리로 빠지지 않게 채워 둔다. */
 const DEV_REAL = {
@@ -29,38 +57,101 @@ const DEV_REAL = {
   ],
 };
 
-function dashRoutes(extra: [string, RouteSpec][] = []): [string, RouteSpec][] {
-  return [
+/*
+ * 이 파일 전용 fetch 모킹.
+ *
+ * test/helpers.ts 의 mockFetch 는 경로만 보고 답한다. 여기서는 **같은 경로의 GET·PUT·DELETE 를
+ * 갈라** 답해야 한다(저장은 실패하는데 조회는 성공하는 상황이 이 파일의 핵심 시나리오다).
+ * helpers.ts 는 다른 오너 소유라 고치지 않고, 필요한 것만 여기서 만든다.
+ */
+interface LayoutMock {
+  /** GET 이 돌려줄 저장값. null = 저장된 적 없음 → 기본 배치 */
+  saved?: DashLayout | null;
+  getStatus?: number;
+  /** GET 을 늦춘다(ms) — 데이터가 먼저 도착하는 상황을 만든다. */
+  getDelay?: number;
+  putStatus?: number;
+  /** 네트워크 자체가 끊긴 경우(응답 없음). */
+  putThrows?: boolean;
+  deleteStatus?: number;
+}
+
+interface Call { url: string; method: string; body: unknown }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+function mockDash(layout: LayoutMock = {}, extra: [string, RouteSpec][] = []) {
+  const routes: [string, RouteSpec][] = [
     ...extra,
-    ...platformRoutes(),
+    ['/api/usage/platforms', { body: PLATFORMS_FIXTURE }],
     ['/api/usage/summary', { body: golden('summary') }],
     ['/api/usage/dev', { body: DEV_REAL }],
   ];
+  const calls: Call[] = [];
+
+  const fn = vi.fn(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET';
+    calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+
+    if (url === LAYOUT_PATH) {
+      if (method === 'PUT') {
+        if (layout.putThrows) throw new TypeError('Failed to fetch');
+        return json(layout.putStatus ?? 200, { ok: true, updatedAt: '2026-08-14T00:00:00Z' });
+      }
+      if (method === 'DELETE') return json(layout.deleteStatus ?? 200, { ok: true });
+      if (layout.getDelay) await sleep(layout.getDelay);
+      return json(layout.getStatus ?? 200, { layout: layout.saved ?? null, updatedAt: '' });
+    }
+
+    const hit = routes.find(([p]) => url.startsWith(p));
+    const spec: RouteSpec = hit?.[1] ?? { status: 404, body: { error: '없는 경로' } };
+    return json(spec.status ?? 200, spec.body ?? {});
+  });
+  vi.stubGlobal('fetch', fn);
+
+  const of = (method: string) => calls.filter((c) => c.url === LAYOUT_PATH && c.method === method);
+  return { calls, puts: () => of('PUT'), deletes: () => of('DELETE') };
 }
 
-/** 패널 하나(DragGrid 의 data-pid). 제목 문구가 다듬어져도 깨지지 않게 id 로 잡는다. */
+/** 패널 한 장. 제목 문구가 다듬어져도 깨지지 않게 id(=저장된 레이아웃의 키)로 잡는다. */
 function panel(pid: string): HTMLElement {
-  const el = document.querySelector<HTMLElement>(`[data-pid="${pid}"]`);
+  const el = document.querySelector<HTMLElement>(`.dc-cell[data-pid="${pid}"]`);
   if (!el) throw new Error(`패널 ${pid} 이 렌더되지 않았다`);
   return el;
 }
 
-/** 한 그리드의 패널 순서 — 화면에 보이는 순서 그대로. */
-function orderOf(gid: string): string[] {
-  const grid = document.querySelector(`[data-grid="${gid}"]`);
-  if (!grid) throw new Error(`그리드 ${gid} 이 렌더되지 않았다`);
-  return Array.from(grid.querySelectorAll<HTMLElement>('[data-pid]')).map((e) => e.dataset.pid!);
+/** 화면에서 그 패널이 차지한 자리(CSS Grid 는 1부터 센다). */
+const at = (pid: string) => `${panel(pid).style.gridColumn} / ${panel(pid).style.gridRow}`;
+
+/** 마우스 한 판: 잡고 → 끌고 → 놓는다(CanvasGrid 의 4px 임계값을 넘기려 두 번 움직인다). */
+function drag(el: HTMLElement, dx: number, dy: number) {
+  fireEventPointer(el, 'pointerDown', 200, 200);
+  fireEventPointer(window, 'pointerMove', 200 + dx / 2, 200 + dy / 2);
+  fireEventPointer(window, 'pointerMove', 200 + dx, 200 + dy);
+  fireEventPointer(window, 'pointerUp', 200 + dx, 200 + dy);
 }
 
-const LIVE_DEFAULT = ['live-sessions', 'live-cost', 'live-tokens', 'live-output', 'live-hit', 'live-share'];
+function fireEventPointer(target: HTMLElement | Window, type: string, clientX: number, clientY: number) {
+  const ev = new window.PointerEvent(type.toLowerCase(), {
+    clientX, clientY, button: 0, pointerId: 1, bubbles: true, cancelable: true,
+  } as PointerEventInit);
+  act(() => { target.dispatchEvent(ev); });
+}
 
-/** jsdom 에는 DragEvent 가 없다 — 핸들러가 실제로 읽는 것(effectAllowed)만 갖춘 최소 객체. */
-const dt = () => ({ effectAllowed: '', dropEffect: '', setData() {}, getData: () => '' });
+const LIVE = ['live-sessions', 'live-cost', 'live-tokens', 'live-output', 'live-hit', 'live-share'];
 
 let headSlot: HTMLElement;
 
 beforeEach(() => {
   localStorage.clear();
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    x: 0, y: 0, top: 0, left: 0, right: CANVAS_W, bottom: 900,
+    width: CANVAS_W, height: 900, toJSON: () => ({}),
+  } as DOMRect);
   // 셸(components/Dashboard.tsx)이 렌더하는 상단 액션 슬롯. GrafanaDash 는 여기에 포털로 얹는다.
   headSlot = document.createElement('div');
   headSlot.id = 'head-actions';
@@ -69,6 +160,7 @@ beforeEach(() => {
 afterEach(() => {
   headSlot.remove();
   localStorage.clear();
+  vi.restoreAllMocks();
 });
 
 async function mountDash() {
@@ -76,133 +168,276 @@ async function mountDash() {
   await screen.findByText('활성 세션');
 }
 
-describe('섹션 컴포넌트는 렌더마다 새로 만들어지지 않는다 (리마운트 없음)', () => {
+/** 편집 모드를 연다 — 평소에는 읽기 전용이라 드래그·핸들이 없다. */
+async function openEditing() {
+  await userEvent.click(screen.getByRole('button', { name: '배치 편집' }));
+}
+
+describe('패널은 사라지지도, 리마운트되지도 않는다', () => {
   it('대시보드가 리렌더돼도 패널 DOM 노드가 그대로 유지된다', async () => {
-    mockFetch(dashRoutes());
+    mockDash();
     await mountDash();
 
-    const before = LIVE_DEFAULT.map(panel);
-    const beforeGrid = document.querySelector('[data-grid="live"]');
+    const before = LIVE.map(panel);
+    const beforeCanvas = document.querySelector('.dashcanvas');
 
     // 커스텀 패널 추가 → 구독(useSyncExternalStore)이 GrafanaDash 를 리렌더한다.
-    // 섹션들의 props 는 그대로이므로, 정체가 안정적이면 DOM 은 손대지 않아야 한다.
+    // 정체(identity)가 안정적이면 DOM 은 손대지 않아야 한다 — 리마운트는 노드를 새로 만든다.
     await act(async () => { addPanel({ title: '내 그래프 1', metric: 'tokens', type: 'line', groupBy: 'none', days: 7 }); });
 
-    expect(document.querySelector('[data-grid="live"]')).toBe(beforeGrid);
-    LIVE_DEFAULT.forEach((pid, i) => {
-      expect(panel(pid)).toBe(before[i]);
-    });
+    expect(document.querySelector('.dashcanvas')).toBe(beforeCanvas);
+    LIVE.forEach((pid, i) => { expect(panel(pid)).toBe(before[i]); });
   });
 
-  it('리렌더가 드래그로 바꾼 순서를 되돌리지 않는다 (DragGrid 상태 유지)', async () => {
-    mockFetch(dashRoutes());
-    await mountDash();
-    expect(orderOf('live')).toEqual(LIVE_DEFAULT);
-
-    // live-tokens 를 맨 앞(live-sessions 자리)으로 끌어다 놓는다.
-    fireEvent.dragStart(panel('live-tokens'), { dataTransfer: dt() });
-    fireEvent.dragOver(panel('live-sessions'), { dataTransfer: dt() });
-    fireEvent.drop(panel('live-sessions'), { dataTransfer: dt() });
-
-    const reordered = ['live-tokens', 'live-sessions', 'live-cost', 'live-output', 'live-hit', 'live-share'];
-    expect(orderOf('live')).toEqual(reordered);
-
-    await act(async () => { addPanel({ title: '내 그래프 1', metric: 'cost', type: 'bar', groupBy: 'none', days: 7 }); });
-
-    expect(orderOf('live')).toEqual(reordered);
-  });
-});
-
-describe('DragGrid — 순서를 저장하고 되살린다', () => {
-  it('저장된 순서가 있으면 그 순서로 그린다', async () => {
-    const saved = ['live-hit', 'live-share', 'live-sessions'];
-    localStorage.setItem('ccdash-order:live', JSON.stringify(saved));
-    mockFetch(dashRoutes());
+  it('모든 패널이 하나의 캔버스 안에 있다 (섹션 경계가 없다)', async () => {
+    mockDash();
     await mountDash();
 
-    // 저장된 것 먼저, 저장에 없던 새 id 는 뒤에 원래 순서대로 붙는다.
-    expect(orderOf('live')).toEqual([...saved, 'live-cost', 'live-tokens', 'live-output']);
-  });
-
-  it('저장에 없는 낡은 id 는 버린다', async () => {
-    localStorage.setItem('ccdash-order:live', JSON.stringify(['live-hit', 'gone-panel', 'live-sessions']));
-    mockFetch(dashRoutes());
-    await mountDash();
-
-    expect(orderOf('live')).not.toContain('gone-panel');
-    expect(orderOf('live')).toHaveLength(LIVE_DEFAULT.length);
-  });
-
-  it('드래그로 바꾼 순서를 localStorage 에 남긴다 (새로고침에도 유지)', async () => {
-    mockFetch(dashRoutes());
-    await mountDash();
-
-    fireEvent.dragStart(panel('live-share'), { dataTransfer: dt() });
-    fireEvent.dragOver(panel('live-cost'), { dataTransfer: dt() });
-    fireEvent.drop(panel('live-cost'), { dataTransfer: dt() });
-
-    const expected = ['live-sessions', 'live-share', 'live-cost', 'live-tokens', 'live-output', 'live-hit'];
-    expect(orderOf('live')).toEqual(expected);
-    expect(JSON.parse(localStorage.getItem('ccdash-order:live')!)).toEqual(expected);
-  });
-
-  /*
-   * 사생활 보호 모드·용량 초과면 localStorage.setItem 이 던진다. 그때 저장이 안 되는 것은
-   * 어쩔 수 없지만 **드래그가 통째로 죽어서는 안 된다** — 사람은 패널을 끌었는데 아무 일도
-   * 일어나지 않는 화면을 "고장"으로 읽는다. 그 세션 동안은 순서가 유지돼야 한다.
-   */
-  it('저장이 막힌 브라우저에서도 그 세션 동안은 재배치가 동작한다', async () => {
-    mockFetch(dashRoutes());
-    await mountDash();
-
-    /*
-     * 실패한 쓰기는 모듈 수준 폴백에 남아 페이지 세션 내내 산다(그게 이 기능이다).
-     * 그래서 다른 테스트가 쓰지 않는 그리드('tools')로 잰다 — 테스트끼리 순서를 물려주지 않게.
-     */
-    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-      throw new Error('QuotaExceededError');
-    });
-    try {
-      fireEvent.dragStart(panel('tool-skills'), { dataTransfer: dt() });
-      fireEvent.dragOver(panel('tool-usage'), { dataTransfer: dt() });
-      fireEvent.drop(panel('tool-usage'), { dataTransfer: dt() });
-
-      expect(orderOf('tools')).toEqual(['tool-skills', 'tool-usage', 'tool-agents']);
-    } finally {
-      setItem.mockRestore();
+    expect(document.querySelectorAll('.dashcanvas')).toHaveLength(1);
+    for (const pid of [...LIVE, 'cost-models', 'dev-loc', 'cache-usage', 'tool-skills', 'rate-mcp', 'top-tools']) {
+      expect(panel(pid).closest('.dashcanvas')).toBe(document.querySelector('.dashcanvas'));
     }
   });
+});
 
-  it('자기 자신 위에 떨어뜨리면 순서가 그대로다', async () => {
-    mockFetch(dashRoutes());
-    await mountDash();
+describe('저장된 배치는 첫 프레임부터 적용된다', () => {
+  /*
+   * 옛 DragGrid 머리말이 적어 둔 사고를 캔버스에서 다시 막는다: 저장된 배치가 늦게 오는데
+   * 화면을 먼저 그리면 **기본 배치를 한 프레임 보여 준 뒤 튄다.** 사람은 그 튐을 데이터
+   * 변화로 읽는다. 그래서 배치를 다 읽기 전에는 캔버스를 아예 그리지 않는다.
+   */
+  it('데이터가 먼저 도착해도 기본 배치를 한 프레임 그리지 않는다', async () => {
+    const { calls } = mockDash({
+      saved: [{ id: 'live-share', x: 0, y: 0, w: 12, h: 2 }],
+      getDelay: 60,
+    });
+    render(<GrafanaDash />);
 
-    fireEvent.dragStart(panel('live-cost'), { dataTransfer: dt() });
-    fireEvent.drop(panel('live-cost'), { dataTransfer: dt() });
+    // 대시보드 데이터(summary 등)는 이미 도착했다.
+    await waitFor(() => expect(calls.some((c) => c.url.startsWith('/api/usage/summary'))).toBe(true));
+    await act(async () => { await sleep(20); });
 
-    expect(orderOf('live')).toEqual(LIVE_DEFAULT);
+    // 그런데도 패널은 아직 하나도 없다 — 기본 배치가 화면에 뜬 적이 없다는 뜻이다.
+    expect(document.querySelector('.dc-cell[data-pid]')).toBeNull();
+
+    await screen.findByText('활성 세션');
+    // 처음 보이는 순간부터 저장된 자리다(기본 배치는 11열 2칸이었다).
+    expect(panel('live-share').style.gridColumn).toBe('1 / span 12');
   });
 
-  it('드래그 중인 대상 위에 있으면 그 칸에 하이라이트가 붙는다', async () => {
-    mockFetch(dashRoutes());
+  it('저장된 적 없으면 기본 배치로 그린다 (옛 섹션 열 수를 그대로 옮긴 자리)', async () => {
+    mockDash({ saved: null });
     await mountDash();
 
-    fireEvent.dragStart(panel('live-tokens'), { dataTransfer: dt() });
-    fireEvent.dragOver(panel('live-cost'), { dataTransfer: dt() });
-    expect(panel('live-cost').className).toContain('over');
+    expect(panel('live-sessions').style.gridColumn).toBe('1 / span 2');
+    expect(panel('live-share').style.gridColumn).toBe('11 / span 2');
+    expect(panel('cache-usage').style.gridColumn).toBe('1 / span 12');
+  });
 
-    fireEvent.dragLeave(panel('live-cost'), { dataTransfer: dt() });
-    expect(panel('live-cost').className).not.toContain('over');
+  it('서버에 그 API 가 없어도(404) 화면이 죽지 않는다 — 기본 배치로 산다', async () => {
+    // readOnly(remote) 배포·구버전 서버가 이 경로다(계약 개정 5).
+    mockDash({ getStatus: 404 });
+    await mountDash();
+
+    expect(panel('live-sessions').style.gridColumn).toBe('1 / span 2');
+    expect(document.querySelectorAll('.dc-cell[data-pid]').length).toBeGreaterThan(10);
+  });
+
+  it('응답이 이상해도(layout 이 배열이 아님) 기본 배치로 산다', async () => {
+    mockDash({ saved: { nope: true } as unknown as DashLayout });
+    await mountDash();
+
+    expect(panel('live-share').style.gridColumn).toBe('11 / span 2');
   });
 });
 
-describe('상단 액션 버튼 — 셸의 슬롯에 포털로 얹는다', () => {
-  it('#head-actions 안에 두 버튼이 들어간다', async () => {
-    mockFetch(dashRoutes());
+describe('편집 모드 — 평소에는 읽기 전용이다', () => {
+  it('편집이 꺼져 있으면 드래그·리사이즈 핸들이 없다', async () => {
+    mockDash();
+    await mountDash();
+
+    expect(document.querySelector('.dc-handle')).toBeNull();
+    expect(document.querySelector('.dashcanvas.editing')).toBeNull();
+    expect(panel('live-cost').getAttribute('tabindex')).toBeNull();
+  });
+
+  it('편집을 눌러야 핸들이 생기고, 끄면 다시 사라진다', async () => {
+    mockDash();
+    await mountDash();
+
+    await openEditing();
+    expect(document.querySelector('.dashcanvas.editing')).not.toBeNull();
+    expect(document.querySelectorAll('.dc-handle').length).toBeGreaterThan(10);
+    expect(panel('live-cost').getAttribute('tabindex')).toBe('0');
+
+    await userEvent.click(screen.getByRole('button', { name: '편집 완료' }));
+    expect(document.querySelector('.dc-handle')).toBeNull();
+  });
+
+  it('편집이 꺼져 있으면 끌어도 배치가 바뀌지 않는다 (PUT 도 없다)', async () => {
+    const { puts } = mockDash();
+    await mountDash();
+
+    const before = at('live-sessions');
+    drag(panel('live-sessions'), COL_STEP * 4, ROW_STEP * 2);
+    await act(async () => { await sleep(SAVE_DEBOUNCE_MS + 120); });
+
+    expect(at('live-sessions')).toBe(before);
+    expect(puts()).toHaveLength(0);
+  });
+});
+
+describe('저장 — 드래그 한 번에 PUT 한 번', () => {
+  it('드래그를 놓으면 화면이 즉시 따라오고, PUT 은 디바운스 뒤에 한 번만 나간다', async () => {
+    const { puts } = mockDash();
+    await mountDash();
+    await openEditing();
+
+    const before = at('live-sessions');
+    drag(panel('live-sessions'), COL_STEP * 4, 0);
+
+    // 화면은 서버를 기다리지 않는다.
+    expect(at('live-sessions')).not.toBe(before);
+    // 디바운스 안에서는 아직 나가지 않았다.
+    expect(puts()).toHaveLength(0);
+
+    await act(async () => { await sleep(SAVE_DEBOUNCE_MS + 120); });
+    expect(puts()).toHaveLength(1);
+
+    const body = puts()[0]!.body as { layout: DashLayout };
+    expect(body.layout.find((b) => b.id === 'live-sessions')).toMatchObject({ x: 4, w: 2, h: 2 });
+    // 저장되는 값은 항상 정수 칸이다(서버 검증이 소수를 400 으로 거절한다).
+    expect(body.layout.every((b) => [b.x, b.y, b.w, b.h].every(Number.isInteger))).toBe(true);
+    await screen.findByText('배치 저장됨');
+  });
+
+  it('연달아 두 번 옮겨도 PUT 은 마지막 것 한 번이다', async () => {
+    const { puts } = mockDash();
+    await mountDash();
+    await openEditing();
+
+    drag(panel('live-sessions'), COL_STEP * 2, 0);
+    drag(panel('live-sessions'), COL_STEP * 2, 0);
+
+    await act(async () => { await sleep(SAVE_DEBOUNCE_MS + 120); });
+    expect(puts()).toHaveLength(1);
+    expect((puts()[0]!.body as { layout: DashLayout }).layout.find((b) => b.id === 'live-sessions'))
+      .toMatchObject({ x: 4 });
+  });
+});
+
+describe('저장이 실패해도 화면은 살아 있다', () => {
+  /*
+   * 옛 DragGrid 는 저장이 막힌 브라우저(사생활 보호·용량 초과)를 위해 세션 한정 폴백을 뒀다.
+   * 저장소가 서버로 옮겨졌어도 판단은 같다 — **저장이 안 되는 것과 화면이 죽어 보이는 것은
+   * 다른 문제다.** 사람은 패널을 끌었는데 제자리로 돌아오는 화면을 "고장"으로 읽는다.
+   */
+  it('서버가 500 이어도 이번 세션의 배치는 유지되고, 사실을 말한다', async () => {
+    mockDash({ putStatus: 500 });
+    await mountDash();
+    await openEditing();
+
+    drag(panel('live-sessions'), COL_STEP * 4, 0);
+    const moved = at('live-sessions');
+
+    await act(async () => { await sleep(SAVE_DEBOUNCE_MS + 120); });
+
+    expect(at('live-sessions')).toBe(moved);            // 되돌아가지 않는다
+    expect(await screen.findByText(/저장 실패/)).toBeInTheDocument();
+    expect(screen.queryByText('배치 저장됨')).not.toBeInTheDocument();
+  });
+
+  it('네트워크가 끊겨도(fetch reject) 마찬가지다 — 이어서 더 옮길 수도 있다', async () => {
+    mockDash({ putThrows: true });
+    await mountDash();
+    await openEditing();
+
+    drag(panel('live-sessions'), COL_STEP * 4, 0);
+    await act(async () => { await sleep(SAVE_DEBOUNCE_MS + 120); });
+    expect(await screen.findByText(/저장 실패/)).toBeInTheDocument();
+
+    // 실패한 뒤에도 조작은 계속 먹는다.
+    const before = at('live-tokens');
+    drag(panel('live-tokens'), 0, ROW_STEP * 3);
+    expect(at('live-tokens')).not.toBe(before);
+  });
+});
+
+describe('되돌리기 — 서버 저장을 지운다', () => {
+  it('"기본 배치로 되돌리기" 가 DELETE 를 부르고 화면이 기본 배치로 돌아온다', async () => {
+    const { deletes } = mockDash({ saved: [{ id: 'live-share', x: 0, y: 0, w: 12, h: 2 }] });
+    await mountDash();
+    expect(panel('live-share').style.gridColumn).toBe('1 / span 12');
+
+    await openEditing();
+    await userEvent.click(screen.getByRole('button', { name: '기본 배치로 되돌리기' }));
+
+    expect(panel('live-share').style.gridColumn).toBe('11 / span 2');
+    await waitFor(() => expect(deletes()).toHaveLength(1));
+  });
+
+  it('되돌리기는 대기 중인 저장을 취소한다 — DELETE 뒤에 옛 배치가 다시 저장되지 않게', async () => {
+    const { puts, deletes } = mockDash();
+    await mountDash();
+    await openEditing();
+
+    drag(panel('live-sessions'), COL_STEP * 4, 0);          // 디바운스 대기 중
+    await userEvent.click(screen.getByRole('button', { name: '기본 배치로 되돌리기' }));
+
+    await act(async () => { await sleep(SAVE_DEBOUNCE_MS + 120); });
+    expect(deletes()).toHaveLength(1);
+    expect(puts()).toHaveLength(0);
+  });
+});
+
+describe("'내 그래프' 는 같은 캔버스에 들어간다", () => {
+  it('패널을 추가·삭제해도 나머지 배치가 그대로다', async () => {
+    mockDash({ saved: [{ id: 'live-share', x: 0, y: 0, w: 12, h: 2 }] });
+    await mountDash();
+
+    const before = [...LIVE, 'cache-usage', 'top-tools'].map(at);
+
+    await act(async () => { addPanel({ title: '내 그래프 1', metric: 'tokens', type: 'line', groupBy: 'none', days: 7 }); });
+    const added = document.querySelector('.dc-cell[data-pid^="cp-"]');
+    expect(added).not.toBeNull();
+    expect([...LIVE, 'cache-usage', 'top-tools'].map(at)).toEqual(before);
+
+    const id = (added as HTMLElement).dataset.pid!;
+    await act(async () => { removePanel(id); });
+    expect(document.querySelector(`.dc-cell[data-pid="${id}"]`)).toBeNull();
+    expect([...LIVE, 'cache-usage', 'top-tools'].map(at)).toEqual(before);
+  });
+
+  it('추가된 패널은 맨 아래에 붙는다 — 남의 자리를 밀어내지 않는다', async () => {
+    mockDash();
+    await mountDash();
+
+    const bottom = Math.max(...[...document.querySelectorAll<HTMLElement>('.dc-cell[data-pid]')]
+      .map((el) => Number(el.style.gridRow.split('/')[0])));
+
+    await act(async () => { addPanel({ title: '내 그래프 1', metric: 'cost', type: 'bar', groupBy: 'none', days: 7 }); });
+    const added = document.querySelector<HTMLElement>('.dc-cell[data-pid^="cp-"]')!;
+    expect(Number(added.style.gridRow.split('/')[0])).toBeGreaterThanOrEqual(bottom);
+  });
+});
+
+describe('상단 액션 · 툴바', () => {
+  it('셸의 #head-actions 에는 그래프 추가만 얹는다', async () => {
+    mockDash();
     await mountDash();
 
     expect(headSlot.textContent).toContain('그래프 추가');
-    expect(headSlot.textContent).toContain('레이아웃 초기화');
+    // 레이아웃 초기화는 localStorage 청소 + reload 였다. 이제 서버 DELETE 라 편집 툴바로 옮겼다.
+    expect(headSlot.textContent).not.toContain('초기화');
+  });
+
+  it('되돌리기는 편집 중에만 보인다 (읽는 화면에 되돌릴 것이 없다)', async () => {
+    mockDash();
+    await mountDash();
+
+    expect(screen.queryByRole('button', { name: '기본 배치로 되돌리기' })).not.toBeInTheDocument();
+    await openEditing();
+    expect(screen.getByRole('button', { name: '기본 배치로 되돌리기' })).toBeInTheDocument();
   });
 });
 
