@@ -2,12 +2,13 @@
 
 /*
  * 12열 자유 캔버스. 패널을 섹션 경계 없이 어디로든 끌어 옮기고 칸 단위로 크기를 바꾼다.
+ * **겹쳐도 된다** — 겹쳤다고 아무도 밀려나지 않는다(lib/dashLayout.ts 의 normalizeLayout 머리말).
  *
  * ── 이 컴포넌트는 수학을 하지 않는다 ─────────────────────────────────────
  *
- * 겹침 해소·경계 클램프·픽셀→칸 스냅은 전부 lib/dashLayout.ts 의 순수 함수가 진다. 여기 남는
- * 것은 DOM 과 포인터뿐이다. 그래서 "한 칸 어긋남" 류의 버그는 브라우저 없이 잡히고, 이 파일은
- * 이벤트 배선만 읽으면 된다.
+ * 경계 클램프·픽셀→칸 스냅은 전부 lib/dashLayout.ts 의 순수 함수가 진다. 여기 남는 것은 DOM 과
+ * 포인터뿐이다. 그래서 "한 칸 어긋남" 류의 버그는 브라우저 없이 잡히고, 이 파일은 이벤트 배선만
+ * 읽으면 된다.
  *
  * ── 자리의 주인은 부모다(controlled) ─────────────────────────────────────
  *
@@ -21,6 +22,12 @@
  *
  * 드래그 매 프레임마다 부르면 저장 훅이 프레임마다 PUT 을 쏜다. 그래서 이동 중에는 ghost 로만
  * 보여 주고, 커밋은 pointerup 한 번이다(값이 실제로 달라졌을 때만).
+ *
+ * ── 놓기 전 취소는 여기, 놓은 뒤 되돌리기는 저기 ──────────────────────────
+ *
+ * 끄는 도중의 Esc 는 이 파일이 받는다(그 판을 없던 일로 — 커밋이 아예 안 나간다). 이미 커밋된
+ * 배치를 되돌리는 Ctrl+Z 는 **배치의 주인인 lib/layoutPrefs.ts** 가 진다. 여기에 히스토리를
+ * 두면 위와 같은 이유로(사본 state) 툴바의 "기본 배치로 되돌리기" 같은 바깥 변경을 놓친다.
  */
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -93,6 +100,11 @@ function bumpCharts(): void {
   requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
 }
 
+/** 자리·크기가 같은가. 같으면 커밋할 것이 없다(순서만 바꿔 PUT 을 쏘지 않기 위한 판정). */
+function samePlace(a: PanelBox, b: PanelBox): boolean {
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+}
+
 function cellStyle(b: PanelBox): React.CSSProperties {
   // CSS Grid 의 열·행은 1부터 센다.
   return { gridColumn: `${b.x + 1} / span ${b.w}`, gridRow: `${b.y + 1} / span ${b.h}` };
@@ -113,10 +125,21 @@ export default function CanvasGrid({
   const sessionRef = useRef<Session | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [announce, setAnnounce] = useState('');
+  /*
+   * 지금 겨누고 있는 패널. 겹침을 허용하면 "누가 위에 보이나"가 곧 조작 가능성이므로, 잡거나
+   * 포커스한 패널은 **커밋 전에도** 즉시 위로 올라와야 한다(안 그러면 남의 카드 밑에서 끌게 된다).
+   * 커밋된 뒤의 앞뒤는 이 state 가 아니라 배치 **배열 순서**가 진다(아래 commit 주석).
+   */
+  const [raised, setRaised] = useState<string | null>(null);
 
-  // 배치는 렌더 중 파생 — 첫 프레임부터 옳다.
+  /*
+   * 배치는 렌더 중 파생 — 첫 프레임부터 옳다.
+   * **이 배열의 순서가 그리는 순서다**(뒤에 있는 것이 위에 보인다). resolveLayout 이 저장된 배열
+   * 순서를 그대로 물려주므로, 겹칠 때의 앞뒤가 서버에 저장된 채로 다음 방문까지 남는다.
+   */
   const boxes = resolveLayout(layout, items);
   const byId = new Map(boxes.map((b) => [b.id, b]));
+  const nodeById = new Map(items.map((it) => [it.id, it]));
 
   /*
    * window 리스너는 드래그가 시작될 때만 붙는다. 그 콜백이 최신 onLayoutChange 를 보게 ref 로
@@ -152,23 +175,50 @@ export default function CanvasGrid({
         && typeof el.hasPointerCapture === 'function' && el.hasPointerCapture(s.pointerId)) {
         el.releasePointerCapture(s.pointerId);
       }
-      if (!commit || !s.moved) return;
-      // 놓은 패널이 priorityId — 자리를 양보하는 쪽은 원래 있던 패널이다.
-      const next = normalizeLayout(s.snapshot.map((b) => (b.id === s.id ? s.ghost : b)), s.id);
-      if (sameLayout(next, s.snapshot)) return;   // 제자리에 놓았다 — 저장할 일이 없다.
+      if (!commit) return;
+      /*
+       * 겹쳐도 자리는 그대로 둔다 — 다른 패널은 이 커밋으로 한 칸도 움직이지 않는다.
+       * 다만 **순서는 맨 뒤로** 보낸다: 배열 뒤 = 위에 그려짐. 방금 만진 패널이 남의 카드 밑으로
+       * 들어가 버리면 다시 잡을 수도, 읽을 수도 없다. 이 순서가 그대로 저장되므로 다음 방문에도
+       * 앞뒤가 유지된다(z 필드 없이).
+       *
+       * 끌지 않고 눌렀다 놓기만 했으면(클릭) **앞으로 가져오기**다 — 자리는 그대로, 순서만 맨 뒤로.
+       * 겹침을 허용한 뒤 사람이 가려진 패널을 꺼내려 할 때 가장 먼저 하는 동작이 그것이다.
+       * 이미 맨 위면 sameLayout 이 걸러 PUT 이 나가지 않는다.
+       *
+       * ⚠ **완전히** 덮인 패널은 클릭으로 못 꺼낸다(클릭이 위 카드에 맞는다). 그 경우의 길은
+       *   탭 포커스 + Enter/Space(onKeyDown)와 툴바의 "겹침·빈 줄 정리"다.
+       */
+      const target = s.moved ? s.ghost : s.base;
+      const next = normalizeLayout([...s.snapshot.filter((b) => b.id !== s.id), target]);
+      if (sameLayout(next, s.snapshot)) return;   // 값도 순서도 그대로 — 저장할 일이 없다.
       commitRef.current(next);
-      bumpCharts();
+      if (!samePlace(target, s.base)) bumpCharts();   // 크기가 바뀐 경우에만 차트에 알린다.
     };
 
     const onUp = () => finish(true);
     const onCancel = () => finish(false);
+    /*
+     * 끄는 도중의 Esc 는 **그 판을 없던 일로 한다**(놓기 전 취소). 손을 떼야만 끝낼 수 있으면
+     * "잘못 잡았다"를 깨달은 사람이 할 수 있는 일은 원래 자리를 눈대중으로 되짚는 것뿐이고,
+     * 그건 대개 또 어긋난다. commit=false 라 onLayoutChange 가 아예 나가지 않는다.
+     */
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault();
+      ev.stopPropagation();   // 이 Esc 는 드래그의 것이다 — 뒤에 있는 모달·패널까지 닫지 않는다.
+      finish(false);
+      setAnnounce('이동을 취소했습니다 — 패널이 원래 자리로 돌아갔습니다');
+    };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('keydown', onKey, true);
     return () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('keydown', onKey, true);
     };
   }, [dragging]);
 
@@ -186,6 +236,7 @@ export default function CanvasGrid({
     if (!base || !root) return;
 
     const el = e.currentTarget;
+    setRaised(id);
     sessionRef.current = {
       id, mode, pointerId: e.pointerId,
       startX: e.clientX, startY: e.clientY,
@@ -202,18 +253,44 @@ export default function CanvasGrid({
 
   /*
    * 키보드 경로. 드래그 전용 UI 는 키보드 사용자에게 **기능이 통째로 없는 것**과 같다.
-   * ←/→/↑/↓ 한 칸 이동, Shift 를 더하면 한 칸 리사이즈. 매 키가 곧 커밋이다(드래그와 달리
-   * 중간 상태가 없다). 자리가 벽에 막혀 안 바뀌면 저장하지 않고 읽어 주기만 한다.
+   * ←/→/↑/↓ 한 칸 이동, Shift 를 더하면 한 칸 리사이즈, Enter·Space 는 앞으로 가져오기.
+   * 매 키가 곧 커밋이다(드래그와 달리 중간 상태가 없다). 자리가 벽에 막혀 안 바뀌면 저장하지
+   * 않고 읽어 주기만 한다.
    */
   const onKeyDown = (e: React.KeyboardEvent<HTMLElement>, it: CanvasItem) => {
     if (!editable) return;
-    const dir = ARROW[e.key];
-    if (!dir) return;
     const cur = byId.get(it.id);
     if (!cur) return;
+
+    /*
+     * Enter · Space = **앞으로 가져오기**. 마우스의 클릭과 같은 값을 내는 경로다.
+     *
+     * 이 경로는 편의가 아니라 **유일한 길**인 경우가 있다: 완전히 덮인 패널은 클릭이 위 카드에
+     * 맞으므로 포인터로는 영원히 꺼낼 수 없다. 탭으로 겨누면(onFocus 가 임시로 위로 올린다)
+     * 눈으로 확인한 뒤 Enter 로 확정한다.
+     */
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();   // Space 로 페이지가 스크롤되지 않게
+      setRaised(it.id);
+      const front = normalizeLayout([...boxes.filter((b) => b.id !== it.id), cur]);
+      setAnnounce(`${labelOf(it)} · 맨 앞으로 가져왔습니다`);
+      if (sameLayout(front, boxes)) return;   // 이미 맨 앞 — 저장할 일이 없다.
+      onLayoutChange(front);
+      return;
+    }
+
+    const dir = ARROW[e.key];
+    if (!dir) return;
     e.preventDefault();   // 화살표로 페이지가 스크롤되지 않게
+    setRaised(it.id);     // 키보드로 옮기는 패널도 위로 — 마우스와 같은 규칙이다.
     const moved = e.shiftKey ? resizeBox(cur, dir.x, dir.y) : moveBox(cur, dir.x, dir.y);
-    const next = normalizeLayout(boxes.map((b) => (b.id === it.id ? moved : b)), it.id);
+    /*
+     * 드래그와 같은 규칙 — 만진 패널이 배열 맨 뒤(= 화면 맨 위)로 간다. 단 **벽에 막혀 자리가
+     * 그대로면** 순서도 그대로다(그렇지 않으면 안 움직인 화살표가 저장을 부른다).
+     */
+    const next = samePlace(moved, cur)
+      ? boxes
+      : normalizeLayout([...boxes.filter((b) => b.id !== it.id), moved]);
     const applied = next.find((b) => b.id === it.id) ?? moved;
     setAnnounce(describeBox(labelOf(it), applied));
     if (sameLayout(next, boxes)) return;
@@ -232,11 +309,19 @@ export default function CanvasGrid({
         '--dc-gap': `${GRID_GAP}px`,
       } as React.CSSProperties}
     >
-      {items.map((it) => {
-        const box = byId.get(it.id);
-        if (!box) return null;   // items 안에 같은 id 가 두 번 있을 때만 — 첫 것만 그린다.
+      {/*
+        * **items 순서가 아니라 boxes 순서로 그린다.** 겹칠 때 뒤에 그려진 것이 위에 보이므로,
+        * 이 순서가 곧 앞뒤이고 그 순서는 서버에 저장된 배열 순서다(resolveLayout 머리말).
+        * key 가 id 라서 순서가 바뀌어도 React 는 노드를 새로 만들지 않고 옮긴다 — 차트가 다시
+        * 마운트되지 않는다(그건 "가끔 깜빡인다"로 보인다).
+        */}
+      {boxes.map((box) => {
+        const it = nodeById.get(box.id);
+        if (!it) return null;   // 있을 수 없다(boxes 는 items 에서 나왔다) — 방어적으로만.
         const isDragging = preview?.id === it.id && preview.active;
         const style = cellStyle(box);
+        // 겹쳤을 때 방금 만진 패널이 위에 보인다(끄는 중은 CSS 의 .dragging 이 더 위로 올린다).
+        if (raised === it.id) style.zIndex = 2;
         if (isDragging && preview && preview.mode === 'move') {
           // 이동은 손을 따라오게 보여 준다(칸 스냅된 목표는 ghost 가 말한다).
           // 리사이즈는 늘려 보여 주면 안의 내용이 찌그러지므로 ghost 만 움직인다.
@@ -253,6 +338,8 @@ export default function CanvasGrid({
             tabIndex={editable ? 0 : undefined}
             onPointerDown={editable ? (e) => startDrag(e, it.id, 'move') : undefined}
             onKeyDown={editable ? (e) => onKeyDown(e, it) : undefined}
+            /* 탭으로 겨눈 패널도 즉시 위로 — 가려진 패널을 눈으로 확인하며 옮길 수 있어야 한다. */
+            onFocus={editable ? () => setRaised(it.id) : undefined}
           >
             {it.node}
             {editable && (
@@ -270,8 +357,22 @@ export default function CanvasGrid({
         );
       })}
 
+      {/*
+        * 놓일 자리. **줄일 때도 보여야 한다** — ghost 가 패널보다 아래에 깔려 있으면 키울 때는
+        * 삐져나온 부분이 보이지만 줄일 때는 패널에 완전히 가려, 얼마나 줄어드는지 알 방법이
+        * 없었다(그 상태로는 "커질 때만 보인다"가 정확한 증상이다). 그래서 ghost 가 제일 위다.
+        *
+        * 숫자도 함께 말한다. 점선 사각형만으로는 "몇 칸인지"를 눈으로 세야 하는데, 리사이즈는
+        * 대개 "6칸으로 맞추고 싶다"는 조작이다.
+        */}
       {preview?.active && (
-        <div className="dc-cell ghost" style={cellStyle(preview.ghost)} aria-hidden="true" />
+        <div className={`dc-cell ghost ${preview.mode}`} style={cellStyle(preview.ghost)} aria-hidden="true">
+          <span className="dc-ghost-size">
+            {preview.mode === 'resize'
+              ? `${preview.ghost.w}칸 × ${preview.ghost.h}행`
+              : `${preview.ghost.x + 1}열 ${preview.ghost.y + 1}행`}
+          </span>
+        </div>
       )}
 
       {/* 키보드로 옮긴 자리를 소리로 읽어 준다 — 화면을 못 보면 이것 말고 확인할 방법이 없다. */}

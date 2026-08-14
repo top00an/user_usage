@@ -135,9 +135,21 @@ describe('드래그 — 놓는 순간 1회, 정수 칸으로', () => {
     expect(document.querySelector('.dc-cell.ghost')).toBeNull();
   });
 
-  it('제자리에 놓으면 저장하지 않는다 — 값이 같은데 PUT 을 쏘지 않게', () => {
+  /*
+   * 제자리에 놓는 것은 이제 "앞으로 가져오기"다(겹침 허용의 짝). 자리는 한 칸도 안 바뀌고
+   * 순서만 맨 뒤로 간다 — 그래서 **이미 맨 앞이면** 저장할 것이 없다.
+   */
+  it('제자리에 놓으면 자리는 그대로고 순서만 맨 앞으로 온다', () => {
     const onLayoutChange = mount();
     drag(cell('cost'), 6, 0); // 임계값은 넘지만 반 칸도 안 되는 거리
+    const next = onLayoutChange.mock.calls.at(-1)![0] as DashLayout;
+    expect(next.map((b) => b.id)).toEqual(['tokens', 'cost']);
+    expect(next.find((b) => b.id === 'cost')).toMatchObject({ x: 0, y: 0, w: 6, h: 3 });
+  });
+
+  it('이미 맨 앞인 패널을 제자리에 놓으면 저장하지 않는다 — 값도 순서도 그대로다', () => {
+    const onLayoutChange = mount();
+    drag(cell('tokens'), 6, 0);   // tokens 는 배열 마지막(=맨 앞)이다
     expect(onLayoutChange).not.toHaveBeenCalled();
   });
 
@@ -150,11 +162,155 @@ describe('드래그 — 놓는 순간 1회, 정수 칸으로', () => {
     expect(committed(onLayoutChange, 'cost')).toMatchObject({ x: 0, y: 0, w: 8, h: 4 });
   });
 
-  it('놓은 자리에 있던 패널이 비켜 준다 — 놓은 쪽이 이긴다', () => {
+  /*
+   * 크기를 **줄일 때도** 얼마나 줄어드는지 보여야 한다. ghost 가 패널 아래에 깔려 있던 판에서는
+   * 키울 때만 보였다(삐져나온 부분만 보이므로) — 그게 "줄일 때는 안 나온다"의 정체였다.
+   */
+  it('줄이는 중에도 미리보기가 보이고, 목표 크기를 숫자로 말한다', () => {
+    mount();
+    const handle = cell('cost').querySelector<HTMLElement>('.dc-handle')!;
+    drag(handle, -COL_STEP * 2, -ROW_STEP * 1, { drop: false });
+
+    const ghost = document.querySelector<HTMLElement>('.dc-cell.ghost');
+    expect(ghost).not.toBeNull();
+    // 6칸 3행에서 2칸·1행 줄였다 → 4칸 2행. 그 값이 화면에 글자로 있어야 한다.
+    expect(ghost!.textContent).toBe('4칸 × 2행');
+    expect(ghost!.style.gridColumn).toBe('1 / span 4');
+    expect(ghost!.style.gridRow).toBe('1 / span 2');
+  });
+
+  it('옮기는 중에는 목표 자리를 열·행으로 말한다', () => {
+    mount();
+    drag(cell('cost'), COL_STEP * 2, ROW_STEP * 3, { drop: false });
+    expect(document.querySelector('.dc-cell.ghost')?.textContent).toBe('3열 4행');
+  });
+
+  it('남의 자리에 겹쳐 놓아도 그 패널은 안 움직인다 (겹침 허용)', () => {
     const onLayoutChange = mount();
-    drag(cell('cost'), COL_STEP * 6, 0); // cost 를 tokens 자리로
+    drag(cell('cost'), COL_STEP * 6, 0); // cost 를 tokens 자리로 통째로 겹친다
     expect(committed(onLayoutChange, 'cost')).toMatchObject({ x: 6, y: 0 });
-    expect(committed(onLayoutChange, 'tokens').y).toBeGreaterThan(0);
+    // 예전에는 tokens 가 아래로 밀렸다. 그 밀림이 "혼자 배치된다"의 마지막 잔재였다.
+    expect(committed(onLayoutChange, 'tokens')).toMatchObject({ x: 6, y: 0, w: 6, h: 3 });
+  });
+
+  it('방금 만진 패널이 위로 온다 — 겹쳐도 다시 잡을 수 있다', () => {
+    mount();
+    drag(cell('cost'), COL_STEP * 6, 0);
+    expect(cell('cost').style.zIndex).toBe('2');
+    expect(cell('tokens').style.zIndex).toBe('');
+  });
+
+  /*
+   * 앞뒤(그리는 순서)는 z-index 가 아니라 **배열 순서**로 저장된다. 그래서 커밋된 배치의 맨 뒤에
+   * 방금 옮긴 패널이 있어야 하고, 화면도 그 순서로 그려져야 한다(뒤가 위).
+   */
+  it('커밋된 배치의 맨 뒤가 방금 옮긴 패널이다 — 앞뒤가 저장된다', () => {
+    const onLayoutChange = mount();
+    drag(cell('cost'), COL_STEP * 6, 0);
+    const next = onLayoutChange.mock.calls.at(-1)![0] as DashLayout;
+    expect(next.map((b) => b.id)).toEqual(['tokens', 'cost']);
+  });
+
+  it('화면은 배치 배열 순서로 그린다 — 뒤에 있는 것이 위에 보인다', () => {
+    mount({ layout: [
+      { id: 'tokens', x: 0, y: 0, w: 6, h: 3 },
+      { id: 'cost', x: 0, y: 0, w: 6, h: 3 },   // 겹쳐 있고, 뒤에 있으므로 위
+    ] });
+    const order = Array.from(document.querySelectorAll('.dc-cell[data-pid]')).map((el) => el.getAttribute('data-pid'));
+    expect(order).toEqual(['tokens', 'cost']);
+  });
+
+  it('벽에 막혀 자리가 안 바뀌면 순서도 안 바뀐다 (저장도 없다)', () => {
+    const onLayoutChange = mount();
+    fireEvent.keyDown(cell('cost'), { key: 'ArrowLeft' });   // 이미 0열
+    expect(onLayoutChange).not.toHaveBeenCalled();
+  });
+
+  it('탭으로 겨눈 패널도 위로 온다 — 가려진 패널을 보면서 옮길 수 있게', () => {
+    mount();
+    fireEvent.focus(cell('tokens'));
+    expect(cell('tokens').style.zIndex).toBe('2');
+  });
+
+  /*
+   * 클릭(끌지 않은 포인터)과 Enter/Space 는 **같은 값**을 낸다 — 앞으로 가져오기.
+   * 완전히 덮인 패널은 클릭이 위 카드에 맞으므로, 키보드 경로가 그때의 유일한 길이다.
+   */
+  it('클릭하면 앞으로 온다 — 끌지 않아도 순서가 맨 뒤(맨 위)로 간다', () => {
+    const onLayoutChange = mount({ layout: [
+      { id: 'cost', x: 0, y: 0, w: 6, h: 3 },
+      { id: 'tokens', x: 0, y: 0, w: 6, h: 3 },   // 겹쳐 있고 tokens 가 위
+    ] });
+    fireEvent.pointerDown(cell('cost'), { clientX: 100, clientY: 100, button: 0, pointerType: 'mouse', pointerId: 1 });
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 100, pointerId: 1 });
+
+    const next = onLayoutChange.mock.calls.at(-1)![0] as DashLayout;
+    expect(next.map((b) => b.id)).toEqual(['tokens', 'cost']);
+    expect(next.find((b) => b.id === 'cost')).toMatchObject({ x: 0, y: 0, w: 6, h: 3 });   // 자리는 그대로
+  });
+
+  it('패널 안의 버튼을 눌러도 순서는 바뀌지 않는다 — 그 클릭은 버튼의 것이다', () => {
+    const onLayoutChange = mount({ items: [
+      { id: 'cost', node: <button type="button">삭제</button>, defaultBox: { x: 0, y: 0, w: 6, h: 3 } },
+      ITEMS[1]!,
+    ] });
+    fireEvent.pointerDown(screen.getByRole('button', { name: '삭제' }), { clientX: 100, clientY: 100, button: 0, pointerType: 'mouse', pointerId: 1 });
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 100, pointerId: 1 });
+    expect(onLayoutChange).not.toHaveBeenCalled();
+  });
+
+  it('Enter 로도 앞으로 온다 (완전히 덮인 패널의 유일한 길)', () => {
+    const onLayoutChange = mount();
+    fireEvent.keyDown(cell('cost'), { key: 'Enter' });
+    const next = onLayoutChange.mock.calls.at(-1)![0] as DashLayout;
+    expect(next.map((b) => b.id)).toEqual(['tokens', 'cost']);
+    expect(screen.getByRole('status')).toHaveTextContent('비용 · 맨 앞으로 가져왔습니다');
+  });
+
+  it('Space 도 같은 값이고, 이미 맨 앞이면 저장하지 않는다', () => {
+    const onLayoutChange = mount();
+    fireEvent.keyDown(cell('tokens'), { key: ' ' });   // tokens 는 이미 마지막
+    expect(onLayoutChange).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent('토큰 · 맨 앞으로 가져왔습니다');
+  });
+
+  it('읽기 전용에서는 클릭도 Enter 도 순서를 바꾸지 않는다', () => {
+    const onLayoutChange = mount({ editable: false });
+    fireEvent.pointerDown(cell('cost'), { clientX: 100, clientY: 100, button: 0, pointerType: 'mouse', pointerId: 1 });
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 100, pointerId: 1 });
+    fireEvent.keyDown(cell('cost'), { key: 'Enter' });
+    expect(onLayoutChange).not.toHaveBeenCalled();
+  });
+
+  /*
+   * "혼자 자동으로 배치된다"의 정체가 여기였다 — 아래 빈 곳에 놓으면 위로 끌려 올라가고,
+   * 겹치지도 않은 옆 패널까지 따라 움직였다. 그 둘을 이 두 테스트가 못 박는다.
+   */
+  it('아래 빈 곳에 놓으면 그 자리에 남는다 — 위로 끌려 올라가지 않는다', () => {
+    const onLayoutChange = mount();
+    drag(cell('cost'), 0, ROW_STEP * 5);
+    expect(committed(onLayoutChange, 'cost')).toMatchObject({ x: 0, y: 5, w: 6, h: 3 });
+  });
+
+  it('겹치지 않으면 다른 패널은 움직이지 않는다', () => {
+    const onLayoutChange = mount();
+    drag(cell('cost'), 0, ROW_STEP * 5);
+    // tokens 는 손대지 않았다 — 옆 패널이 따라 움직이면 사람은 그것을 "혼자 재배치됐다"로 읽는다.
+    expect(committed(onLayoutChange, 'tokens')).toMatchObject({ x: 6, y: 0, w: 6, h: 3 });
+  });
+
+  it('놓기 전 Esc 는 그 판을 없던 일로 한다 — 저장이 나가지 않는다', () => {
+    const onLayoutChange = mount();
+    drag(cell('cost'), COL_STEP * 3, ROW_STEP * 2, { drop: false });
+    expect(document.querySelector('.dc-cell.ghost')).not.toBeNull();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onLayoutChange).not.toHaveBeenCalled();
+    expect(document.querySelector('.dc-cell.ghost')).toBeNull();
+    expect(cell('cost').className).not.toContain('dragging');
+    // 이어서 손을 떼도 취소된 판이 되살아나지 않는다.
+    fireEvent.pointerUp(window, { pointerId: 1 });
+    expect(onLayoutChange).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent('이동을 취소했습니다');
   });
 });
 
@@ -208,8 +364,8 @@ describe('마우스 없이도 된다 (키보드 · aria-live)', () => {
       items: [ITEMS[1]!],
       layout: [{ id: 'tokens', x: 4, y: 2, w: 3, h: 2 }],
     });
-    // y=2 는 위가 비어 있으므로 compact 로 첫 행까지 끌어올려진다 — 이름도 그 결과를 말해야 한다.
-    expect(cell('tokens')).toHaveAttribute('aria-label', '토큰 · 5열 1행 · 3칸 폭 · 2행');
+    // 위가 비어 있어도 저장된 y=2(사람 단위 3행)에 그대로 있다 — 이름도 그 사실을 말해야 한다.
+    expect(cell('tokens')).toHaveAttribute('aria-label', '토큰 · 5열 3행 · 3칸 폭 · 2행');
   });
 
   it('label 이 없으면 id 를 읽는다 — 그래도 침묵하지는 않는다', () => {

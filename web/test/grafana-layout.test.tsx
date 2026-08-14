@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import GrafanaDash from '@/components/grafana/GrafanaDash';
 import { Donut } from '@/components/charts';
@@ -387,6 +387,190 @@ describe('되돌리기 — 서버 저장을 지운다', () => {
     await act(async () => { await sleep(SAVE_DEBOUNCE_MS + 120); });
     expect(deletes()).toHaveLength(1);
     expect(puts()).toHaveLength(0);
+  });
+});
+
+/*
+ * ── 되돌리기(Ctrl+Z) ──────────────────────────────────────────────────────
+ *
+ * 잘못 놓았을 때 사람이 할 수 있는 일이 "기본 배치로 되돌리기"(전부 날림)뿐이면, 한 칸 어긋난
+ * 대가로 나머지 배치를 통째로 잃는다. 그래서 한 단계 되돌리기가 있고, 되돌린 결과는 **서버까지**
+ * 간다 — 화면에서만 되돌아가면 다음 방문에 옛 배치가 되살아난다.
+ */
+const SAVED_SHARE: DashLayout = [{ id: 'live-share', x: 0, y: 0, w: 12, h: 2 }];
+
+/** Ctrl+Z. window 리스너가 받으므로 포커스가 어디에 있든 같다. */
+function pressUndo() {
+  act(() => { fireEvent.keyDown(window, { key: 'z', ctrlKey: true }); });
+}
+
+describe('되돌리기 — 한 단계 되돌린다 (Ctrl+Z)', () => {
+  it('드래그를 되돌리면 원래 자리로 돌아오고, 보낼 것이 없으므로 PUT 도 안 나간다', async () => {
+    const { puts } = mockDash({ saved: SAVED_SHARE });
+    await mountDash();
+    await openEditing();
+
+    const before = at('live-share');
+    drag(panel('live-share'), COL_STEP * 2, ROW_STEP * 3);
+    expect(at('live-share')).not.toBe(before);
+
+    pressUndo();
+    expect(at('live-share')).toBe(before);
+
+    // 디바운스 안에서 되돌렸다 — 서버가 이미 들고 있는 값이라 PUT 이 나갈 이유가 없다.
+    await act(async () => { await sleep(SAVE_DEBOUNCE_MS + 120); });
+    expect(puts()).toHaveLength(0);
+  });
+
+  it('이미 저장된 뒤에 되돌리면 옛 배치를 다시 저장한다 — 다음 방문에도 되돌아가 있다', async () => {
+    const { puts } = mockDash({ saved: SAVED_SHARE });
+    await mountDash();
+    await openEditing();
+
+    // 12칸을 다 쓰는 패널이라 가로로는 갈 곳이 없다 — 세로로 옮긴다.
+    drag(panel('live-share'), 0, ROW_STEP * 3);
+    await act(async () => { await sleep(SAVE_DEBOUNCE_MS + 120); });
+    expect(puts()).toHaveLength(1);
+
+    pressUndo();
+    await act(async () => { await sleep(SAVE_DEBOUNCE_MS + 120); });
+    expect(puts()).toHaveLength(2);
+    const body = puts()[1]!.body as { layout: DashLayout };
+    expect(body.layout.find((b) => b.id === 'live-share')).toMatchObject({ x: 0, y: 0, w: 12, h: 2 });
+  });
+
+  it('"기본 배치로 되돌리기" 도 되돌릴 수 있다 — 전부 날린 것이 사고여도 복구된다', async () => {
+    const { puts, deletes } = mockDash({ saved: SAVED_SHARE });
+    await mountDash();
+    await openEditing();
+
+    await userEvent.click(screen.getByRole('button', { name: '기본 배치로 되돌리기' }));
+    await waitFor(() => expect(deletes()).toHaveLength(1));
+    expect(panel('live-share').style.gridColumn).toBe('11 / span 2');   // 기본 배치
+
+    pressUndo();
+    expect(panel('live-share').style.gridColumn).toBe('1 / span 12');   // 저장돼 있던 배치
+    await act(async () => { await sleep(SAVE_DEBOUNCE_MS + 120); });
+    await waitFor(() => expect(puts()).toHaveLength(1));
+  });
+
+  it('되돌릴 것이 없으면 버튼이 비활성이고, 한 번 옮기면 살아난다', async () => {
+    mockDash();
+    await mountDash();
+    await openEditing();
+
+    const btn = () => screen.getByRole('button', { name: '되돌리기 (Ctrl+Z)' });
+    expect(btn()).toBeDisabled();
+    drag(panel('live-sessions'), COL_STEP * 2, 0);
+    expect(btn()).toBeEnabled();
+  });
+
+  /*
+   * 되돌리기는 **이 세션에서 자기가 한 일**만 되돌린다. 그래서 편집 모드로 가두지 않는다 —
+   * 커스텀 패널의 ✕ 는 읽는 화면에서도 눌리고, 지운 직후에 되돌릴 방법이 없으면 그 그래프
+   * 정의는 그대로 사라진다. 대신 아무것도 안 한 화면에서는 Ctrl+Z 가 아무 일도 하지 않는다.
+   */
+  it('막 연 화면에서 Ctrl+Z 를 눌러도 아무 일도 없다 — 스택에 남의 배치는 없다', async () => {
+    const { puts, deletes } = mockDash({ saved: SAVED_SHARE });
+    await mountDash();
+    const before = at('live-share');
+
+    pressUndo();
+    await act(async () => { await sleep(SAVE_DEBOUNCE_MS + 120); });
+
+    expect(at('live-share')).toBe(before);
+    expect(puts()).toHaveLength(0);
+    expect(deletes()).toHaveLength(0);
+  });
+
+  it('편집을 닫은 뒤에도 방금 한 배치 변경은 되돌린다', async () => {
+    mockDash({ saved: SAVED_SHARE });
+    await mountDash();
+    await openEditing();
+    const before = at('live-share');
+    drag(panel('live-share'), 0, ROW_STEP * 3);
+    expect(at('live-share')).not.toBe(before);
+
+    await userEvent.click(screen.getByRole('button', { name: '편집 완료' }));
+    pressUndo();
+    expect(at('live-share')).toBe(before);
+  });
+
+  it('지운 커스텀 패널이 정의·순서 그대로 돌아온다 (읽는 화면에서도)', async () => {
+    mockDash();
+    await mountDash();
+    await act(async () => { addPanel({ title: '내 그래프 A', metric: 'tokens', type: 'line', groupBy: 'none', days: 7 }); });
+    await act(async () => { addPanel({ title: '내 그래프 B', metric: 'cost', type: 'bar', groupBy: 'none', days: 7 }); });
+    expect(screen.getByText('내 그래프 A')).toBeInTheDocument();
+
+    // 앞의 것을 지운다 — 순서까지 되돌아오는지 보려면 마지막 것이면 안 된다.
+    await userEvent.click(screen.getAllByTitle(/^삭제/)[0]!);
+    expect(screen.queryByText('내 그래프 A')).not.toBeInTheDocument();
+
+    pressUndo();
+    expect(screen.getByText('내 그래프 A')).toBeInTheDocument();
+    // '내 그래프'만 본다 — 붙박이 패널 제목까지 세면 이 단정이 화면 문구에 묶인다.
+    const titles = Array.from(document.querySelectorAll('.gpanel-head'))
+      .map((el) => el.textContent?.replace('✕', '') ?? '')
+      .filter((t) => t.startsWith('내 그래프'));
+    expect(titles).toEqual(['내 그래프 A', '내 그래프 B']);   // 뒤에 붙지 않고 있던 자리로
+  });
+
+  it('되돌리기는 한 벌이다 — 지우고 옮긴 뒤 되돌리면 옮긴 것부터 돌아온다', async () => {
+    mockDash({ saved: SAVED_SHARE });
+    await mountDash();
+    await act(async () => { addPanel({ title: '내 그래프 A', metric: 'tokens', type: 'line', groupBy: 'none', days: 7 }); });
+    await openEditing();
+
+    await userEvent.click(screen.getByTitle(/^삭제/));      // ① 패널 삭제
+    const before = at('live-share');
+    drag(panel('live-share'), 0, ROW_STEP * 3);             // ② 배치 변경
+    expect(at('live-share')).not.toBe(before);
+
+    pressUndo();                                           // ②가 먼저 돌아온다
+    expect(at('live-share')).toBe(before);
+    expect(screen.queryByText('내 그래프 A')).not.toBeInTheDocument();
+
+    pressUndo();                                           // 그다음이 ①
+    expect(screen.getByText('내 그래프 A')).toBeInTheDocument();
+  });
+});
+
+describe('빈 줄 정리 — 자동이 아니라 버튼이다', () => {
+  it('아래로 옮겨 생긴 빈 줄을 누를 때에만 걷어낸다', async () => {
+    mockDash({ saved: SAVED_SHARE });
+    await mountDash();
+    await openEditing();
+
+    const before = at('live-share');
+    drag(panel('live-share'), 0, ROW_STEP * 4);
+    const moved = at('live-share');
+    expect(moved).not.toBe(before);        // 놓은 자리에 그대로 남는다(자동 정리 없음)
+
+    await userEvent.click(screen.getByRole('button', { name: '겹침·빈 줄 정리' }));
+    expect(at('live-share')).not.toBe(moved);   // 눌렀을 때에만 올라온다
+  });
+
+  it('빈 줄 정리도 되돌릴 수 있다 — 눌러 보기 무섭지 않아야 한다', async () => {
+    mockDash({ saved: SAVED_SHARE });
+    await mountDash();
+    await openEditing();
+
+    drag(panel('live-share'), 0, ROW_STEP * 4);
+    const moved = at('live-share');
+    await userEvent.click(screen.getByRole('button', { name: '겹침·빈 줄 정리' }));
+    expect(at('live-share')).not.toBe(moved);
+
+    pressUndo();
+    expect(at('live-share')).toBe(moved);
+  });
+
+  it('편집 중에만 보인다 — 읽는 화면에는 정리할 것이 없다', async () => {
+    mockDash();
+    await mountDash();
+    expect(screen.queryByRole('button', { name: '겹침·빈 줄 정리' })).not.toBeInTheDocument();
+    await openEditing();
+    expect(screen.getByRole('button', { name: '겹침·빈 줄 정리' })).toBeInTheDocument();
   });
 });
 

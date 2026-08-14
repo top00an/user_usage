@@ -19,9 +19,20 @@ function Delta({ pct, isNew }: { pct: number | null; isNew: boolean }) {
   if (isNew) return <span className="help">신규</span>;
   if (pct == null) return <span className="muted">—</span>;
   const up = pct >= 0;
-  // 비용 증가는 주의(빨강), 감소는 안심(초록). 색이 없어도 부호로 읽히게 화살표를 둔다.
+  /*
+   * 비용 증가는 주의(빨강), 감소는 안심(초록). 색이 없어도 부호로 읽히게 화살표를 둔다.
+   *
+   * ⚠ 여기는 `var(--danger, #c0392b)` 였다. **`--danger` 는 이 저장소에 없는 토큰이다**
+   * (오류색 이름은 `--err`). 그래서 폴백 `#c0392b` 가 **항상** 적용됐고, 다크 배경에서 대비가
+   * 3.22:1 — 제대로 된 `--err`(#f87171)의 6.33:1 절반이다. 비용이 **늘었다**고 경고하는 빨강이
+   * 이 화면에서 가장 안 읽히는 글자였다.
+   *
+   * 폴백은 일부러 지운다. 폴백을 남기면 다음 오타도 똑같이 "그럭저럭 보이는 색"으로 조용히
+   * 살아남아 아무도 눈치채지 못한다 — 토큰 이름이 틀리면 색이 사라져 바로 드러나는 편이 낫다.
+   * (`--danger` 를 새로 정의하지 않는다: `--err` 와 두 벌이 되어 다음에 둘 중 하나만 고쳐진다.)
+   */
   return (
-    <span style={{ color: up ? 'var(--danger, #c0392b)' : 'var(--ok, #1e8e3e)' }}>
+    <span style={{ color: up ? 'var(--err)' : 'var(--ok)' }}>
       {up ? '▲' : '▼'} {pctOf(Math.abs(pct) / 100)}
     </span>
   );

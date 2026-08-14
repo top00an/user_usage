@@ -230,6 +230,13 @@ export default function UserSheet({
         서버 거부·사고는 **시트 안에서** 뜬다. role="alert" 라 스크린리더가 즉시 읽는다.
       */}
       {alert && (
+        /*
+         * ⚠ 이 인라인 style 은 취향이 아니라 **클래스가 없어서** 남아 있다. "오류 톤 카드"(빨간
+         * 테두리 + 아주 옅은 빨강 바탕)는 이 파일에서만 두 번 쓰는데(여기와 아래 위험 구역),
+         * globals.css 에 그 이름이 없다. 토큰은 제대로 쓰고 있으므로(--err-bd / --err) 다크·라이트
+         * 는 따라오지만, 두 곳이 **각자** 같은 값을 들고 있어 한쪽만 바뀌는 날이 온다.
+         * → 새 클래스(예: `.card.err`)를 만드는 것은 계약 변경이라 이번 범위 밖이다. 사실만 남긴다.
+         */
         <div
           className="card mt-sm"
           role="alert"
@@ -299,7 +306,10 @@ export default function UserSheet({
       ) : (
         <>
           <div className="row mt-sm">
-            <label className="help" htmlFor={roleId}>역할</label>
+            {/* 라벨에서 `.help` 를 뗀다 — 그 클래스는 **보조 설명**(--fg-faint / .78rem)이라,
+                라벨과 그 아래 설명문이 글자 크기·굵기·색까지 하나도 다르지 않게 된다. 라벨의
+                모양은 globals.css 의 `.row > label` 이 준다(아래 세 라벨도 같다). */}
+            <label htmlFor={roleId}>역할</label>
             <select
               id={roleId}
               value={role}
@@ -319,8 +329,17 @@ export default function UserSheet({
               역할 변경
             </button>
           </div>
-          {roleReason && <p className="help txt-warn mt-sm" id={reasonRoleId}>{roleReason}</p>}
-          {sameRole && <p className="help txt-warn mt-sm">지금과 같은 역할입니다 — 바꿀 역할을 먼저 고르세요.</p>}
+          {/*
+            ── 왜 하나는 status 이고 하나는 alert 인가 ────────────────────────────
+            사전 거부 사유는 시트를 **열 때부터** 그 자리에 있는 상시 안내다. 게다가 select·버튼이
+            이미 aria-describedby 로 이 문단을 가리키므로(위 :aria-describedby), 포커스만 가면
+            읽힌다 — 낭독을 끊을 이유가 없다. role="status" 로 존재만 알린다.
+            '같은 역할' 은 반대다. **버튼을 누른 뒤에 새로 나타나는 판단 근거**라 AddUserForm 의
+            기준선(누른 뒤 나타나는 근거는 전부 role="alert")을 그대로 탄다. 이게 없으면 화면을
+            못 보는 사람에게는 [역할 변경] 을 눌렀는데 **아무 일도 일어나지 않는다.**
+          */}
+          {roleReason && <p className="help txt-warn mt-sm" id={reasonRoleId} role="status">{roleReason}</p>}
+          {sameRole && <p className="help txt-warn mt-sm" role="alert">지금과 같은 역할입니다 — 바꿀 역할을 먼저 고르세요.</p>}
           <p className="help mt-sm">
             관리자는 사용자·역할·팀·전체 키를 관리할 수 있습니다. 역할을 바꾸면 그 사람의 로그인
             세션이 즉시 끊깁니다.
@@ -331,7 +350,7 @@ export default function UserSheet({
       {/* ── 팀 (A급: 완전 복구 → 확인 없음) ── */}
       <h4 className="mt">팀</h4>
       <div className="row mt-sm">
-        <label className="help" htmlFor={teamId}>팀</label>
+        <label htmlFor={teamId}>팀</label>
         <input
           id={teamId}
           type="text"
@@ -365,7 +384,7 @@ export default function UserSheet({
       ) : (
         <>
           <div className="row mt-sm">
-            <label className="help" htmlFor={pwId}>새 비밀번호</label>
+            <label htmlFor={pwId}>새 비밀번호</label>
             <input
               id={pwId}
               type={showPw ? 'text' : 'password'}
@@ -391,6 +410,8 @@ export default function UserSheet({
 
       {/* ── 위험 구역 (C급: 복구 불가 → 이름 재입력) ── */}
       <div style={{ borderTop: '1px solid var(--border-soft)', marginTop: 20, paddingTop: 16 }}>
+        {/* 위 알림 카드와 **같은 인라인**이다 — 같은 이유(오류 톤 카드에 클래스가 없다)로 남는다.
+            두 벌이라는 사실이 문제고, 그것을 지우려면 클래스를 새로 만들어야 한다(범위 밖). */}
         <div
           className="card"
           style={{ borderColor: 'var(--err-bd)', background: 'color-mix(in srgb, var(--err) 7%, transparent)' }}
@@ -404,7 +425,10 @@ export default function UserSheet({
                 <li>이미 수집된 사용량은 {user.username} 이름으로 그대로 남습니다.</li>
                 <li>{keySentence}</li>
               </ul>
-              <label className="help mt" htmlFor={echoId} style={{ display: 'block' }}>
+              {/* 여기는 `.row` 밖이라 위 라벨들과 달리 기본 본문 크기가 된다 — 그래야 맞다.
+                  되돌릴 수 없는 동작의 **지시문**이고, 바로 아래 `.help` 한 줄(정확히 일치해야
+                  한다)이 그 보조 설명이다. 둘이 같은 글자면 무엇이 지시인지 알 수 없다. */}
+              <label className="mt" htmlFor={echoId} style={{ display: 'block' }}>
                 확인하려면 사용자 이름을 그대로 입력하세요
               </label>
               <input
@@ -427,6 +451,15 @@ export default function UserSheet({
                 <button type="button" className="ghost" disabled={busy === 'delete'} onClick={() => { setStage(null); setEcho(''); }}>
                   취소
                 </button>
+                {/*
+                 * ⚠ `minHeight: 44` 는 **우리 자체 기준**이고, 그 기준이 CSS 가 아니라 이 파일의
+                 * 인라인 두 곳에만 산다. WCAG 2.2 (2.5.8 Target Size, Minimum, AA)가 요구하는 값은
+                 * **24×24 CSS px** 이고, 44 는 그보다 훨씬 크게 잡은 값이다 — 되돌릴 수 없는
+                 * 버튼이라 실수로 스치는 손가락이 눌러서는 안 되고, 반대로 누르려는 손가락은
+                 * 한 번에 닿아야 한다(iOS HIG 44pt · Material 48dp 와 같은 근거).
+                 * 규칙이 아니라 예외로 남아 있다는 것이 문제다: 다음에 생기는 파괴 버튼은 아무도
+                 * 이 숫자를 모른다. 클래스·토큰으로 올리는 것은 계약 변경이라 이번 범위 밖이다.
+                 */}
                 <button
                   type="button"
                   className="danger"
@@ -449,6 +482,8 @@ export default function UserSheet({
                 {' '}{keySentence}
               </p>
               <div className="row mt" style={{ justifyContent: 'flex-end' }}>
+                {/* 위 삭제 확정 버튼과 같은 자체 기준 44px 이다(WCAG 2.2 요구치는 24×24) —
+                    같은 값이 두 곳에 손으로 적혀 있다는 사실을 여기에도 남긴다. */}
                 <button
                   type="button"
                   className="danger"
@@ -460,7 +495,9 @@ export default function UserSheet({
                   사용자 삭제
                 </button>
               </div>
-              {deleteReason && <p className="help txt-warn mt-sm" id={reasonDeleteId}>{deleteReason}</p>}
+              {/* 위 roleReason 과 같은 성질(상시 안내 + aria-describedby)이라 같은 role 을 준다 —
+                  둘 중 하나만 표시가 있으면 그 차이를 다음 사람이 규칙으로 읽는다. */}
+              {deleteReason && <p className="help txt-warn mt-sm" id={reasonDeleteId} role="status">{deleteReason}</p>}
             </>
           )}
         </div>

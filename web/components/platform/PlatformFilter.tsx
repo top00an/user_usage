@@ -48,9 +48,13 @@ export default function PlatformFilter({
   return (
     <div className="pf-bar">
       <label htmlFor="platform-filter">플랫폼</label>
+      {/*
+        * 클래스를 주지 않는다 — 전역 `input, select, textarea` 규칙이 받는다.
+        * `.builder-input` 은 차트 빌더 모달 전용이라 여기서 빌려 쓰면 이 칸만 높이가
+        * 어긋나고 채움(`--surface`)이 카드 배경과 충돌한다. 너비는 `.pf-bar select` 가 잡는다.
+        */}
       <select
         id="platform-filter"
-        className="builder-input"
         value={known ? cur : ''}
         onChange={(e) => setPlatformFilter(e.target.value)}
       >

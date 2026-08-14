@@ -27,9 +27,20 @@
 import { useEffect, useRef } from 'react';
 import * as echarts from 'echarts';
 
+/*
+ * ── `label` 은 이 차트의 **이름**이다 ────────────────────────────────────
+ *
+ * 이 래퍼는 `aria-label="차트"` 를 못 박고 있었다. 대시보드에는 이 컴포넌트가 11개 있고,
+ * canvas 라 안에는 읽을 텍스트가 한 글자도 없다 — 스크린리더로 화면을 훑으면 **"차트, 이미지"가
+ * 11번** 들린다. 목록에서 원하는 차트로 건너뛸 방법이 없다는 뜻이다.
+ *
+ * 호출부는 이미 제목 문자열을 손에 들고 있다(`<Panel title="일별 토큰 추이">`) — 그걸 내려받는다.
+ * **기본값은 남긴다**: 제목이 없는 호출부(CustomPanelView 등)가 무변경으로 컴파일돼야 하고,
+ * 이름이 없는 `role="img"` 는 이름이 나쁜 것보다 더 나쁘다.
+ */
 export default function EChart({
-  option, height = 160, className,
-}: { option: echarts.EChartsCoreOption; height?: number; className?: string }) {
+  option, height = 160, className, label,
+}: { option: echarts.EChartsCoreOption; height?: number; className?: string; label?: string }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
 
@@ -57,7 +68,7 @@ export default function EChart({
       className={className ? `fillv ${className}` : 'fillv'}
       style={{ width: '100%', minHeight: height }}
       role="img"
-      aria-label="차트"
+      aria-label={label ?? '차트'}
     />
   );
 }

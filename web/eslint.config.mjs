@@ -7,7 +7,15 @@ import nextTypescript from 'eslint-config-next/typescript';
  * 깨지지 않고, 나중에 비싸게 돌아오는" 종류라 사람이 놓친다.
  */
 const config = [
-  { ignores: ['.next/**', 'out/**', 'node_modules/**', 'next-env.d.ts', '.verify/**'] },
+  /*
+   * 산출물·도구 디렉터리는 린트하지 않는다.
+   *
+   * `.claude/**` 는 에이전트 스캐폴딩이다(스킬 스크립트·그 백업). git 은 이미 무시하지만
+   * eslint 는 .gitignore 를 보지 않으므로, 이 줄이 없으면 **우리 코드가 아닌 파일 때문에**
+   * 게이트가 빨간불이 된다(실측: 남의 스킬 스크립트에서 18 error/30 warning).
+   * `.verify-canvas/**` 는 실물 검증 스크린샷 자리다(scripts/verify-canvas.mjs).
+   */
+  { ignores: ['.next/**', 'out/**', 'node_modules/**', 'next-env.d.ts', '.verify/**', '.verify-canvas/**', '.claude/**'] },
   ...next,
   ...nextCoreWebVitals,
   ...nextTypescript,

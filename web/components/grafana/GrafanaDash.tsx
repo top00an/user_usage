@@ -20,7 +20,7 @@
  * 화면이 "안 썼다"고 **단정**하고(도넛은 합계 0 을 균등 분할로 그려 가짜 비율까지 만든다),
  * 그래서 값이 없는 패널은 차트 대신 `미수집` 안내를 띄운다 — 가짜 숫자 금지.
  */
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { getSummary, getSeats, getDev, getPlatforms, getLeaderboard } from '@/lib/api';
 import { softly, useResource } from '@/hooks/useResource';
@@ -34,13 +34,14 @@ import { COST_DISCLAIMER, COST_LABEL, COST_WHY } from '@/lib/costLabels';
 import EChart from '@/components/charts/EChart';
 import CanvasGrid, { type CanvasItem } from './CanvasGrid';
 import { useDashLayout, type SaveStatus } from '@/lib/layoutPrefs';
-import { areaOption, gaugeOption, donutOption, barOption, hasValues, hasSeriesValues, short, fmtInt } from './options';
+import { PALETTE, areaOption, gaugeOption, donutOption, barOption, hasValues, hasSeriesValues, short, fmtInt } from './options';
 import ChartBuilder from './ChartBuilder';
 import CustomPanelView from './CustomPanelView';
 import {
-  removePanel, subscribePanels, panelsSnapshot, takeBuilderPrefill,
+  removePanel, insertPanel, subscribePanels, panelsSnapshot, takeBuilderPrefill,
   type CustomPanel,
 } from '@/lib/customPanels';
+import { compactLayout, resolveLayout, overlappingIds, type DashLayout } from '@/lib/dashLayout';
 
 interface Data {
   summary: Summary | null;
@@ -51,6 +52,39 @@ interface Data {
 }
 
 const usd = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/*
+ * ── 계열 색은 인덱스가 아니라 이름으로 부른다 ────────────────────────────
+ *
+ * 이 파일에는 `options.ts` 의 `PALETTE` 에서 뽑은 색이 **10곳 인라인 문자열**로 박혀 있었다
+ * (`#73bf69` · `#5794f2` · `#e0523e`). 팔레트를 한 벌 더 들고 있는 셈이라, 팔레트를 고쳐도
+ * 이 열 자리는 옛 색으로 남는다.
+ *
+ * 그렇다고 `PALETTE[2]` 로만 바꾸면 더 나쁜 쪽으로 조용해진다: 다음 사람이 팔레트 순서를 한 칸
+ * 옮기는 순간 '추가'가 빨강, '삭제'가 초록이 된다 — 화면은 멀쩡히 그려지고 **뜻만 뒤집힌다**.
+ * 색이 뜻을 지는 자리에서는 인덱스가 아니라 이름이 계약이다.
+ *
+ * 짝을 이루는 규칙: 초록은 **나온 것·아낀 것**(출력·캐시읽기·추가된 줄), 파랑은 **들어간 것·
+ * 새로 만든 것**(입력·캐시생성), 빨강은 **줄어든 것**(삭제된 줄) 하나뿐이다.
+ * 색만으로 뜻을 전달하지는 않는다 — 모든 계열에 범례 이름이 함께 있다(options.ts 의 legend).
+ */
+const SERIES = {
+  added: PALETTE[2]!,        // 추가된 줄
+  removed: PALETTE[6]!,      // 삭제된 줄
+  input: PALETTE[0]!,        // 입력 토큰
+  output: PALETTE[2]!,       // 출력 토큰
+  cacheRead: PALETTE[2]!,    // 캐시읽기 — 아낀 쪽
+  cacheCreate: PALETTE[0]!,  // 캐시생성 — 새로 쓴 쪽
+  tokens: PALETTE[2]!,       // 토큰 합계(단일 계열)
+  sessions: PALETTE[2]!,     // 세션 수(단일 계열)
+} as const;
+
+/*
+ * 게이지 호(arc) 색은 **계열이 아니라 타일 장식**이다 — 옆의 스탯 타일 톤(t-teal · t-blue)과
+ * 맞추는 것이 전부고, 어떤 값을 뜻하지 않는다(값은 게이지 안 숫자가 말한다). 그래서 SERIES 와
+ * 섞지 않는다: `캐시읽기 비중` 게이지가 파랑인 것을 '캐시생성'으로 이름 붙이면 그 이름이 거짓말이 된다.
+ */
+const GAUGE_ARC = { teal: PALETTE[2]!, blue: PALETTE[0]! } as const;
 
 /*
  * ── 기본 배치(defaultBox) ────────────────────────────────────────────────
@@ -151,8 +185,9 @@ function DonutPanel({
 }: { title: string; rows: { name: string; value: number }[]; why: string; height?: number }) {
   return (
     <Panel title={title}>
+      {/* 차트의 접근 이름은 패널 제목이다 — 안 주면 도넛 네 개가 전부 "차트, 이미지"로 들린다. */}
       {hasValues(rows)
-        ? <EChart option={donutOption(rows)} height={height} />
+        ? <EChart option={donutOption(rows)} height={height} label={title} />
         : <NoData height={height} why={why} />}
     </Panel>
   );
@@ -162,7 +197,10 @@ function StatTile({ tone, k, v, s, title }: { tone: string; k: string; v: string
   return (
     <div className={`gstat ${tone}`} title={title}>
       <span className="gstat-k">{k}</span>
-      <span className="gstat-v num">{v}</span>
+      {/* `num` 이 붙어 있었지만 CSS 의 그 규칙은 `td.num, th.num`(표 셀 우측 정렬)뿐이라 span 에는
+          아무 효과가 없었다. 타일은 세로 flex 라 왼쪽 정렬이 의도한 모습이고(.gstat-k 와 줄이
+          맞는다), 우측 정렬은 표에서만 뜻이 있다 — 그래서 지운다. */}
+      <span className="gstat-v">{v}</span>
       {s && <span className="gstat-s">{s}</span>}
     </div>
   );
@@ -183,7 +221,8 @@ function GaugeTile({ tone, label, value, color }: { tone: string; label: string;
   return (
     <div className={`gstat ${tone} gstat-gauge`}>
       <span className="gstat-k">{label}</span>
-      <EChart option={gaugeOption(value, color)} height={90} />
+      {/* 타일 라벨이 곧 이 게이지의 이름이다(값은 canvas 안에 그려져 소리로는 안 읽힌다). */}
+      <EChart option={gaugeOption(value, color)} height={90} label={label} />
     </div>
   );
 }
@@ -200,6 +239,20 @@ function GaugeTile({ tone, label, value, color }: { tone: string; label: string;
  * ⚠ 이 컴포넌트는 **모듈 스코프에 있어야 한다.** 렌더 함수 안에서 선언하면 매 렌더마다 새
  * 타입이 되고 React 가 서브트리를 리마운트한다(react-hooks/static-components).
  */
+/**
+ * 되돌릴 수 있는 단계 수. 무제한으로 두면 화살표를 오래 누른 세션이 배치 수천 벌을 메모리에
+ * 쌓는다. 50 은 "방금 망친 것"을 되짚기에 충분하고, 그보다 옛날 배치는 아무도 기억하지 못한다.
+ */
+const UNDO_LIMIT = 50;
+
+/**
+ * 되돌리기 한 칸. **바뀐 뒤가 아니라 바뀌기 전 상태**를 담는다 — 되돌리기는 "그때로 되돌려라"이지
+ * "반대 동작을 해라"가 아니다(반대 동작으로 적으면 밀려난 이웃 패널까지는 못 돌려놓는다).
+ */
+type UndoEntry =
+  | { kind: 'layout'; prev: DashLayout | null }
+  | { kind: 'panel'; panel: CustomPanel; index: number };
+
 const STATUS_TEXT: Record<SaveStatus, string> = {
   idle: '',
   saving: '저장 중…',
@@ -209,19 +262,56 @@ const STATUS_TEXT: Record<SaveStatus, string> = {
 };
 
 function CanvasBar({
-  editing, onToggle, onReset, status,
-}: { editing: boolean; onToggle: () => void; onReset: () => void; status: SaveStatus }) {
+  editing, onToggle, onReset, onUndo, onCompact, canUndo, status, hidden,
+}: {
+  editing: boolean;
+  onToggle: () => void;
+  onReset: () => void;
+  onUndo: () => void;
+  onCompact: () => void;
+  canUndo: boolean;
+  status: SaveStatus;
+  /** 서로 겹쳐 있는 패널 수. 0 이면 아무 말도 하지 않는다. */
+  hidden: number;
+}) {
   return (
     <div className="dc-bar">
       <span className="help">
         {editing
-          ? '패널을 끌어 옮기고 우하단 모서리로 크기를 바꿉니다 · 키보드는 화살표(이동) · Shift+화살표(크기)'
+          /* 툴바 한 줄에 들어가야 한다 — 넘치면 버튼이 두 줄로 접히고, 그 줄바꿈이 화면을 흔든다. */
+          ? '끌어 옮기고 우하단 모서리로 크기 조절 · 겹쳐도 됩니다(클릭하면 앞으로) · Esc 취소 · Ctrl+Z 되돌리기 · 화살표 이동 / Shift+화살표 크기 / Enter 앞으로'
           : '실시간 현황 · 비용 · 토큰 · 개발 지표 · 도구 분석이 한 캔버스에 있습니다'}
       </span>
+      {/*
+        * 겹침 안내 — 겹침을 허용한 대가다. 위 카드가 아래를 **완전히 가리므로**, 실수로 겹친
+        * 사람에게 화면은 "패널이 사라졌다"로 보인다. 몇 장이 겹쳤는지 말해 주고, 편집 중이면
+        * 옆의 "겹침·빈 줄 정리"가 한 번에 되돌린다. 겹침이 없으면 이 자리는 비어 있다.
+        */}
+      {hidden > 0 && (
+        <span className="dc-warn" role="status">
+          패널 {hidden}장이 겹쳐 있습니다{editing ? '' : ' — 배치 편집에서 정리할 수 있습니다'}
+        </span>
+      )}
       <span className="sp" />
       <span className={status === 'error' ? 'txt-err' : undefined} role="status" aria-live="polite">
         {STATUS_TEXT[status]}
       </span>
+      {/*
+        * 되돌리기는 **편집 중이 아니어도** 되돌릴 것이 있으면 보인다. 커스텀 패널의 ✕ 는 읽는
+        * 화면에서도 눌리기 때문이다 — 지운 직후에 되돌릴 방법이 없으면 그 그래프 정의는 그대로
+        * 사라진다. 스택에는 이 세션에서 **자기가 한 일**만 쌓이므로, 남의 배치를 되돌릴 위험은 없다.
+        */}
+      {(editing || canUndo) && (
+        <button className="ghost" type="button" onClick={onUndo} disabled={!canUndo}>되돌리기 (Ctrl+Z)</button>
+      )}
+      {editing && (
+        /*
+         * 겹침·빈 줄 정리 — 옛날에 **자동으로** 돌던 그 계산이다. 자동일 때는 사고였지만(놓은
+         * 자리에 안 놓인다), 눌러서 돌리면 도구다. 겹쳐서 가려진 패널을 한 번에 드러내는 길도
+         * 이것뿐이다. 되돌리기 대상이라 눌러 보기 무섭지 않다.
+         */
+        <button className="ghost" type="button" onClick={onCompact}>겹침·빈 줄 정리</button>
+      )}
       {editing && (
         <button className="ghost" type="button" onClick={onReset}>기본 배치로 되돌리기</button>
       )}
@@ -234,7 +324,9 @@ function CanvasBar({
 
 function BarTable({ rows, unit, fmt }: { rows: { label: string; value: number }[]; unit: string; fmt: (n: number) => string }) {
   const max = Math.max(...rows.map((r) => r.value), 1);
-  const palette = ['#5794f2', '#e0742f', '#73bf69', '#f2cc0c', '#b877d9', '#37872d', '#e0523e', '#8ab8ff'];
+  /* 여기 있던 8색 배열은 `options.ts` 의 PALETTE 와 문자 단위로 같았다 — 팔레트가 두 벌이면
+     차트는 새 색, 이 막대표만 옛 색이 되는 날이 온다. 이 자리의 색은 순서일 뿐 뜻이 없다
+     (n번째 행 = n번째 색)이라 인덱스로 돌려도 안전하다. */
   return (
     <table className="gtable">
       <thead><tr><th>이름</th><th className="r">{unit}</th></tr></thead>
@@ -242,7 +334,7 @@ function BarTable({ rows, unit, fmt }: { rows: { label: string; value: number }[
         {rows.map((r, i) => (
           <tr key={r.label}>
             <td className="gbarcell">
-              <span className="gbar" style={{ width: `${(r.value / max) * 100}%`, background: palette[i % palette.length] }} />
+              <span className="gbar" style={{ width: `${(r.value / max) * 100}%`, background: PALETTE[i % PALETTE.length] }} />
               <span className="glab">{r.label}</span>
             </td>
             <td className="r num">{fmt(r.value)}</td>
@@ -270,6 +362,56 @@ export default function GrafanaDash() {
    */
   const { layout, save, reset, status, ready: layoutReady } = useDashLayout();
   const [editing, setEditing] = useState(false);
+  /** 플랫폼 롤업 접기 — 캐럿이 있으니 실제로 접혀야 한다(아래 머리글 주석). */
+  const [platformOpen, setPlatformOpen] = useState(true);
+
+  /*
+   * ── 되돌리기 한 벌 ──────────────────────────────────────────────────────
+   *
+   * 사람이 되돌리고 싶은 것은 "방금 한 일"이고, 그 일은 세 종류다: 배치 변경 · 기본 배치로
+   * 되돌리기 · 커스텀 패널 삭제. 스택이 종류별로 따로 있으면 Ctrl+Z 가 **순서를 건너뛴다**
+   * (패널을 지우고 패널을 옮긴 뒤 되돌렸는데 삭제가 먼저 살아나는 식). 그래서 한 벌이다.
+   */
+  const historyRef = useRef<UndoEntry[]>([]);
+  const [canUndo, setCanUndo] = useState(false);
+  const remember = useCallback((e: UndoEntry) => {
+    const h = historyRef.current;
+    h.push(e);
+    if (h.length > UNDO_LIMIT) h.shift();   // 오래된 쪽부터 버린다.
+    setCanUndo(true);
+  }, []);
+
+  const undo = useCallback(() => {
+    const e = historyRef.current.pop();
+    if (!e) return;                         // 되돌릴 것이 없다 — 조용히 아무 일도 하지 않는다.
+    setCanUndo(historyRef.current.length > 0);
+    if (e.kind === 'panel') { insertPanel(e.panel, e.index); return; }
+    // null 은 그 시점이 "저장된 것 없음"이었다는 뜻이다 — 기본 배치로 돌아간다(DELETE).
+    if (e.prev === null) reset(); else save(e.prev);
+  }, [reset, save]);
+
+  /*
+   * Ctrl+Z(맥은 ⌘Z). 스택에는 이 세션에서 자기가 한 일만 쌓이므로 편집 모드로 가두지 않는다 —
+   * 읽는 화면에서 지운 커스텀 패널도 여기로 돌아온다. 되돌릴 것이 없으면 아무 일도 없다.
+   *
+   * 입력 요소 안에서는 양보한다 — 그래프 추가 모달의 제목을 고치다 누른 Ctrl+Z 는 그 글자를
+   * 되돌리라는 뜻이지 대시보드 배치를 되돌리라는 뜻이 아니다.
+   */
+  const undoRef = useRef(undo);
+  useEffect(() => { undoRef.current = undo; });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'z' && e.key !== 'Z') return;
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+      const t = e.target;
+      if (t instanceof HTMLElement
+        && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return;
+      e.preventDefault();
+      undoRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   /* 명단은 **필터를 절대 싣지 않는** 조회로 받는다 — 걸린 응답으로 만들면 갈아탈 수 없다. */
   const rosterLoad = useCallback(
@@ -334,7 +476,10 @@ export default function GrafanaDash() {
   const platformRows = platforms?.platforms ?? null;
   if (!summary?.totals) {
     // member 스코프(전사 지표 403) 또는 무데이터.
-    return <p className="hint" style={{ padding: '24px 0' }}>이 대시보드는 관리자 토큰이 필요합니다(전사 지표). 개인 열람 토큰은 사용 관측 탭에서 자기 데이터를 봅니다.</p>;
+    /* `.hint` 는 이 저장소에 **없는 클래스**였다 — 규칙이 없으니 이 안내가 본문 크기·기본 색으로
+       렌더돼, 보조 문구로 쓰려던 자리가 빈 화면에서 가장 큰 글자 중 하나가 됐다. 보조 문구의
+       이름은 `.help` 다(globals.css: --fg-faint / .78rem). */
+    return <p className="help" style={{ padding: '24px 0' }}>이 대시보드는 관리자 토큰이 필요합니다(전사 지표). 개인 열람 토큰은 사용 관측 탭에서 자기 데이터를 봅니다.</p>;
   }
 
   const t = summary.totals;
@@ -385,16 +530,18 @@ export default function GrafanaDash() {
     { id: 'live-output', label: '출력 토큰', defaultBox: { x: 6, y: ROW.live, w: 2, h: 2 },
       node: <StatTile tone="t-purple" k="출력 토큰" v={short(t.output)} s={`입력 ${short(t.input)}`} /> },
     { id: 'live-hit', label: '캐시 적중률', defaultBox: { x: 8, y: ROW.live, w: 2, h: 2 },
-      node: <GaugeTile tone="t-teal" label="캐시 적중률" value={cacheHit} color="#73bf69" /> },
+      node: <GaugeTile tone="t-teal" label="캐시 적중률" value={cacheHit} color={GAUGE_ARC.teal} /> },
     { id: 'live-share', label: '캐시읽기 비중', defaultBox: { x: 10, y: ROW.live, w: 2, h: 2 },
-      node: <GaugeTile tone="t-blue" label="캐시읽기 비중" value={cacheReadShare} color="#5794f2" /> },
+      node: <GaugeTile tone="t-blue" label="캐시읽기 비중" value={cacheReadShare} color={GAUGE_ARC.blue} /> },
   ];
 
   const cost2: CanvasItem[] = [
     { id: 'cost-models', label: '모델별 토큰 분포', defaultBox: { x: 0, y: ROW.cost, w: 5, h: 6 },
       node: <Panel title="모델별 토큰 분포"><BarTable rows={modelRows} unit="토큰" fmt={short} /></Panel> },
     { id: 'cost-rate', label: '일별 토큰 추이', defaultBox: { x: 5, y: ROW.cost, w: 7, h: 6 },
-      node: <Panel title="일별 토큰 추이"><EChart option={areaOption(x, [{ name: '토큰', color: '#73bf69', data: days.map((d) => d.input + d.output + d.cacheRead + d.cacheCreate) }], short)} height={180} /></Panel> },
+      /* label 은 차트의 접근 이름 — Panel 제목과 **같은 문자열**이어야 한다(눈으로 보는 이름과
+         소리로 듣는 이름이 갈리면 "이 차트"라고 서로 가리킬 수 없다). 아래 패널들도 같다. */
+      node: <Panel title="일별 토큰 추이"><EChart option={areaOption(x, [{ name: '토큰', color: SERIES.tokens, data: days.map((d) => d.input + d.output + d.cacheRead + d.cacheCreate) }], short)} height={180} label="일별 토큰 추이" /></Panel> },
   ];
 
   /*
@@ -407,14 +554,14 @@ export default function GrafanaDash() {
   const devX = devDays.map((d) => d.day.slice(5));
   const dt = dev?.totals;
   const locSeries = [
-    { name: '추가', color: '#73bf69', data: devDays.map((d) => d.linesAdded) },
-    { name: '삭제', color: '#e0523e', data: devDays.map((d) => d.linesRemoved) },
+    { name: '추가', color: SERIES.added, data: devDays.map((d) => d.linesAdded) },
+    { name: '삭제', color: SERIES.removed, data: devDays.map((d) => d.linesRemoved) },
   ];
   const dev2: CanvasItem[] = [
     { id: 'dev-loc', label: '일별 LOC', defaultBox: { x: 0, y: ROW.dev, w: 4, h: 4 }, node: (
       <Panel title="일별 LOC (추가 · 삭제)">
         {hasSeriesValues(locSeries)
-          ? <EChart option={areaOption(devX, locSeries, fmtInt)} height={180} />
+          ? <EChart option={areaOption(devX, locSeries, fmtInt)} height={180} label="일별 LOC (추가 · 삭제)" />
           : <NoData height={180} why="이 기간에 보고된 LOC 변경이 없습니다. 구버전 수집기이거나 아직 보고가 없는 팀입니다 — 0 줄을 썼다는 뜻이 아닙니다." />}
       </Panel>
     ) },
@@ -429,12 +576,12 @@ export default function GrafanaDash() {
       />
     ) },
     { id: 'dev-io', label: '토큰 입출력 추이', defaultBox: { x: 8, y: ROW.dev, w: 4, h: 4 },
-      node: <Panel title="토큰 입출력 추이"><EChart option={areaOption(x, [{ name: '입력', color: '#5794f2', data: days.map((d) => d.input) }, { name: '출력', color: '#73bf69', data: days.map((d) => d.output) }], short)} height={180} /></Panel> },
+      node: <Panel title="토큰 입출력 추이"><EChart option={areaOption(x, [{ name: '입력', color: SERIES.input, data: days.map((d) => d.input) }, { name: '출력', color: SERIES.output, data: days.map((d) => d.output) }], short)} height={180} label="토큰 입출력 추이" /></Panel> },
   ];
 
   const cache: CanvasItem[] = [
     { id: 'cache-usage', label: '일별 캐시 읽기 · 생성', defaultBox: { x: 0, y: ROW.cache, w: 12, h: 5 },
-      node: <Panel title="일별 캐시 읽기 · 생성"><EChart option={areaOption(x, [{ name: '캐시읽기', color: '#73bf69', data: days.map((d) => d.cacheRead) }, { name: '캐시생성', color: '#5794f2', data: days.map((d) => d.cacheCreate) }], short)} height={200} /></Panel> },
+      node: <Panel title="일별 캐시 읽기 · 생성"><EChart option={areaOption(x, [{ name: '캐시읽기', color: SERIES.cacheRead, data: days.map((d) => d.cacheRead) }, { name: '캐시생성', color: SERIES.cacheCreate, data: days.map((d) => d.cacheCreate) }], short)} height={200} label="일별 캐시 읽기 · 생성" /></Panel> },
   ];
 
   /* 세 도넛도 편집 결정과 같은 경로다 — 비면 빈 회색 링 대신 무엇이 없는지 말한다. */
@@ -451,7 +598,7 @@ export default function GrafanaDash() {
 
   const rates: CanvasItem[] = [
     { id: 'rate-sessions', label: '일별 세션 수', defaultBox: { x: 0, y: ROW.rates, w: 4, h: 6 },
-      node: <Panel title="일별 세션 수"><EChart option={areaOption(x, [{ name: '세션', color: '#73bf69', data: days.map((d) => d.sessions) }], fmtInt)} height={170} /></Panel> },
+      node: <Panel title="일별 세션 수"><EChart option={areaOption(x, [{ name: '세션', color: SERIES.sessions, data: days.map((d) => d.sessions) }], fmtInt)} height={170} label="일별 세션 수" /></Panel> },
     { id: 'rate-bash', label: '개발 명령', defaultBox: { x: 4, y: ROW.rates, w: 4, h: 6 },
       node: <Panel title="개발 명령"><BarTable rows={(summary.top?.bash ?? []).slice(0, 10).map((k) => ({ label: k.key, value: k.count }))} unit="횟수" fmt={fmtInt} /></Panel> },
     { id: 'rate-mcp', label: 'MCP 호출', defaultBox: { x: 8, y: ROW.rates, w: 4, h: 6 },
@@ -461,7 +608,7 @@ export default function GrafanaDash() {
   const topTools = (summary.top?.tool ?? []).slice(0, 10).map((k) => ({ name: k.key, value: k.count }));
   const top: CanvasItem[] = [
     { id: 'top-tools', label: '상위 도구', defaultBox: { x: 0, y: ROW.top, w: 12, h: 7 },
-      node: <Panel title="상위 도구 (호출 수)"><EChart option={barOption(topTools, fmtInt)} height={Math.max(120, topTools.length * 30)} /></Panel> },
+      node: <Panel title="상위 도구 (호출 수)"><EChart option={barOption(topTools, fmtInt)} height={Math.max(120, topTools.length * 30)} label="상위 도구 (호출 수)" /></Panel> },
   ];
 
   /*
@@ -479,8 +626,17 @@ export default function GrafanaDash() {
       <div className="gpanel-card">
         <div className="gpanel-head">
           {p.title}
-          <span style={{ flex: 1 }} />
-          <button className="panel-x" type="button" title="삭제" onClick={() => removePanel(p.id)}>✕</button>
+          {/* 제목과 ✕ 사이를 벌리는 빈 칸. `.gpanel-head` 안이라 붙일 클래스가 없어 인라인이었는데,
+              이제 globals.css 에 전역 `.sp { flex:1 }` 이 있다 — 같은 뜻의 인라인을 남겨 두면
+              다음 사람이 `.sp` 가 아니라 이걸 복사한다. */}
+          <span className="sp" />
+          {/* 지우기 전에 그 패널 정의와 순서를 히스토리에 넣는다 — Ctrl+Z 로 그대로 돌아온다. */}
+          <button
+            className="panel-x"
+            type="button"
+            title="삭제 (Ctrl+Z 로 되돌릴 수 있습니다)"
+            onClick={() => { remember({ kind: 'panel', panel: p, index: i }); removePanel(p.id); }}
+          >✕</button>
         </div>
         <div className="gpanel-body"><CustomPanelView panel={p} /></div>
       </div>
@@ -509,22 +665,49 @@ export default function GrafanaDash() {
         * (그리드 밖이라 패널 id 가 없다), 조회 범위를 고르는 필터 바로 아래에서 "지금 무엇을
         * 보고 있는가"를 말하는 머리글이다. 캔버스에 넣으면 그 맥락이 아무 데로나 끌려간다.
         */}
+      {/*
+        * 머리글은 **버튼**이다. 예전에는 ▾ 캐럿만 그려 놓고 아무 핸들러가 없었다 — 접을 수 있게
+        * 생긴 것을 눌러도 아무 일이 없으면 사람은 화면이 고장 났다고 읽는다. 캐럿을 지우는 대신
+        * 실제로 접히게 했다(플랫폼 표는 여덟 줄까지 길어져 실제로 접고 싶은 자리다).
+        * 접힌 상태는 저장하지 않는다: 저장하면 첫 프레임에 펼친 표를 그린 뒤 접히는 튐이 생기고,
+        * 그 튐은 이 화면이 가장 경계하는 증상이다(lib/layoutPrefs.ts 머리말).
+        */}
       <section className="gsect">
-        <div className="gsect-h"><span className="caret">▾</span> 플랫폼</div>
-        <PlatformSummary rows={platformRows} />
+        <button
+          type="button"
+          className="gsect-h"
+          aria-expanded={platformOpen}
+          onClick={() => setPlatformOpen((v) => !v)}
+        >
+          <span className={`caret${platformOpen ? '' : ' closed'}`} aria-hidden="true">▾</span> 플랫폼
+        </button>
+        {platformOpen && <PlatformSummary rows={platformRows} />}
       </section>
 
       <CanvasBar
         editing={editing}
         onToggle={() => setEditing((v) => !v)}
-        onReset={reset}
+        onReset={() => { remember({ kind: 'layout', prev: layout }); reset(); }}
+        onUndo={undo}
+        /* 지금 화면의 배치를 그대로 위로 당긴다 — 저장된 적 없는 패널까지 포함해야 하므로 resolve 부터. */
+        onCompact={() => {
+          remember({ kind: 'layout', prev: layout });
+          save(compactLayout(resolveLayout(layout, items)));
+        }}
+        canUndo={canUndo}
         status={status}
+        hidden={overlappingIds(resolveLayout(layout, items)).length}
       />
       {/*
         * 자리를 바꾸면 save 가 로컬 배치를 즉시 갈아끼우고 PUT 은 디바운스로 뒤따른다.
         * CanvasGrid 는 controlled 라 여기서 layout 을 갱신하지 않으면 놓는 순간 제자리로 튄다.
         */}
-      <CanvasGrid items={items} layout={layout} editable={editing} onLayoutChange={save} />
+      <CanvasGrid
+        items={items}
+        layout={layout}
+        editable={editing}
+        onLayoutChange={(next) => { remember({ kind: 'layout', prev: layout }); save(next); }}
+      />
 
       {builderOpen && (
         <ChartBuilder
