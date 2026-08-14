@@ -790,10 +790,35 @@ tr.rowlink[aria-expanded="true"] td { background: var(--surface-2); }
  *
  * 규칙이 카드 클래스에 있는 이유: 앞으로 생길 패널과 커스텀 패널이 **자동으로 같은 규율**을
  * 타야 한다. 패널마다 인라인으로 붙이면 새로 만든 패널 하나가 조용히 잘리는 날이 온다.
+ *
+ * ── 본문이 세로 flex 인 이유 ──────────────────────────────────────────────
+ *
+ * 본문은 칸을 따라 커진다(flex:1 1 auto). 그런데 그 안의 차트가 픽셀 높이로 박혀 있으면
+ * **본문만 커지고 차트는 그대로**여서 아래에 빈 공간이 남았다(실측 2026-08-14, 크로미움:
+ * `일별 토큰 추이` 칸 396→600px 인데 캔버스는 180→180px, 차트 아래 여백 177→381px).
+ * 그래서 본문을 세로 flex 로 만들고, 남는 공간을 먹을 자격이 있는 자식만 `.fillv` 를 단다.
+ *
+ * ⚠ 본문에는 차트만 들어오지 않는다 — 표(`.gtable`)·바 리스트·`미수집` 안내가 같이 산다.
+ *   그것들은 **제 높이 그대로** 있어야 하므로 `flex:0 0 auto` 로 못 박는다. flex 기본값
+ *   (`0 1 auto`)에 기대면 min-height:auto 가 지켜 주긴 하지만, 그 방어는 브라우저 구현에
+ *   기대는 것이고 여기서 지키려는 것은 "표가 조용히 찌그러지지 않는다"는 사실이다.
+ *
+ * ⚠ **스크롤 규율은 그대로다.** min-height:0 + overflow:auto 는 칸보다 큰 내용을 자르는 대신
+ *   스크롤하게 한다. 차트는 남는 공간을 먹을 뿐 자기 최소 높이보다 커지라고 요구하지 않으므로,
+ *   본문이 넉넉할 때 스크롤바가 새로 생기지 않는다(차트가 정확히 남는 만큼만 자란다).
  */
 .gpanel-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); overflow:hidden; display:flex; flex-direction:column; min-height:0; }
 .gpanel-card > .gpanel-head { flex:0 0 auto; }
-.gpanel-card > .gpanel-body { flex:1 1 auto; min-height:0; overflow:auto; }
+.gpanel-card > .gpanel-body { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; overflow:auto; }
+.gpanel-card > .gpanel-body > *:not(.fillv) { flex:0 0 auto; }
+/*
+ * 남는 세로 공간을 먹는 자리. `EChart` 래퍼가 스스로 달고, 값이 없는 자리(NoData)와 커스텀
+ * 패널의 로딩/오류 문구도 같은 것을 단다 — **빈 상태가 차트와 같이 크지 않으면** 데이터가
+ * 들어오는 순간 패널 안이 튀고, 사람은 그 움직임을 데이터 변화로 읽는다.
+ * 자기 바닥 높이는 각자 인라인 min-height 로 들고 있다(그 숫자의 주인은 호출처다).
+ * flex 컨테이너의 자식이 아닌 자리에서는 이 선언이 무시되고 min-height 만 남는다 — 종전과 같다.
+ */
+.fillv { flex:1 1 auto; }
 /*
  * ⚠ cursor:grab 이 여기 있었다(옛 DragGrid 시절 — 그때는 제목바가 항상 잡히는 손잡이였다).
  *   지금은 **편집 모드에서 카드 전체가** 잡히므로 그 선언은 `.dashcanvas.editing .dc-cell` 하나가

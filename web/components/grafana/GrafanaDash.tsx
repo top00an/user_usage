@@ -119,8 +119,10 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 /*
  * 값이 없는 패널의 자리.
  *
- * ① **차트가 쓰던 높이를 그대로 지킨다** — 값이 들어오고 나갈 때 그리드가 튀면 사람은 그
- *    움직임을 데이터 변화로 읽는다.
+ * ① **차트가 쓰는 높이를 그대로 따라간다** — 값이 들어오고 나갈 때 그리드가 튀면 사람은 그
+ *    움직임을 데이터 변화로 읽는다. 차트가 남는 세로 공간을 먹게 된 지금(EChart 머리말),
+ *    빈 상태도 **같은 방법으로** 먹어야 한다: `height` 를 고정으로 박으면 값이 오는 순간
+ *    패널 안이 그 차이만큼 튄다. 그래서 `.fillv` + min-height 로, 차트와 한 글자도 다르지 않게.
  * ② 색이 아니라 **글자**로 상태를 말한다(components/platform/SupportBadge.tsx 와 같은 규율).
  * ③ 왜 비었는지를 함께 남긴다 — 이유 없는 빈 칸은 "버그인가?"로 읽힌다.
  *
@@ -129,7 +131,7 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
  */
 function NoData({ height, why }: { height: number; why: string }) {
   return (
-    <div style={{ height, display: 'grid', placeItems: 'center', textAlign: 'center', padding: '0 12px' }}>
+    <div className="fillv" style={{ minHeight: height, display: 'grid', placeItems: 'center', textAlign: 'center', padding: '0 12px' }}>
       {/* 이유는 .help(작고 흐린 보조 문구) — 상태어와 크기·명도로 위계를 만든다. 폭은 measure 로
           묶는다: 넓은 패널에서 한 줄이 화면 끝까지 늘어나면 읽는 눈이 줄을 잃는다. */}
       <div style={{ maxWidth: '34ch' }}>
@@ -165,6 +167,18 @@ function StatTile({ tone, k, v, s, title }: { tone: string; k: string; v: string
     </div>
   );
 }
+/*
+ * 게이지 타일 — 이것도 캔버스의 칸 안에 있고, **같은 규율을 탄다.**
+ *
+ * `.gstat` 은 이미 세로 flex 라(globals.css) EChart 의 `.fillv` 가 여기서도 그대로 먹는다 —
+ * 따로 붙일 것이 없다. 그래도 되는지가 판단할 지점이었고, 답은 "그래야 한다"다: 이 타일을
+ * 세로로 늘렸을 때만 게이지가 90px 에 멈춰 아래가 텅 비는 것은 패널 차트와 **똑같은 결함**이고,
+ * 한 화면 안에서 어떤 칸은 따라 크고 어떤 칸은 안 크면 사람은 그 차이를 규칙으로 배우지 못한다.
+ *
+ * 늘어나도 게이지가 부풀지는 않는다 — echarts 의 gauge `radius` 백분율은 min(폭,높이) 기준이라
+ * 타일이 세로로만 길어지면 반지름은 폭에 묶인 채고, 원이 아래로 늘어져 찌그러지지 않는다.
+ * (`options.ts` 의 gaugeOption: radius '100%', center ['50%','62%'].)
+ */
 function GaugeTile({ tone, label, value, color }: { tone: string; label: string; value: number; color: string }) {
   return (
     <div className={`gstat ${tone} gstat-gauge`}>
