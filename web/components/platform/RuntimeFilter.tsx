@@ -14,8 +14,11 @@
  *    있는가"를 화면이 알 방법이 없다. 응답에 필드를 늘리는 것은 골든 스냅샷을 다시 떠야 하는
  *    계약 변경이고, 그건 이 축을 화면에 붙이는 것과 **별개의 결정**이다.
  *
- *    그래서 항상 그리고, 로컬을 골랐는데 결과가 비면 **배지가 그 이유를 말한다.** "로컬 사용이
- *    0건"은 고장이 아니라 답이고, 배지가 없으면 사람이 그것을 빈 화면으로 오해한다.
+ *    그래서 항상 그린다. 로컬을 골랐는데 결과가 비면 **"로컬 사용이 0건"이 답이지 고장이
+ *    아니다** — 배지의 title 이 그 사실을 말한다.
+ *
+ * 꼬리말 규율은 PlatformScope 와 같다: 걸렸으면 배지, 전체면 아무 말도 하지 않는다. 세 필터가
+ * `.pf-bars` 로 한 줄에 서므로 항상 켜진 설명문은 줄만 늘린다(globals.css 의 `.pf-bars` 주석).
  */
 
 import { RUNTIME_IDS, runtimeHint, runtimeLabel } from '@/lib/runtimes';
@@ -38,13 +41,12 @@ export default function RuntimeFilter() {
           <option key={id} value={id} title={runtimeHint(id)}>{runtimeLabel(id)}</option>
         ))}
       </select>
+      {/* 걸렸을 때만 밝힌다 — 전체는 현행과 같은 화면이라 덧붙일 사실이 없다(PlatformScope 와 동일). */}
       {cur ? (
         <span className="badge ok" title={runtimeHint(cur)}>
-          {`runtime=${cur} 기준 · 해당 세션이 없으면 빈 값이 정상입니다`}
+          {runtimeLabel(cur)} 기준
         </span>
-      ) : (
-        <span className="muted small">전체 실행 위치 기준</span>
-      )}
+      ) : null}
     </div>
   );
 }

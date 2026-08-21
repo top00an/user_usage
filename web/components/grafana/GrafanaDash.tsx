@@ -666,9 +666,12 @@ export default function GrafanaDash() {
         * 플랫폼 축으로 걸러지지 않는다"고 말했는데, 서버는 summary·seats·dev 모두 platform 을
         * 받는다 — 화면이 안 싣고 있었을 뿐이다. 이제 싣는다.
         */}
-      <PlatformFilter rows={platformRows} applies what="아래 패널은 이 플랫폼만 집계합니다" />
-      <RuntimeFilter />
-      <UserFilter users={roster} value={user} onChange={setUser} />
+      {/* `.pf-bars` 로 감싸 한 줄에 세운다 — 감싸지 않으면 축마다 한 줄을 먹는다. */}
+      <div className="pf-bars">
+        <PlatformFilter rows={platformRows} applies what="아래 패널은 이 플랫폼만 집계합니다" />
+        <RuntimeFilter />
+        <UserFilter users={roster} value={user} onChange={setUser} />
+      </div>
 
       {/*
         * 플랫폼 롤업은 캔버스 **밖**에 남긴다. 옛 화면에서도 이것만은 드래그 대상이 아니었고
