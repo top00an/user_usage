@@ -52,8 +52,8 @@ const (
 var openaiSeed = map[string]seedEntry{
 	// ── GPT-5.x 본선 (캐시 히트 0.1배) ──
 	// 계단 요금 — 입력 >272K 이면 요청 전체가 입력 2배 · 출력 1.5배.
-	"gpt-5.5":       {provider: ProviderOpenAI, price: Price{5, 30}, priceLong: Price{10, 45}, cacheReadMult: oaiCacheRead},
-	"gpt-5.4-mini":  {provider: ProviderOpenAI, price: Price{0.75, 4.5}, cacheReadMult: oaiCacheRead},
+	"gpt-5.5":      {provider: ProviderOpenAI, price: Price{5, 30}, priceLong: Price{10, 45}, cacheReadMult: oaiCacheRead},
+	"gpt-5.4-mini": {provider: ProviderOpenAI, price: Price{0.75, 4.5}, cacheReadMult: oaiCacheRead},
 	// gpt-5.4 도 계단이 있다(공식표: long $5.00/$22.50). 2026-08-13 감사에서 누락을 잡았다 —
 	// 빠져 있으면 272K 초과 요청의 몫이 표준가로 계산돼 **과소**계상된다.
 	"gpt-5.4":       {provider: ProviderOpenAI, price: Price{2.5, 15}, priceLong: Price{5, 22.5}, cacheReadMult: oaiCacheRead},
