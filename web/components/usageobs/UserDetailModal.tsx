@@ -7,7 +7,7 @@ import type { SeriesLine, SeriesResponse } from '@/lib/types';
 import { dayShift, n, shortTokens } from '@/lib/format';
 import Modal from '@/components/Modal';
 import { ErrorState, Loading, TableWrap } from '@/components/ui';
-import { usePlatformFilter } from '@/lib/platformFilter';
+import { useScope } from '@/lib/scope';
 import PlatformScope from '@/components/platform/PlatformScope';
 
 /*
@@ -87,20 +87,30 @@ function Pivot({ series, label }: { series: SeriesLine[] | undefined; label: str
 }
 
 export default function UserDetailModal({ username, onClose }: { username: string; onClose: () => void }) {
-  // series 는 platform 축을 받는다 — 관측 탭에서 플랫폼을 골랐다면 이 상세도 같은 모집단이어야 한다.
-  const platform = usePlatformFilter();
+  /*
+   * series 는 스코프 축을 전부 받는다 — 관측 탭에서 플랫폼·runtime 을 골랐다면 이 상세도
+   * **같은 모집단**이어야 한다. 한 축이라도 빠지면 모달과 뒤 화면이 다른 값을 그리면서
+   * 그 사실을 말하지 않는다.
+   *
+   * user 는 이 모달의 주제이므로 스코프의 user 축을 쓰지 않고 username 을 직접 싣는다.
+   */
+  const scope = useScope();
 
   const load = useCallback(async ({ signal }: { signal: AbortSignal }) => {
-    const p = platform || undefined;
+    const base = {
+      metric: 'tokens' as const, groupBy: 'model' as const, user: username,
+      platform: scope.platform || undefined,
+      runtime: scope.runtime || undefined,
+    };
     // 두 요청은 서로 독립이다 — 순차로 기다릴 이유가 없다.
     const [daily, weekly] = await Promise.all([
-      getSeries({ metric: 'tokens', interval: 'day', groupBy: 'model', user: username, from: dayShift(DETAIL_DAYS - 1), platform: p }, { signal }),
-      getSeries({ metric: 'tokens', interval: 'week', groupBy: 'model', user: username, from: dayShift(DETAIL_WEEKS * 7), platform: p }, { signal }),
+      getSeries({ ...base, interval: 'day', from: dayShift(DETAIL_DAYS - 1) }, { signal }),
+      getSeries({ ...base, interval: 'week', from: dayShift(DETAIL_WEEKS * 7) }, { signal }),
     ]);
     return { daily, weekly } as { daily: SeriesResponse; weekly: SeriesResponse };
-  }, [username, platform]);
+  }, [username, scope.platform, scope.runtime]);
 
-  const { state, reload } = useResource(load, [username, platform]);
+  const { state, reload } = useResource(load, [username, scope.platform, scope.runtime]);
 
   return (
     <Modal title={`${username} — 사용 상세`} onClose={onClose} maxWidth={880}>

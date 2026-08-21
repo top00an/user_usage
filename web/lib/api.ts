@@ -236,6 +236,30 @@ function setPlatform(q: URLSearchParams, platform?: string): void {
   if (platform) q.set('platform', platform);
 }
 
+/* ── runtime 필터 ─────────────────────────────────────────────────────────
+ *
+ * 이 세션이 **어디서 돌았나**다(cloud|local). platform 과 직교한다 — platform 은 "어느
+ * 도구"이고, 같은 도구가 클라우드 모델도 로컬 모델도 문다. 그래서 `codex-local` 같은 합성
+ * platform 을 만들지 않고 축을 하나 더 둔다.
+ *
+ * platform 과 같은 계약이다:
+ *   · **미지정 = 전체.** 파라미터를 아예 붙이지 않는다 — 빈 값(`runtime=`)을 보내면 서버가
+ *     400 을 낸다(오타를 조용히 접지 않는 규율).
+ *   · 허용목록은 `lib/runtimes.ts`(= go/internal/store/runtime.go 의 Runtimes)가 소유한다.
+ *
+ * 서버는 `/api/usage/*` 조회 전부에서 이 축을 읽는다(httpapi 의 runtimeParam →
+ * store.Filter{Runtime}). 자식 표(usage_series·usage_counters)는 세션으로 되짚어 거른다.
+ */
+export interface RuntimeParams {
+  /** 미지정·빈 문자열 = 전체. 허용목록 밖 값은 보내지 않는다. */
+  runtime?: string;
+}
+
+/** runtime 값을 질의에 실는다. 빈 값이면 **키 자체를 만들지 않는다**(=전체). */
+function setRuntime(q: URLSearchParams, runtime?: string): void {
+  if (runtime) q.set('runtime', runtime);
+}
+
 
 
 /* ── 사용자 필터 ──────────────────────────────────────────────────────────
@@ -258,18 +282,22 @@ export interface UserParams {
 }
 
 /**
- * ScopeParams — 이 서버의 조회 스코프는 **두 축**이다: 플랫폼과 사람.
+ * ScopeParams — 이 서버의 조회 스코프는 **세 축**이다: 플랫폼 · 사람 · runtime.
  *
- * 두 축을 한 타입으로 묶는 이유: 화면이 한 축만 싣고 다른 축을 잊는 사고가 이 레포에서
- * 두 번 났다(둘 다 "서버가 그 축을 못 받는다"는 낡은 주석 때문이었다). 타입이 둘을 함께
- * 들고 있으면 새 조회를 배선할 때 두 축이 같이 보인다.
+ * 축을 한 타입으로 묶는 이유: 화면이 한 축만 싣고 다른 축을 잊는 사고가 이 레포에서
+ * 두 번 났다(둘 다 "서버가 그 축을 못 받는다"는 낡은 주석 때문이었다). 타입이 전부 함께
+ * 들고 있으면 새 조회를 배선할 때 축이 같이 보인다.
+ *
+ * ⚠ 필드가 전부 optional 이라 **타입이 누락을 잡아 주지는 못한다.** 값을 만드는 자리를
+ *   한 곳(useScope)으로 모아 두는 것이 실제 방어다.
  */
-export interface ScopeParams extends PlatformParams, UserParams {}
+export interface ScopeParams extends PlatformParams, UserParams, RuntimeParams {}
 
 /** 스코프 두 축을 질의에 싣는다. 빈 값은 **키를 만들지 않는다**(=전체). */
 function withScope(path: string, p: ScopeParams = {}): string {
   const q = new URLSearchParams();
   setPlatform(q, p.platform);
+  setRuntime(q, p.runtime);
   if (p.user) q.set('user', p.user);
   const qs = q.toString();
   return qs ? `${path}?${qs}` : path;
@@ -300,6 +328,7 @@ export const getDispatch = (p: UserParams = {}, o?: RequestOptions) =>
 const scopeSuffix = (p: ScopeParams): string => {
   const q = new URLSearchParams();
   setPlatform(q, p.platform);
+  setRuntime(q, p.runtime);
   if (p.user) q.set('user', p.user);
   const qs = q.toString();
   return qs ? `&${qs}` : '';
@@ -342,6 +371,8 @@ export const getSessions = (
   if (params.sort) q.set('sort', params.sort);
   if (params.top != null) q.set('top', String(params.top));
   setPlatform(q, params.platform);
+  // runtime 축도 같은 이유로 싣는다 — 아래 주석의 사고가 이 축에서도 한 번 났다.
+  setRuntime(q, params.runtime);
   // user 축도 싣는다. 예전에는 PlatformParams 만 받아 호출부가 user 를 넘겨도 **조용히
   // 버려졌다** — 타입이 excess property 를 스프레드로 통과시켜 컴파일도 통과했다.
   if (params.user) q.set('user', params.user);
@@ -352,7 +383,13 @@ export const getSessions = (
 export const getSessionDetail = (id: string, o?: RequestOptions) =>
   request<SessionDetail>(`/api/usage/sessions/${encodeURIComponent(id)}`, o);
 
-export interface SeriesParams extends PlatformParams {
+/*
+ * ⚠ **RuntimeParams 를 반드시 함께 상속한다.** 예전에는 PlatformParams 만 상속했는데, 호출부가
+ *   스프레드로 `{...base}` 를 넘기면 TypeScript 의 초과 속성 검사가 돌지 않아 `runtime` 이
+ *   **조용히 버려졌다** — 타입 체크는 통과하고 질의에서만 사라진다. 축을 늘릴 때 이 상속과
+ *   아래 seriesQuery 를 함께 고쳐야 한다.
+ */
+export interface SeriesParams extends PlatformParams, RuntimeParams {
   metric?: 'cost' | 'tokens' | 'sessions' | 'turns';
   interval?: 'hour' | 'day' | 'week';
   groupBy?: string;
@@ -371,6 +408,7 @@ export function seriesQuery(p: SeriesParams): string {
   if (p.from) q.set('from', p.from);
   if (p.to) q.set('to', p.to);
   setPlatform(q, p.platform);
+  setRuntime(q, p.runtime);
   return `/api/usage/series?${q.toString()}`;
 }
 

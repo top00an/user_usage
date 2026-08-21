@@ -8,6 +8,7 @@ import {
   getSessionDetail,
   getSeats,
   getTeams,
+  getSessions,
   seriesQuery,
   login,
   logout,
@@ -133,6 +134,43 @@ describe('lib/api — 유일한 서버 호출구', () => {
     vi.stubGlobal('fetch', spy);
     await getTeams();
     expect(spy.mock.calls[0]?.[0]).toBe('/api/usage/teams?days=30');
+  });
+
+  /*
+   * runtime 축 — **조용히 버려지는 것**을 막는 테스트다.
+   *
+   * 왜 이 축만 따로 못박나: 호출부는 스코프를 스프레드(`{...base}`)로 넘기는데, 그러면
+   * TypeScript 의 초과 속성 검사가 돌지 않아 질의 조립부가 그 키를 안 읽어도 **컴파일이
+   * 통과한다.** 실제로 이 레포에서 user 축이 그렇게 사라진 적이 있고(api.ts 의 getSessions
+   * 주석), runtime 을 붙일 때도 SeriesParams 가 RuntimeParams 를 안 상속해 같은 일이 났다.
+   * 타입이 못 잡으므로 질의 문자열을 직접 본다.
+   */
+  it('series 질의에 runtime 이 실린다(스프레드로 넘겨도 사라지지 않는다)', () => {
+    const base = { metric: 'tokens' as const, groupBy: 'model' as const, runtime: 'local' };
+    expect(seriesQuery({ ...base, interval: 'day' })).toContain('runtime=local');
+  });
+
+  it('runtime 미지정이면 키 자체를 만들지 않는다(=전체)', () => {
+    // 빈 값(`runtime=`)을 보내면 서버가 400 을 낸다 — 그래서 키를 아예 붙이지 않는다.
+    expect(seriesQuery({ metric: 'tokens', runtime: '' })).not.toContain('runtime');
+    expect(seriesQuery({ metric: 'tokens' })).not.toContain('runtime');
+  });
+
+  it('getSessions 는 platform·runtime·user 세 축을 함께 싣는다', async () => {
+    const spy = vi.fn().mockResolvedValue(jsonResponse(200, { sessions: [] }));
+    vi.stubGlobal('fetch', spy);
+    await getSessions({ platform: 'codex', runtime: 'local', user: 'kim' });
+    const url = String(spy.mock.calls[0]?.[0]);
+    expect(url).toContain('platform=codex');
+    expect(url).toContain('runtime=local');
+    expect(url).toContain('user=kim');
+  });
+
+  it('seats 질의에도 runtime 이 실린다(scopeSuffix 경로)', async () => {
+    const spy = vi.fn().mockResolvedValue(jsonResponse(200, { seats: [], summary: {} }));
+    vi.stubGlobal('fetch', spy);
+    await getSeats(30, undefined, { runtime: 'local' });
+    expect(String(spy.mock.calls[0]?.[0])).toContain('runtime=local');
   });
 });
 
