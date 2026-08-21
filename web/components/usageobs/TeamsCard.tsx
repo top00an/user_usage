@@ -18,8 +18,9 @@ export default function TeamsCard({ d }: { d: Teams | null }) {
   // 팀이 하나뿐이고 그게 "미배정"이면 아직 팀을 안 나눈 것 — 카드를 굳이 띄우지 않는다.
   if (d.teams.length === 1 && d.teams[0]?.team === '미배정') return null;
 
+  // seats 와 같다 — 이 조회도 스코프 축으로 실제로 걸러진다(SeatsCard 주석 참고).
   return (
-    <Card title="팀별 롤업" className="mt" aside={<PlatformScope applies={false} />}>
+    <Card title="팀별 롤업" className="mt" aside={<PlatformScope applies />}>
       <p className="help">최근 {d.days}일. 팀 배정은 `usage-server team assign` 으로 관리합니다.</p>
       <TableWrap>
         <table className="mt-sm">

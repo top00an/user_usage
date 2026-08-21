@@ -468,11 +468,14 @@ describe('플랫폼 필터 — 선택지는 응답이 정하고, 선택은 질�
     expect(urls.some((u) => u.includes('/api/usage/teams') && u.includes('platform=codex'))).toBe(true);
 
     /*
-     * summary 는 여전히 안 붙는다 — **사용 추적** 탭의 조회이고 그 화면은 아직 배선하지
-     * 않았다(서버는 받는다). 그 화면은 배지로 "전체 플랫폼 기준"이라고 정직하게 밝힌다.
-     * 이 단정은 "서버가 못 받는다"는 뜻이 아니라 "그 탭이 아직 안 싣는다"는 뜻이다.
+     * 이 탭(사용 관측)은 summary 를 부르지 않는다 — 그건 사용 추적 탭의 조회다. 그래서 여기서는
+     * summary 호출 자체가 없어야 한다.
+     *
+     * ⚠ 예전 주석은 이것을 "사용 추적 탭이 platform 을 아직 안 싣는다"의 근거로 읽었는데,
+     *   그 탭은 2026-08-21 에 배선됐다. 두 사실을 헷갈리면 안 된다: 여기서 없는 이유는
+     *   **부르지 않아서**이지 안 싣기 때문이 아니다.
      */
-    expect(urls.some((u) => u.includes('/api/usage/summary') && u.includes('platform='))).toBe(false);
+    expect(urls.some((u) => u.startsWith('/api/usage/summary'))).toBe(false);
   });
 
   it('데이터가 없는 플랫폼은 선택지에 없다 (하드코딩 목록이 아니다)', async () => {
@@ -498,15 +501,35 @@ describe('플랫폼 필터 — 선택지는 응답이 정하고, 선택은 질�
     expect(screen.queryByLabelText('플랫폼')).not.toBeInTheDocument();
   });
 
-  it('플랫폼 축을 못 거르는 카드는 "전체 플랫폼 기준"이라고 말한다', async () => {
-    location.hash = '#/usage'; // 사용 추적: summary·dispatch 는 platform 축을 받지 않는다
-    mockFetch(allRoutes());
+  /*
+   * 예전 이 자리의 테스트는 사용 추적 탭이 "전체 플랫폼 기준"이라고 말하는 것을 못박았다.
+   * 그 문구는 **그 탭이 축을 안 싣던 동안에만** 참이었고, 2026-08-21 에 배선하면서 거짓이 됐다.
+   *
+   * 그래서 단정을 뒤집는다: 이제 그 탭은 축을 싣고 "{플랫폼} 기준"이라고 말해야 한다.
+   * 문구만 보지 않고 **질의도 함께** 본다 — 배지와 실제 조회가 갈라지는 것이 이 축에서 가장
+   * 나쁜 실패이고(걸러진 값을 전사라 하거나 그 반대), 문구만 검사하면 그 갈라짐을 못 잡는다.
+   */
+  it('사용 추적 탭은 축을 실어 보내고 "{플랫폼} 기준"이라고 말한다', async () => {
+    location.hash = '#/usage';
+    const { fn } = mockFetch(allRoutes());
     const user = userEvent.setup();
     render(<Dashboard />);
     await screen.findByRole('heading', { name: '사용자별' });
 
     await user.selectOptions(await screen.findByLabelText('플랫폼'), 'codex');
-    expect(await screen.findAllByText(/전체 플랫폼 기준/)).not.toHaveLength(0);
+
+    await waitFor(() => {
+      const urls = fn.mock.calls.map(([u]) => String(u));
+      expect(urls.some((u) => u.startsWith('/api/usage/summary') && u.includes('platform=codex'))).toBe(true);
+      expect(urls.some((u) => u.startsWith('/api/usage/dispatch') && u.includes('platform=codex'))).toBe(true);
+    });
+    /*
+     * 텍스트가 아니라 **title 로** 찾는다. 배지 본문은 `{label} 기준{suffix}` 처럼 JSX 표현식이
+     * 섞여 텍스트 노드가 쪼개지므로 정규식 매처가 못 잡는다(반면 title 은 한 속성이다).
+     */
+    expect(await screen.findAllByTitle(/platform=codex 을 실어 보냅니다/)).not.toHaveLength(0);
+    // 낡은 문구가 남아 있으면 배지와 조회가 갈라진 것이다.
+    expect(screen.queryByText(/전체 플랫폼 기준/)).toBeNull();
   });
 });
 
@@ -542,6 +565,13 @@ describe('축 패널 — 미지원 축을 0 으로 그리지 않는다', () => {
     await screen.findByRole('heading', { name: '사용 현황' });
 
     await user.selectOptions(await screen.findByLabelText('플랫폼'), 'codex');
+    /*
+     * **재조회가 끝날 때까지 기다린다.** 이 탭이 platform 축을 싣게 된 뒤(2026-08-21)로는
+     * 플랫폼을 고르면 조회가 다시 도는데, 그 사이 본문이 로딩으로 바뀌면서 축 패널이
+     * 다시 마운트되어 방금 고른 축 탭이 기본값으로 돌아간다. 기다리지 않으면 축을 누른
+     * 직후 그 선택이 지워져 테스트가 흔들린다.
+     */
+    await waitFor(() => expect(screen.getAllByTitle(/platform=codex 을 실어 보냅니다/).length).toBeGreaterThan(0));
     // codex 의 미수집 축은 슬래시 하나다(스킬은 수집기가 보낸다 — codex.go:589).
     await user.click(screen.getByRole('tab', { name: '슬래시 명령' }));
 
