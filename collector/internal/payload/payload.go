@@ -36,6 +36,23 @@ type Session struct {
 	// 그래서 omitempty 여도 안전하지만, 이 수집기는 항상 명시해 서버의 기본값에 기대지 않는다.
 	Platform string `json:"platform,omitempty"`
 
+	/*
+	 * Runtime 은 이 세션이 **로컬 모델**로 돌았는지다(`local` 또는 부재).
+	 *
+	 * platform 과 다른 축이다 — platform 은 "어느 도구"이고 이건 "어디서 돌았나"다. 로컬
+	 * 모델을 클라우드 에이전트가 물고 돌면 platform 은 여전히 `codex` 이고, 그 사실만으로는
+	 * 클라우드 세션과 구별되지 않는다. 그래서 `codex-local` 같은 합성 platform 을 만들지
+	 * 않고 축을 하나 더 둔다(docs/PLAN-local-llm.md §2.2·§2.3).
+	 *
+	 * ⚠ **omitempty 가 하위호환의 전부다.** 서버는 이 키를 아직 읽지 않고(모르는 키를 조용히
+	 *   버린다), 로컬 세션이 하나도 없으면 이 필드는 직렬화되지 않아 **보고 본문이 바이트
+	 *   동일하다.** 골든 스냅샷이 흔들리지 않는 이유가 이것이다.
+	 *
+	 * 판정은 `internal/runtime` 이 엔드포인트 하나만 보고 하며, 호스트명·포트·경로는
+	 * 여기까지 오지 않는다 — 이 필드가 받는 것은 낱말 하나다.
+	 */
+	Runtime string `json:"runtime,omitempty"`
+
 	Username  string `json:"username,omitempty"`
 	Machine   string `json:"machine,omitempty"`
 	StartedAt string `json:"startedAt,omitempty"`
