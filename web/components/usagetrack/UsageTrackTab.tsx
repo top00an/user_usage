@@ -7,6 +7,8 @@ import type { Dispatch, Leaderboard, PlatformsResponse, Summary, UserRow } from 
 import { n, shortTokens } from '@/lib/format';
 import { Card, Empty, ErrorState, Loading, TableWrap, TokenCount } from '@/components/ui';
 import PlatformFilter from '@/components/platform/PlatformFilter';
+import RuntimeFilter from '@/components/platform/RuntimeFilter';
+import { useScope } from '@/lib/scope';
 import ModelTable from './ModelTable';
 import AxisExplorer from './AxisExplorer';
 import UserFilter from './UserFilter';
@@ -46,8 +48,6 @@ import { AX_CACHE_CREATE, AX_CACHE_READ, IN_HINT, IN_LABEL, TURNS_HINT } from '.
 interface TrackData {
   summary: Summary;
   dispatch: Dispatch | null;
-  /** 축 패널이 "어느 플랫폼이 이 축을 기록하는가"를 말하기 위해 필요하다(목록은 응답이 정한다). */
-  platforms: PlatformsResponse | null;
 }
 
 /*
@@ -133,17 +133,24 @@ export default function UsageTrackTab() {
    * 서로 다른 모집단을 그리면서 그 사실을 말하지 않는다.
    * (platforms 는 "이 서버에 어떤 플랫폼 데이터가 있나"라 사람 축과 무관하다 — 안 싣는다.)
    */
-  const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<TrackData> => {
-    const [summary, dispatch, platforms] = await Promise.all([
-      getSummary({ user }, { signal }),
-      softly(getDispatch({ user }, { signal }), null as Dispatch | null),
-      softly(getPlatforms({ signal }), null as PlatformsResponse | null),
-    ]);
-    return { summary, dispatch, platforms };
-  }, [user]);
+  /*
+   * 의존성으로 쓸 **원시값**을 먼저 뽑는다 — useResource 는 deps 를 문자열로 이어 키를 만들어서
+   * 객체를 넣으면 키가 굳고 재조회가 안 된다(lib/scope.ts 의 경고).
+   */
+  const scope = useScope(user || undefined);
+  const { platform, runtime } = scope;
 
-  // user 가 키에 들어가므로 선택이 바뀌면 재조회된다(낡은 응답은 훅이 키 대조로 버린다).
-  const { state, reload } = useResource(load, [user]);
+  const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<TrackData> => {
+    const s = { platform, runtime, user: user || undefined };
+    const [summary, dispatch] = await Promise.all([
+      getSummary(s, { signal }),
+      softly(getDispatch(s, { signal }), null as Dispatch | null),
+    ]);
+    return { summary, dispatch };
+  }, [platform, runtime, user]);
+
+  // 세 축이 키에 들어가므로 선택이 바뀌면 재조회된다(낡은 응답은 훅이 키 대조로 버린다).
+  const { state, reload } = useResource(load, [platform, runtime, user]);
 
   /*
    * 명단(roster) — 셀렉트의 선택지다. **필터가 걸리지 않은 응답만** 근거로 삼는다.
@@ -172,28 +179,40 @@ export default function UsageTrackTab() {
     : [];
 
   /*
-   * ⚠ 이 화면은 platform 을 **아직 실어 보내지 않는다** — 그래서 applies={false} 로 두고
-   *   "전체 플랫폼 기준"이라고 밝힌다. 그 배지는 정확하다(안 보내면 서버가 전체를 돌려준다).
+   * 이 화면은 스코프 세 축을 **전부 싣는다**(2026-08-21 배선). 그래서 applies={true} 다.
    *
-   *   단 이유를 헷갈리지 말 것: **서버가 못 하는 것이 아니다.** summary·dispatch 둘 다
-   *   platform 을 읽어 거른다(실측: ?platform=codex 로 본문이 줄고, 오타는 400 이다.
-   *   httpapi/platform_scope_test.go 의 TestSummaryPlatformScope 가 이미 못 박고 있다).
-   *   예전 주석과 lib/api.ts 의 표가 "안 받는다"고 적어 두었던 것을 2026-08-13 에 고쳤다.
-   *   배선하려면 두 조회에 platform 을 함께 싣고 applies={true} 로 바꾸면 된다 — 그때
-   *   추천 공백 축만은 여전히 전체다(그 표에 session_id 가 없다).
+   * 서버는 처음부터 summary·dispatch 를 platform·runtime 으로 걸렀다(실측: ?platform=codex 로
+   * 본문 16,399→4,949B, ?runtime=local 로 5,610B. 오타는 400 이다). 못 하는 쪽은 서버가 아니라
+   * 화면이었고, 그 오해의 출처는 "platform 축은 받지 않는다"고 적어 둔 낡은 주석이었다.
    *
-   *   지금도 축 패널은 **축마다** 어느 플랫폼이 그것을 기록하는지 말한다(AxisExplorer).
+   * 예전에 이 배선을 미뤄 둔 단서 하나("추천 공백 축은 못 거른다")는 **해소됐다** —
+   * `Summary.recommendation` 은 응답에 오지만 이 화면이 렌더하지 않는다(그리는 컴포넌트가
+   * 없다). 걸러지지 않는 값을 화면에 놓고 안 밝히는 상태가 애초에 아니었다.
+   *
+   * 축 패널은 여전히 **축마다** 어느 플랫폼이 그것을 기록하는지 말한다(AxisExplorer).
    */
-  const platformRows = state.status === 'ready' ? state.data.platforms?.platforms ?? null : null;
   /*
-   * `.pf-bars` 로 감싸 한 줄에 세운다(globals.css 의 `.pf-bars` 주석).
+   * 플랫폼 목록은 **따로 싣는다**(deps []). 조회 조건과 무관한 선택지의 원천이기 때문이다.
    *
-   * 이 화면에는 runtime 컨트롤을 두지 않는다 — 여기 조회는 스코프 축을 싣지 않으므로
-   * (`applies={false}`) 컨트롤을 세우면 고를 수는 있는데 아무것도 안 바뀐다.
+   * ⚠ 같은 로더에 묶으면 플랫폼을 고를 때마다 목록까지 다시 받아오고, 그동안 rows 가 null 이
+   *   되어 **셀렉트가 사라진다.** 그러면 PlatformFilter 의 "목록에 없는 선택은 되돌린다"
+   *   이펙트가 걸려 방금 고른 값이 즉시 초기화된다 — 고를 수 없는 필터가 된다.
+   *   이 탭이 축을 싣게 된 순간(2026-08-21) 실제로 그 상태가 됐고 테스트가 잡았다.
+   *   UsageObsTab 이 같은 이유로 이미 따로 싣고 있다.
    */
+  const loadPlatforms = useCallback(
+    ({ signal }: { signal: AbortSignal }) => softly(getPlatforms({ signal }), null as PlatformsResponse | null),
+    [],
+  );
+  const platformsRes = useResource(loadPlatforms, []);
+  const platformRows = platformsRes.state.status === 'ready'
+    ? platformsRes.state.data?.platforms ?? null
+    : null;
+  // `.pf-bars` 로 감싸 한 줄에 세운다(globals.css 의 `.pf-bars` 주석).
   const bar = (
     <div className="pf-bars">
-      <PlatformFilter rows={platformRows} applies={false} what="이 화면의 집계는 플랫폼 축으로 걸러지지 않습니다" />
+      <PlatformFilter rows={platformRows} applies what="이 화면의 집계는 이 플랫폼만 셉니다" />
+      <RuntimeFilter />
       <UserFilter users={roster} value={user} onChange={setUser} />
     </div>
   );

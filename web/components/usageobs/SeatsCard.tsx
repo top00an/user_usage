@@ -46,8 +46,13 @@ export default function SeatsCard({ d }: { d: Seats | null }) {
     <Card
       title={`좌석당 ${COST_LABEL} · 기간 비교`}
       className="mt"
-      /* 이 조회는 서버가 platform 축으로 거르지 못한다 — 필터가 걸려 있으면 그렇다고 말한다. */
-      aside={<PlatformScope applies={false} />}
+      /*
+       * 이 조회는 스코프 축으로 **실제로 걸러진다**(실측 2026-08-21: `?platform=codex` 로 본문
+       * 1,029→623B, `?runtime=local` 로 507B). 예전엔 `applies={false}` 로 "전체 플랫폼 기준"이라
+       * 말했는데, 2026-08-13 에 서버·호출부를 배선하면서 이 배지만 안 고쳐진 잔재였다 —
+       * **걸러진 값을 전사 값이라고 말하는** 상태였다(반대 방향의 거짓말이라 더 나쁘다).
+       */
+      aside={<PlatformScope applies />}
     >
       <p className="help" title={COST_WHY}>
         최근 {d.days}일({d.from}~{d.to}) 대 직전 {d.days}일({d.prevFrom}~{d.prevTo}). 증감은 {COST_LABEL} 기준.

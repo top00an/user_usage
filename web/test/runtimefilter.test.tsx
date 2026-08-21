@@ -141,4 +141,32 @@ describe('실행 위치(runtime) 필터', () => {
     expect(labels).toContain('실행 위치');
     expect(labels).toContain('사용자');
   });
+
+  /*
+   * 사용 추적 탭도 세 축을 싣는다(2026-08-21 배선).
+   *
+   * 예전에는 이 화면이 `{user}` 만 넘기고 `applies={false}` 로 "플랫폼 축으로 걸러지지
+   * 않습니다"라고 말했다. 서버는 처음부터 걸렀고 화면이 안 싣고 있었을 뿐이다 — 그 오해의
+   * 출처는 낡은 주석이었다. 되돌아가지 않도록 URL 을 직접 본다.
+   */
+  it('사용 추적 탭도 summary·dispatch 에 runtime 을 싣는다', async () => {
+    location.hash = '#/usage';
+    const { fn } = mockFetch(dashRoutes());
+    const user = userEvent.setup();
+    render(<Dashboard />);
+    await screen.findByLabelText('실행 위치');
+
+    await user.selectOptions(await screen.findByLabelText('실행 위치'), 'local');
+
+    await waitFor(() => {
+      const urls = fn.mock.calls.map(([u]) => String(u));
+      for (const ep of ['summary', 'dispatch']) {
+        const hit = urls.filter((u) => u.startsWith(`/api/usage/${ep}`));
+        expect(hit.some((u) => u.includes('runtime=local')), `${ep} 에 runtime 이 안 실렸다`).toBe(true);
+      }
+      // 선택지의 원천은 여전히 스코프를 싣지 않는다.
+      const pf = urls.filter((u) => u.startsWith('/api/usage/platforms'));
+      expect(pf.every((u) => !u.includes('runtime='))).toBe(true);
+    });
+  });
 });
