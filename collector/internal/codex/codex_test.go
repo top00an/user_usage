@@ -348,6 +348,96 @@ func TestAxesLegacyFormat(t *testing.T) {
 	}
 }
 
+// ── 현행 exec 도구 모양 (실데이터) ───────────────────────────────────────────
+//
+// 실측: 이 머신의 Codex 세션 8개(2026-07, gpt-5.6-terra)는 셸을 이렇게 남긴다 —
+// `custom_tool_call` + name=`exec` + input 은 **JS 소스**다. 예전 파서는 `function_call` +
+// name=`exec_command` + `arguments`(JSON)만 봤으므로 셸 호출 47건에서 bash 축이 0건이었다.
+// 거부가 아니라 침묵이라 화면에서는 "Codex 로 셸을 안 썼다"로 읽혔다.
+
+func TestBashAxisFromCurrentExecToolShape(t *testing.T) {
+	s := parse(t, "fallback-id-0001", metaLine, ctxLine,
+		`{"timestamp":"2026-07-06T00:49:00.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c1","input":"const r = await tools.exec_command({\"cmd\":\"pwd && rg --files -g '!*node_modules*' | head -n 240\",\"workdir\":\"/Users/me/secret-dir\",\"yield_time_ms\":10000});"}}`,
+		tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15),
+	)
+
+	if got := s.Counters["bash"]["pwd"]; got != 1 {
+		t.Errorf("bash[pwd]=%d, want 1 (현행 exec 모양에서 명령을 못 뽑았다): %+v", got, s.Counters["bash"])
+	}
+	// tool 축은 도구가 실제로 쓰는 이름 그대로 둔다 — exec_command 로 바꿔 쓰면 이미 쌓인
+	// 데이터의 상위 N 이 두 키로 갈린다.
+	if got := s.Counters["tool"]["exec"]; got != 1 {
+		t.Errorf("tool[exec]=%d, want 1: %+v", got, s.Counters["tool"])
+	}
+}
+
+// 한 JS 본문이 exec_command 를 여러 번 부를 수 있다. tool 축은 호출 수(1), bash 축은
+// 실행된 명령 수를 센다 — 둘이 어긋나는 것이 정상이다.
+func TestBashAxisMultipleExecCommandsInOneCall(t *testing.T) {
+	s := parse(t, "fallback-id-0001", metaLine, ctxLine,
+		`{"timestamp":"2026-07-06T00:49:00.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c1","input":"await tools.exec_command({\"cmd\":\"npm run build\"});\nawait tools.exec_command({\"cmd\":\"pytest -q\"});"}}`,
+		tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15),
+	)
+
+	if got := s.Counters["bash"]["npm"]; got != 1 {
+		t.Errorf("bash[npm]=%d, want 1: %+v", got, s.Counters["bash"])
+	}
+	if got := s.Counters["bash"]["pytest"]; got != 1 {
+		t.Errorf("bash[pytest]=%d, want 1: %+v", got, s.Counters["bash"])
+	}
+	if got := s.Counters["tool"]["exec"]; got != 1 {
+		t.Errorf("tool[exec]=%d, want 1 (도구 호출은 한 번이다): %+v", got, s.Counters["tool"])
+	}
+}
+
+// 새 경로도 인자 비저장 불변식을 지켜야 한다. 지키는 것은 추출기가 아니라 policy.BashKey 다
+// (선두 실행파일명 하나만 남긴다) — 이 테스트가 그 배선을 못박는다.
+func TestExecInputNeverLeaksArgs(t *testing.T) {
+	s := parse(t, "fallback-id-0001", metaLine, ctxLine,
+		`{"timestamp":"2026-07-06T00:49:00.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c1","input":"await tools.exec_command({\"cmd\":\"curl -H 'Authorization: Bearer TOPSECRETTOKEN' https://x\",\"workdir\":\"/Users/me/secret-dir\"});"}}`,
+		tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15),
+	)
+
+	if got := s.Counters["bash"]["curl"]; got != 1 {
+		t.Errorf("bash[curl]=%d, want 1: %+v", got, s.Counters["bash"])
+	}
+	for k := range s.Counters["bash"] {
+		if strings.ContainsAny(k, "/ :") || strings.Contains(k, "SECRET") {
+			t.Errorf("bash 축에 인자·경로·비밀이 샜다: %q", k)
+		}
+	}
+}
+
+// cmd 를 못 찾으면 축을 만들지 않는다 — 0 을 위조하지 않는다.
+func TestExecInputWithoutCmdMakesNoBashAxis(t *testing.T) {
+	s := parse(t, "fallback-id-0001", metaLine, ctxLine,
+		`{"timestamp":"2026-07-06T00:49:00.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c1","input":"const x = 1;"}}`,
+		tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15),
+	)
+
+	if _, ok := s.Counters["bash"]; ok {
+		t.Errorf("cmd 가 없는데 bash 축을 보냈다: %+v", s.Counters["bash"])
+	}
+	if got := s.Counters["tool"]["exec"]; got != 1 {
+		t.Errorf("tool[exec]=%d, want 1", got)
+	}
+}
+
+// MCP 가 custom_tool_call 로 와도 function_call 과 같은 규율이다 — mcp 축에만 싣는다.
+func TestCustomToolCallMcpNamespaceGoesToMcpAxis(t *testing.T) {
+	s := parse(t, "fallback-id-0001", metaLine, ctxLine,
+		`{"timestamp":"2026-07-06T00:49:00.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"develop","namespace":"mcp__claude","call_id":"c1","input":"{}"}}`,
+		tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15),
+	)
+
+	if got := s.Counters["mcp"]["mcp__claude__develop"]; got != 1 {
+		t.Errorf("mcp[mcp__claude__develop]=%d, want 1: %+v", got, s.Counters["mcp"])
+	}
+	if _, ok := s.Counters["tool"]["develop"]; ok {
+		t.Error("mcp 도구가 tool 축에도 셌다")
+	}
+}
+
 func TestAgentAxisFromSubAgentActivity(t *testing.T) {
 	s := parse(t, "fallback-id-0001", metaLine, ctxLine,
 		`{"timestamp":"2026-07-06T00:49:00.000Z","type":"event_msg","payload":{"type":"sub_agent_activity","agent_type":"reviewer","turn_id":"t-1"}}`,

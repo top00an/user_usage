@@ -111,6 +111,10 @@ type functionCall struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
 	Arguments string `json:"arguments"` // JSON 이 **문자열로** 한 번 더 감싸여 있다
+
+	// Input 은 `custom_tool_call` 쪽 인자다. `arguments`(JSON 문자열)와 달리 **JS 소스**가
+	// 그대로 들어온다 — 아래 execCommandsFromInput 의 주석에 실측 샘플이 있다.
+	Input string `json:"input"`
 }
 
 type execArgs struct {
@@ -528,12 +532,92 @@ func (sa *sessionAgg) addResponseItem(raw json.RawMessage) {
 
 	case "custom_tool_call":
 		var fc functionCall
-		if json.Unmarshal(raw, &fc) == nil && fc.Name != "" {
-			sa.legacy.count("tool", policy.NormKeyOf("tool", fc.Name))
+		if json.Unmarshal(raw, &fc) != nil || fc.Name == "" {
+			return
+		}
+		// MCP 도 이 모양으로 올 수 있다. function_call 쪽과 **같은 규율**을 적용한다 —
+		// namespace 로 갈라 mcp 축에만 싣는다(tool 축에 겹쳐 세지 않는다).
+		// namespace 가 없으면 이 분기를 타지 않으므로 기존 동작이 그대로다.
+		if strings.HasPrefix(fc.Namespace, "mcp__") {
+			sa.legacy.count("mcp", policy.NormKeyOf("mcp", fc.Namespace+"__"+fc.Name))
+			return
+		}
+		sa.legacy.count("tool", policy.NormKeyOf("tool", fc.Name))
+		if isShellToolName(fc.Name) {
+			for _, cmd := range execCommandsFromInput(fc.Input) {
+				// BashKey 는 **선두 실행파일명 하나만** 남긴다. 인자는 절대 저장하지 않는다.
+				sa.legacy.count("bash", policy.BashKey(cmd))
+			}
 		}
 
 		// web_search_call 은 세지 않는다 — event_msg/web_search_end 가 같은 검색의 반대편이다.
 	}
+}
+
+// isShellToolName 은 셸을 실행하는 도구인지 본다.
+//
+// 이름이 **버전마다 다르다**(실측): 구버전은 `function_call` + `exec_command`, 현행은
+// `custom_tool_call` + `exec` 다. 둘 다 받는다 — 하나만 받으면 그 버전의 bash 축이 통째로
+// 빈다. 추측으로 후보를 늘리지는 않는다(관측한 두 개만 둔다).
+func isShellToolName(name string) bool {
+	return name == "exec" || name == "exec_command"
+}
+
+// execCmdRe 는 exec 도구의 인자에서 `cmd` 값의 문자열 리터럴을 뽑는다.
+// 캡처는 **따옴표를 포함한 리터럴 전체**다 — 이스케이프를 직접 풀지 않고 json 에 맡기려면
+// 그래야 한다.
+var execCmdRe = regexp.MustCompile(`["']?cmd["']?\s*:\s*("(?:[^"\\]|\\.)*")`)
+
+// maxExecCmdsPerCall — 한 호출에서 뽑을 명령 수의 상한. JS 한 편이 exec_command 를 여러 번
+// 부를 수 있으므로 복수를 받되, 병적으로 긴 입력이 카운터를 부풀리지 못하게 막는다.
+const maxExecCmdsPerCall = 40
+
+/*
+ * execCommandsFromInput 은 `custom_tool_call` 의 input 에서 실행된 명령들을 뽑는다.
+ *
+ * ── 왜 이런 파싱이 필요한가 (실측) ──────────────────────────────────────────
+ *
+ * 현행 Codex 의 exec 도구는 인자가 JSON 이 아니라 **JS 소스**다:
+ *
+ *	{"type":"custom_tool_call","name":"exec",
+ *	 "input":"const r = await tools.exec_command({\"cmd\":\"pwd && rg --files\",
+ *	          \"workdir\":\"/repo\",\"yield_time_ms\":10000})"}
+ *
+ * 그래서 `json.Unmarshal(input)` 이 통째로 실패한다. 예전 코드는 `exec_command` 라는
+ * **이름**과 `arguments` 필드만 봤으므로, 이 모양이 오면 tool 축에 `exec` 하나만 남고
+ * bash 축은 **조용히 비었다**(실데이터 8세션·셸 호출 47건 → bash 축 0건). 거부가 아니라
+ * 침묵이라 화면에서는 "Codex 로 셸을 안 썼다"로 읽힌다.
+ *
+ * ── 왜 JS 를 제대로 파싱하지 않는가 ─────────────────────────────────────────
+ *
+ * input 은 임의의 JS 다. 여기서 필요한 것은 `cmd` 값 하나뿐이고, 모델은 그 객체를 사실상
+ * JSON 으로 적는다(키가 쌍따옴표). 그래서 `cmd` 키 뒤의 **문자열 리터럴만** 정규식으로
+ * 집고 이스케이프 해제는 json 에 맡긴다. JS 파서를 들이는 것은 이 축이 값하는 것보다 크다.
+ *
+ * ── 왜 오탐이 안전한가 ──────────────────────────────────────────────────────
+ *
+ * 뽑은 문자열은 곧바로 policy.BashKey 를 통과한다. BashKey 는 **선두 실행파일명 하나만**
+ * 남기고 그 밖은 전부 버린다(실행파일명처럼 안 보이면 ""). 따라서 정규식이 엉뚱한 자리를
+ * 집어도 결과는 "키가 하나 빠지거나 틀린다"이고, **인자가 새는 경로는 없다.**
+ * 인자 비저장 불변식을 지키는 것은 이 함수가 아니라 BashKey 다.
+ *
+ * 한 호출에서 여러 명령이 나오면 **각각 센다.** tool 축은 도구 호출 수(exec 1회)를,
+ * bash 축은 실행된 명령 수를 세는 축이라 둘이 어긋나는 것이 정상이다.
+ */
+func execCommandsFromInput(input string) []string {
+	if input == "" || !strings.Contains(input, "cmd") {
+		return nil
+	}
+	ms := execCmdRe.FindAllStringSubmatch(input, maxExecCmdsPerCall)
+	out := make([]string, 0, len(ms))
+	for _, m := range ms {
+		var cmd string
+		// 캡처는 따옴표까지 포함한 리터럴이라 그대로 언마셜하면 이스케이프가 풀린다.
+		if json.Unmarshal([]byte(m[1]), &cmd) == nil && cmd != "" {
+			out = append(out, cmd)
+		}
+	}
+	return out
 }
 
 func (sa *sessionAgg) addAgentSignal(raw json.RawMessage) {
