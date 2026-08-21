@@ -185,11 +185,17 @@ export default function UsageTrackTab() {
    *   지금도 축 패널은 **축마다** 어느 플랫폼이 그것을 기록하는지 말한다(AxisExplorer).
    */
   const platformRows = state.status === 'ready' ? state.data.platforms?.platforms ?? null : null;
+  /*
+   * `.pf-bars` 로 감싸 한 줄에 세운다(globals.css 의 `.pf-bars` 주석).
+   *
+   * 이 화면에는 runtime 컨트롤을 두지 않는다 — 여기 조회는 스코프 축을 싣지 않으므로
+   * (`applies={false}`) 컨트롤을 세우면 고를 수는 있는데 아무것도 안 바뀐다.
+   */
   const bar = (
-    <>
+    <div className="pf-bars">
       <PlatformFilter rows={platformRows} applies={false} what="이 화면의 집계는 플랫폼 축으로 걸러지지 않습니다" />
       <UserFilter users={roster} value={user} onChange={setUser} />
-    </>
+    </div>
   );
 
   /*

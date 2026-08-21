@@ -314,13 +314,18 @@ export default function UsageObsTab() {
   // 세 축이 키에 들어간다 — 바뀌면 낡은 응답이 렌더에 오르지 못한다(hooks/useResource.ts ③).
   const { state, reload } = useResource(load, [platform, runtime, user]);
 
-  /* 컨트롤은 로딩·실패 중에도 남는다 — 사라지면 되돌릴 방법이 화면에서 없어진다. */
+  /*
+   * 컨트롤은 로딩·실패 중에도 남는다 — 사라지면 되돌릴 방법이 화면에서 없어진다.
+   *
+   * `.pf-bars` 로 감싸 **한 줄에** 세운다. 감싸지 않으면 필터마다 한 줄을 먹어 축이 셋이 된
+   * 지금은 상단 세 줄이 조회 조건으로 채워진다(globals.css 의 `.pf-bars` 주석).
+   */
   const bar = (
-    <>
+    <div className="pf-bars">
       <PlatformFilter rows={platformRows} applies what="아래 지표는 이 플랫폼만 집계합니다" />
       <RuntimeFilter />
       <UserFilter users={roster} value={user} onChange={setUser} />
-    </>
+    </div>
   );
 
   let body: React.ReactNode;
