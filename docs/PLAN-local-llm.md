@@ -17,7 +17,10 @@
 | 미등록 모델을 정직하게 처리 | **이미 구현됨** | `go/internal/cost/cost.go` — 모르는 모델은 `Priced=false`, 이름 보존, 조용한 $0 금지 |
 | 오픈웨이트 모델의 단가 문제 인식 | **이미 문서화됨** | `go/internal/cost/seed_openai.go` 의 `openaiUnpriced` |
 | 허용목록 밖 platform 의 안전한 폴백 | **이미 구현됨** | `go/internal/store/platform.go` — `other` 로 정규화, 절대값 UPSERT 라 재전송이 제자리를 찾는다 |
-| 로컬 여부(locality) 신호 | **미구현 — 이 기획의 핵심** | 수집기 3종 전부 `base_url`·`provider` 를 **읽지 않는다**(전수 확인) |
+| 로컬 여부(locality) 신호 — 판정 계층 | **구현 완료** | `collector/internal/runtime` (엔드포인트 → 낱말) · `payload.Session.Runtime` |
+| 〃 — Codex 배선 | **구현 완료** | `session_meta.model_provider` → `codexcfg` 의 이름→base_url → `runtime.Of` |
+| 〃 — Claude·Gemini·Antigravity 배선 | **미구현** | 그 원천들이 엔드포인트를 남기는지 미확인 |
+| 서버가 `runtime` 을 받아 저장·조회 | **미구현** | 인테이크·컬럼·마이그레이션·필터가 남았다(W1-2~4) |
 
 ## 1. 왜 이것이 단순한 원천 추가가 아닌가
 
@@ -96,11 +99,28 @@ Codex·Claude Code 의 `base_url` 만 로컬로 바꿔 쓰는 경우. 세션 파
 파서는 그대로다. `platform` 도 그대로다(도구는 여전히 Codex 다). 필요한 것은 §2.2 의
 `Runtime` 판정뿐이다.
 
-⚠ **미해결 — 판정 근거를 어디서 읽나.** 수집기 3종 전부 `base_url`·`provider` 를 읽지 않는다
-(전수 확인). 세션 파일에 그 값이 남는지 자체가 미확인이고, 남지 않으면 설정 파일
-(`~/.codex/config.toml` · `~/.claude/settings.json` 의 `ANTHROPIC_BASE_URL`)을 읽어야 한다.
-**설정 파일을 읽는 것은 세션 시점의 값이 아니라 "지금" 값이라 과거 세션에 소급 적용하면
-틀린다.** §5 의 샘플이 이 갈림길을 정한다.
+**Codex 는 해결됐다(2026-08-21 실측).** `session_meta.model_provider` 가 실세션 8/8 에 있고
+값은 `openai` 였다. 즉 **provider 이름이 세션 시점에 박힌다** — 설정 파일만 읽을 때의
+소급 오류를 피할 수 있다. 엔드포인트는 이름으로 한 번 더 찾는다:
+
+```
+session_meta.model_provider = "ollama"          ← 세션 파일(시점 고정)
+        ↓
+~/.codex/config.toml
+  [model_providers.ollama]
+  base_url = "http://localhost:11434/v1"        ← 이름 → 엔드포인트
+        ↓
+runtime.Of(base_url) = "local"                  ← 낱말 하나
+```
+
+이름→URL 매핑만 "지금" 값이므로 잔여 드리프트가 있다(이름을 다른 URL 로 재지정하면 과거
+세션이 새 판정을 받는다). 전역 base_url 을 읽는 것보다 훨씬 좁고, 이름 재지정은 드물다.
+판정 못 하는 경우는 전부 **침묵**이다 — 리졸버 미주입 · 기본 provider(`openai`) ·
+config 에 이름 없음 · `model_provider` 미기록.
+
+⚠ **Claude·Gemini·Antigravity 는 아직 미해결이다.** 그쪽 세션 파일이 엔드포인트나 provider 를
+남기는지 확인하지 못했다. Claude 는 `ANTHROPIC_BASE_URL` 이 환경변수라 세션에 안 남을
+가능성이 높고, 그러면 설정 파일 소급 문제로 되돌아간다 → D2.
 
 또 하나: 로컬 엔드포인트는 캐시 축을 주지 않는다. `cacheRead`·`cacheCreate` 가 0 으로 오는데,
 지원표는 이것을 **`해당 없음`** 으로 표기해야 한다(`미수집` 이 아니다 — 그 개념이 없다).
@@ -177,7 +197,7 @@ W1-5 는 코드 변경이 아니라 **현행 동작을 못박는 테스트**다.
 | # | 무엇 | 왜 지금 못 정하나 |
 |---|---|---|
 | D1 | 지원표(`platform-coverage`)가 플랫폼 단위인데, "Codex 인데 로컬이라 캐시 축이 해당 없음"을 표현할 자리가 없다. 행을 (platform × runtime)으로 늘릴지, 각주로 처리할지 | 표가 커지면 화면의 목적(플랫폼별 범위 차이)이 흐려진다. 실제 로컬 세션이 붙은 뒤 보는 게 맞다 |
-| D2 | §3.1 의 판정을 세션 파일에서 읽을지 설정 파일에서 읽을지 | 세션 파일에 엔드포인트가 남는지 미확인. 설정 파일은 "지금" 값이라 과거 세션에 소급하면 틀린다 |
+| D2 | ~~§3.1 의 판정을 세션 파일에서 읽을지 설정 파일에서 읽을지~~ → **Codex 는 해결**(세션에 provider 이름 + config 에 이름→URL). 남은 것은 **Claude·Gemini·Antigravity** — 그쪽이 엔드포인트를 남기는지 | 실물 확인 필요. Claude 의 `ANTHROPIC_BASE_URL` 은 환경변수라 세션에 안 남을 수 있다 |
 | D3 | §3.3 의 도구 선택 | 사용자 결정 사항 |
 | D4 | 로컬 세션의 `project` 귀속 — 로컬 런타임 직접 대화는 워크스페이스 개념이 없을 수 있다 | 원천 스키마를 봐야 안다 |
 

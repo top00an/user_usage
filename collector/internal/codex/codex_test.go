@@ -438,6 +438,129 @@ func TestCustomToolCallMcpNamespaceGoesToMcpAxis(t *testing.T) {
 	}
 }
 
+// ── locality (로컬 LLM) ──────────────────────────────────────────────────────
+//
+// 실측: `session_meta.model_provider` 가 실세션 8/8 에 있고 값은 `openai` 였다. 이름만
+// 있고 엔드포인트는 없으므로 매핑을 주입받아 판정한다(docs/PLAN-local-llm.md §3.1).
+//
+// **세션 파일에 이름이 박혀 있다는 것이 핵심이다.** 설정 파일만 보면 "지금" 값이라 과거
+// 세션에 소급하면 틀리는데, 이름이 세션 시점에 고정돼 있으므로 그 함정을 피한다.
+
+// metaWithProvider 는 model_provider 를 실은 session_meta 줄이다.
+func metaWithProvider(p string) string {
+	return `{"timestamp":"2026-07-06T00:48:35.000Z","type":"session_meta","payload":{` +
+		`"id":"019f34e5-fe0e-7952-95fc-17b2c2c6215b","cwd":"/Users/me/work/orca",` +
+		`"model_provider":` + jsonQuote(p) + `}}`
+}
+
+func jsonQuote(s string) string { return `"` + s + `"` }
+
+// parseWithResolver 는 리졸버를 주입해 세션 하나를 얻는다.
+func parseWithResolver(t *testing.T, resolve func(string) string, lines ...string) payload.Session {
+	t.Helper()
+	a := New()
+	a.ResolveEndpoint = resolve
+	if err := a.AddFile("fallback-id-0001", strings.NewReader(strings.Join(lines, "\n")+"\n")); err != nil {
+		t.Fatalf("AddFile: %v", err)
+	}
+	ss := a.Sessions()
+	if len(ss) != 1 {
+		t.Fatalf("세션 %d개, 1개를 기대했다", len(ss))
+	}
+	return ss[0]
+}
+
+func TestRuntime_LocalProviderMarksSessionLocal(t *testing.T) {
+	resolve := func(p string) string {
+		if p == "ollama" {
+			return "http://localhost:11434/v1"
+		}
+		return ""
+	}
+	s := parseWithResolver(t, resolve,
+		metaWithProvider("ollama"), ctxLine,
+		tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15),
+	)
+	if s.Runtime != "local" {
+		t.Errorf("Runtime = %q, want local", s.Runtime)
+	}
+}
+
+func TestRuntime_RemoteProviderIsNotLocal(t *testing.T) {
+	resolve := func(string) string { return "https://api.together.xyz/v1" }
+	s := parseWithResolver(t, resolve,
+		metaWithProvider("together"), ctxLine,
+		tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15),
+	)
+	if s.Runtime != "" {
+		t.Errorf("Runtime = %q, want empty (공인 엔드포인트다)", s.Runtime)
+	}
+}
+
+/*
+ * 판정하지 않는 세 경우는 전부 빈 값이다. "로컬 아님"과 "모른다"를 갈라 봐야 화면에서 할
+ * 수 있는 일이 없고, 갈라 두면 판정 실패가 클라우드 사용량으로 위조되는 경로가 생긴다.
+ */
+func TestRuntime_SilentWhenUndeterminable(t *testing.T) {
+	// ① 리졸버 미주입 — 기존 동작이 그대로여야 한다(하위호환).
+	s := parse(t, "fallback-id-0001", metaWithProvider("ollama"), ctxLine,
+		tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15))
+	if s.Runtime != "" {
+		t.Errorf("리졸버 없이 Runtime = %q, want empty", s.Runtime)
+	}
+
+	// ② 내장 기본 provider — config 에 블록이 없는 것이 정상이라 "설정 없음"과 달리 다룬다.
+	//    리졸버를 부르지도 않아야 한다.
+	called := false
+	s = parseWithResolver(t, func(string) string { called = true; return "http://127.0.0.1:1" },
+		metaWithProvider(DefaultProvider), ctxLine,
+		tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15))
+	if s.Runtime != "" {
+		t.Errorf("기본 provider 에서 Runtime = %q, want empty", s.Runtime)
+	}
+	if called {
+		t.Error("기본 provider 인데 리졸버를 불렀다")
+	}
+
+	// ③ provider 이름이 config 에 없다(블록이 지워졌거나 파싱 실패) — 추측하지 않는다.
+	s = parseWithResolver(t, func(string) string { return "" },
+		metaWithProvider("gone"), ctxLine,
+		tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15))
+	if s.Runtime != "" {
+		t.Errorf("미해결 provider 에서 Runtime = %q, want empty", s.Runtime)
+	}
+
+	// ④ session_meta 에 model_provider 가 아예 없는 구버전.
+	s = parseWithResolver(t, func(string) string { return "http://127.0.0.1:1" },
+		metaLine, ctxLine, tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15))
+	if s.Runtime != "" {
+		t.Errorf("provider 미기록에서 Runtime = %q, want empty", s.Runtime)
+	}
+}
+
+// 재개로 세션이 두 파일에 갈려도 provider 가 유지된다(파일마다 오지 않을 수 있다).
+func TestRuntime_ProviderSurvivesFileSplit(t *testing.T) {
+	a := New()
+	a.ResolveEndpoint = func(string) string { return "http://192.168.1.9:11434/v1" }
+	// 첫 파일에만 session_meta 가 있다.
+	if err := a.AddFile("fallback-id-0001", strings.NewReader(
+		metaWithProvider("rig")+"\n"+ctxLine+"\n"+
+			tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15)+"\n")); err != nil {
+		t.Fatalf("AddFile: %v", err)
+	}
+	if err := a.AddFile("019f34e5-fe0e-7952-95fc-17b2c2c6215b", strings.NewReader(
+		ctxLine+"\n"+tokenCount("2026-07-06T00:59:10.000Z", 20, 0, 9, 0, 29)+"\n")); err != nil {
+		t.Fatalf("AddFile: %v", err)
+	}
+	ss := a.Sessions()
+	if len(ss) != 1 {
+		t.Fatalf("세션 %d개, 1개를 기대했다(같은 세션이 두 파일에 갈렸다)", len(ss))
+	}
+	if ss[0].Runtime != "local" {
+		t.Errorf("Runtime = %q, want local (사설 대역이다)", ss[0].Runtime)
+	}
+}
+
 func TestAgentAxisFromSubAgentActivity(t *testing.T) {
 	s := parse(t, "fallback-id-0001", metaLine, ctxLine,
 		`{"timestamp":"2026-07-06T00:49:00.000Z","type":"event_msg","payload":{"type":"sub_agent_activity","agent_type":"reviewer","turn_id":"t-1"}}`,

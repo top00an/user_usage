@@ -38,6 +38,7 @@ import (
 
 	"github.com/tscorp/user-usage/collector/internal/antigravity"
 	"github.com/tscorp/user-usage/collector/internal/codex"
+	"github.com/tscorp/user-usage/collector/internal/codexcfg"
 	"github.com/tscorp/user-usage/collector/internal/gemini"
 	"github.com/tscorp/user-usage/collector/internal/payload"
 	"github.com/tscorp/user-usage/collector/internal/sender"
@@ -112,12 +113,29 @@ func sourcesOf(opt options) []source {
 		})
 	}
 	if wants(opt.platform, "codex") && opt.codexDir != "" {
+		/*
+		 * provider 이름 → 엔드포인트 매핑을 **한 번만** 읽어 리졸버로 주입한다.
+		 *
+		 * 왜 여기서 읽나: codex 파서는 순수 계층이라 파일을 열지 않는다. config.toml 을
+		 * 읽는 것은 CLI 의 일이고, 파서는 이름→엔드포인트 함수만 받는다.
+		 *
+		 * 왜 한 번인가: 세션 수만큼 다시 읽을 이유가 없고, 훑는 도중 파일이 바뀌면
+		 * 세션마다 다른 답이 나와 결과가 비결정적이 된다.
+		 *
+		 * 읽기에 실패하면 빈 맵이다 → 리졸버가 "" 를 내고 locality 는 판정되지 않는다.
+		 * 그게 맞는 실패다 — 없는 정보를 추측하지 않는다.
+		 */
+		providers := codexProviders(opt.codexDir)
 		out = append(out, source{
 			platform: codex.Platform,
 			dir:      opt.codexDir,
 			match:    matchJSONL,
 			key:      codex.SessionIDFromPath,
-			newAgg:   func() aggregator { return codex.New() },
+			newAgg: func() aggregator {
+				a := codex.New()
+				a.ResolveEndpoint = func(p string) string { return providers[p] }
+				return a
+			},
 		})
 	}
 	if wants(opt.platform, gemini.Platform) && opt.geminiDir != "" {
@@ -551,6 +569,30 @@ func defaultDir() string {
 		return filepath.Join(home, ".claude", "projects")
 	}
 	return ""
+}
+
+/*
+ * codexProviders 는 `<codexDir>/../config.toml` 에서 provider 이름 → base_url 을 읽는다.
+ *
+ * 경로를 세션 디렉터리 기준으로 잡는 이유: `-codex-dir` 로 원천을 옮긴 사람(테스트·다른
+ * 계정 검사)은 그 옆의 config 를 보게 되는 것이 맞다. 홈 디렉터리를 고정으로 쓰면 원천과
+ * 설정이 서로 다른 설치를 가리킬 수 있다.
+ *
+ * 실패는 전부 조용하다 — 파일이 없거나 못 읽으면 빈 맵이고, 그러면 locality 가 판정되지
+ * 않는다(없는 정보를 추측하지 않는다). config.toml 이 없는 것은 **정상**이다: 커스텀
+ * provider 를 안 쓰면 만들 이유가 없다.
+ *
+ * ⚠ 이 파일에는 API 키가 들어 있을 수 있다. codexcfg 는 `base_url` **한 키만** 읽고 그
+ *   값도 곧바로 locality 낱말로 줄어들어 페이로드에 실리지 않는다.
+ */
+func codexProviders(codexDir string) map[string]string {
+	path := filepath.Join(filepath.Dir(strings.TrimRight(codexDir, `/\`)), "config.toml")
+	f, err := os.Open(path)
+	if err != nil {
+		return map[string]string{}
+	}
+	defer f.Close() //nolint:errcheck // 읽기 전용 — 닫기 실패에 할 수 있는 일이 없다
+	return codexcfg.Providers(f)
 }
 
 func defaultCodexDir() string {
