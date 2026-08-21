@@ -147,6 +147,22 @@ tool response 원문
 
 완료 조건: tool 이름과 성공 여부가 실제 hook 샘플에서 확인되고, 기존 statusLine 수집이 깨지지 않는다.
 
+#### 상태 (2026-08-21)
+
+**미착수 — BLOCKED.** Antigravity CLI(`agy`)가 이 머신에 없어 hook stdin 샘플이 0건이다.
+기획서 §5 의 P0("Antigravity hook 샘플 확보")가 곧 이 선행 조건이다.
+
+다만 **기존 statusLine 경로의 기준선은 확보했다**(회귀 판단의 근거가 된다). 합성 스풀 +
+`history.jsonl` 로 수집기를 돌려 확인한 값:
+
+- 스풀 누적: 같은 usage 를 3회 렌더해도 `invocations=2`, 입력 합산 `17283+17506 = 34789`,
+  출력은 누적값 `totalOutput=40` 을 그대로(패키지 주석의 실측표와 일치)
+- `history.jsonl` → **slash 축**(`/model`·`/compact` → `{model:1, compact:1}`) · keyword 축
+- tool·bash·mcp·skill·agent 축은 **없다** — 지원표의 `미수집` 과 일치한다(0 을 만들지 않는다)
+
+즉 W2 가 손댈 자리는 "없는 축을 새로 만드는 것"이고, 위 축들이 그 작업 전후로 변하지 않아야
+한다(§W6 의 회귀 조건).
+
 ### W3 — Antigravity transcript와 LOC/편집량
 
 statusline의 `transcript_path`가 실제 존재하는지 확인하고, 실제 transcript JSONL 샘플을 확보한다.
