@@ -22,7 +22,7 @@ import (
  * 필터는 **값만 바인딩한다** — 컬럼명·정렬축을 문자열로 이어 붙이지 않는다(주입 표면 0).
  */
 
-const sessionSelectCols = "session_id, machine, username, project, model, platform, input, output, cache_read," +
+const sessionSelectCols = "session_id, machine, username, project, model, platform, runtime, input, output, cache_read," +
 	" cache_create, input_long, output_long, cache_read_long, cache_create_long," +
 	" input_fast, output_fast, cache_read_fast, cache_create_fast," +
 	" web_search, web_fetch, turns, started_at, ended_at, reported_at"
@@ -81,6 +81,11 @@ func sessionWhereOn(f Filter, alias string) ([]string, []any) {
 		where = append(where, col("platform")+" = ?")
 		args = append(args, f.Platform)
 	}
+	// runtime 도 같다 — 미지정이면 조건이 없어 전체가 온다.
+	if f.Runtime != "" {
+		where = append(where, col("runtime")+" = ?")
+		args = append(args, f.Runtime)
+	}
 	return where, args
 }
 
@@ -105,6 +110,33 @@ func platformSessionCond(f Filter, childSessionCol string) (string, []any) {
 	}
 	return "EXISTS (SELECT 1 FROM usage_sessions ps WHERE ps.session_id = " + childSessionCol +
 		" AND ps.platform = ?)", []any{f.Platform}
+}
+
+/*
+ * runtimeSessionCond 는 같은 일을 runtime 축으로 한다.
+ *
+ * platformSessionCond 와 **합치지 않는다.** 합치면 두 축이 동시에 지정된 요청에서 한 서브쿼리에
+ * 두 조건이 들어가는데, 그건 지금은 맞지만 한쪽 축의 규칙이 바뀌는 날 다른 축이 조용히
+ * 따라 움직인다. 두 축은 직교하므로 조건도 나란히 둔다.
+ *
+ * 별칭이 `rs` 다 — `ps`(platform)와 겹치면 두 축을 함께 지정한 요청에서 뒤 서브쿼리가 앞
+ * 서브쿼리의 행을 보게 된다(문법 오류도 안 나고 값만 틀린다).
+ */
+func runtimeSessionCond(f Filter, childSessionCol string) (string, []any) {
+	if f.Runtime == "" {
+		return "", nil
+	}
+	return "EXISTS (SELECT 1 FROM usage_sessions rs WHERE rs.session_id = " + childSessionCol +
+		" AND rs.runtime = ?)", []any{f.Runtime}
+}
+
+// seriesRuntimeCond·counterRuntimeCond — 자식 표를 runtime 으로 거른다(platform 과 같은 규율).
+func seriesRuntimeCond(f Filter) (string, []any) {
+	return runtimeSessionCond(f, "usage_series.session_id")
+}
+
+func counterRuntimeCond(f Filter) (string, []any) {
+	return runtimeSessionCond(f, "usage_counters.session_id")
 }
 
 // seriesPlatformCond 는 시간 버킷(usage_series)을 플랫폼으로 거르는 조건이다.
@@ -173,6 +205,7 @@ func mapSession(r db.Row) Session {
 		Project:     r.Str("project"),
 		Model:       r.Str("model"),
 		Platform:    r.Str("platform"),
+		Runtime:     r.Str("runtime"),
 		Input:       r.Int("input"),
 		Output:      r.Int("output"),
 		CacheRead:   r.Int("cache_read"),
@@ -318,6 +351,10 @@ func SeriesRows(ctx context.Context, f Filter) ([]Bucket, error) {
 		where = append(where, cond)
 		args = append(args, cargs...)
 	}
+	if cond, cargs := seriesRuntimeCond(f); cond != "" {
+		where = append(where, cond)
+		args = append(args, cargs...)
+	}
 	sql := "SELECT " + seriesSelectCols + " FROM usage_series"
 	if len(where) > 0 {
 		sql += " WHERE " + strings.Join(where, " AND ")
@@ -386,6 +423,10 @@ func SeriesQualityTotals(ctx context.Context, f Filter) (QualityTotals, error) {
 		args = append(args, f.Username)
 	}
 	if cond, cargs := seriesPlatformCond(f); cond != "" {
+		where = append(where, cond)
+		args = append(args, cargs...)
+	}
+	if cond, cargs := seriesRuntimeCond(f); cond != "" {
 		where = append(where, cond)
 		args = append(args, cargs...)
 	}

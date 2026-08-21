@@ -119,7 +119,10 @@ func (s *server) storeSessions(ctx context.Context, sessions []intake.Session, k
 			// 선택적 필드다 — 안 보내면 빈 값이고, 저장 계층이 claude 로 채운다
 			// (허용목록 밖은 other). 그 규칙의 단일 출처는 store.NormalizePlatform 이다.
 			Platform: deref(sess.Platform),
-			Input:    sess.Input, Output: sess.Output,
+			// 같은 규율 — 안 보내면 빈 값이고 저장 계층이 cloud 로 채운다(허용목록 밖도 cloud).
+			// 단일 출처는 store.NormalizeRuntime 이다.
+			Runtime: deref(sess.Runtime),
+			Input:   sess.Input, Output: sess.Output,
 			CacheRead: sess.CacheRead, CacheCreate: sess.CacheCreate,
 			// 계단 분리분 — 없으면 0 이고 그것이 현행 동작이다(전부 표준 구간).
 			InputLong: sess.InputLong, OutputLong: sess.OutputLong,
@@ -285,6 +288,12 @@ func (s *server) routeAdmin(w http.ResponseWriter, r *http.Request, c *rctx) (bo
 		if !ok {
 			return true, nil
 		}
+		// runtime 도 같은 자리에서 읽는다 — 이 화면의 카드들이 서로 다른 표에서 오므로
+		// 한 곳에서 읽어 한 Filter 로 흘려야 두 카드가 다른 모집단을 그리지 않는다.
+		runtimeSel, ok := runtimeParam(w, c)
+		if !ok {
+			return true, nil
+		}
 		/*
 		 * user 필터 — 사용 추적 화면이 "이 사람만" 볼 때 싣는다. 파라미터 이름은 이미 쓰이는
 		 * `user` 로 맞춘다(analytics.go 의 sessions·platforms 갈래와 한 벌).
@@ -295,7 +304,7 @@ func (s *server) routeAdmin(w http.ResponseWriter, r *http.Request, c *rctx) (bo
 		 *
 		 * 미지정이면 조건이 하나도 안 붙는다 = 현행과 같은 SQL·같은 응답(골든 44개 무회귀).
 		 */
-		f := store.Filter{Platform: platform, Username: c.query.Get("user")}
+		f := store.Filter{Platform: platform, Runtime: runtimeSel, Username: c.query.Get("user")}
 
 		totals, err := store.TotalsWithFilter(ctx, f)
 		if err != nil {

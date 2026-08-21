@@ -450,6 +450,10 @@ func TopKeysWithFilter(ctx context.Context, kind string, limit int, f Filter) ([
 		sql += " AND " + cond
 		args = append(args, cargs...)
 	}
+	if cond, cargs := counterRuntimeCond(f); cond != "" {
+		sql += " AND " + cond
+		args = append(args, cargs...)
+	}
 	if cond, cargs := counterUserCond(f); cond != "" {
 		sql += " AND " + cond
 		args = append(args, cargs...)
@@ -502,6 +506,10 @@ func ByUserWithFilter(ctx context.Context, kind string, limit int, f Filter) ([]
 		" FROM usage_counters WHERE kind=?"
 	args := []any{kind}
 	if cond, cargs := counterPlatformCond(f); cond != "" {
+		sql += " AND " + cond
+		args = append(args, cargs...)
+	}
+	if cond, cargs := counterRuntimeCond(f); cond != "" {
 		sql += " AND " + cond
 		args = append(args, cargs...)
 	}

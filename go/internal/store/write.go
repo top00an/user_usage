@@ -21,7 +21,9 @@ import (
 var ErrEmptySessionID = errors.New("store: sessionId 가 비었다")
 
 var sessionCols = []string{
-	"machine", "username", "project", "model", "platform",
+	// runtime 은 platform 바로 뒤다 — 둘이 직교하는 축이라는 것이 여기서 보여야 한다
+	// (platform = 어느 도구 · runtime = 어디서 돌았나).
+	"machine", "username", "project", "model", "platform", "runtime",
 	"input", "output", "cache_read", "cache_create",
 	// 계단(롱컨텍스트) 분리분. 총량 바로 뒤에 둔다 — 둘의 관계(부분집합)가 눈에 보여야
 	// 나중에 한쪽만 고치는 사고가 준다.
@@ -59,6 +61,9 @@ func SessionUpsert(ctx context.Context, s SessionInput) error {
 		// platform 은 nullStr 로 감싸지 않는다 — 컬럼이 NOT NULL 이고, 무엇보다 "안 보냈다"의
 		// 뜻이 여기서는 NULL 이 아니라 claude 다(NormalizePlatform 이 그 규칙의 단일 출처).
 		NormalizePlatform(s.Platform),
+		// runtime 도 같은 이유로 nullStr 를 쓰지 않는다 — "안 보냈다"의 뜻이 NULL 이 아니라
+		// cloud 다(NormalizeRuntime 이 그 규칙의 단일 출처).
+		NormalizeRuntime(s.Runtime),
 		nonNeg(s.Input), nonNeg(s.Output), nonNeg(s.CacheRead), nonNeg(s.CacheCreate),
 		nonNeg(s.InputLong), nonNeg(s.OutputLong), nonNeg(s.CacheReadLong), nonNeg(s.CacheCreateLong),
 		nonNeg(s.InputFast), nonNeg(s.OutputFast), nonNeg(s.CacheReadFast), nonNeg(s.CacheCreateFast),

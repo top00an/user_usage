@@ -216,6 +216,26 @@ func platformParam(w http.ResponseWriter, c *rctx) (string, bool) {
 	return v, true
 }
 
+/*
+ * runtimeParam 은 선택적 `runtime=` 을 읽는다 — platformParam 과 **같은 규율**이다
+ * (미지정은 조건 없음 · 정규화하지 않음 · 허용목록 밖은 400).
+ *
+ * 왜 platformParam 에 합치지 않나: 두 축은 직교하고 각자 미지정일 수 있다. 한 함수가 둘을
+ * 함께 읽으면 한쪽만 쓰는 라우트에서 다른 축의 400 규칙이 따라 들어온다.
+ */
+func runtimeParam(w http.ResponseWriter, c *rctx) (string, bool) {
+	v := c.query.Get("runtime")
+	if v == "" {
+		return "", true
+	}
+	if !store.IsRuntimeFilter(v) {
+		sendError(w, http.StatusBadRequest,
+			"runtime 은 "+strings.Join(store.Runtimes, "|")+" 중 하나입니다")
+		return "", false
+	}
+	return v, true
+}
+
 /* ── 라우트 ───────────────────────────────────────────────────────────── */
 
 func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx) (bool, error) {
@@ -256,6 +276,15 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 		return true, nil
 	}
 	/*
+	 * runtime 필터도 **여기서 한 번만** 읽는다(platform 과 같은 규율). 갈래마다 따로 읽으면
+	 * 언젠가 한 갈래가 빠지고 그 엔드포인트만 조용히 전체를 돌려준다 — platform 축에서
+	 * 실제로 났던 사고다.
+	 */
+	runtimeSel, ok := runtimeParam(w, c)
+	if !ok {
+		return true, nil
+	}
+	/*
 	 * user 필터도 **여기서 한 번만** 읽는다(platform 과 같은 규율). 갈래마다 따로 읽으면
 	 * 언젠가 한 갈래가 빠지고, 그 엔드포인트만 조용히 전사 값을 돌려준다 — platform 축에서
 	 * 실제로 났던 사고다. 아래 seats·teams·dev 갈래가 이 값을 함께 쓴다.
@@ -265,14 +294,14 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 	userParam := c.query.Get("user")
 
 	if p == "/api/usage/seats" {
-		return s.routeSeats(w, r, c, platform, userParam)
+		return s.routeSeats(w, r, c, platform, runtimeSel, userParam)
 	}
 	if p == "/api/usage/teams" {
-		return s.routeTeams(w, r, c, platform, userParam)
+		return s.routeTeams(w, r, c, platform, runtimeSel, userParam)
 	}
 	if p == "/api/usage/dev" {
 		days := clampInt(int(numOr(c.query.Get("days"), 30)), 1, 365)
-		tot, byDay, err := store.DevMetricsWithFilter(r.Context(), days, store.Filter{Platform: platform, Username: userParam})
+		tot, byDay, err := store.DevMetricsWithFilter(r.Context(), days, store.Filter{Platform: platform, Runtime: runtimeSel, Username: userParam})
 		if err != nil {
 			return true, err
 		}
@@ -300,7 +329,7 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 		// user 는 그 표의 username 컬럼을 직접 본다(되짚을 필요가 없다). 사용 추적 화면이
 		// 한 사람으로 좁힐 때 같은 값을 summary 와 이 갈래에 함께 싣는다 — 한쪽만 걸면
 		// 같은 화면의 두 카드가 서로 다른 모집단을 그리고, 그 사실이 어디에도 안 보인다.
-		f := store.Filter{Platform: platform, Username: c.query.Get("user")}
+		f := store.Filter{Platform: platform, Runtime: runtimeSel, Username: c.query.Get("user")}
 		agents, err := store.ByUserWithFilter(ctx, "agent", 0, f)
 		if err != nil {
 			return true, err
@@ -397,7 +426,7 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 	// 데이터에서 조용한 과소 보고가 된다. 그래서 rows 조회 **앞**에서 끊는다.
 	if p == "/api/usage/platforms" {
 		rollup, err := store.PlatformRollup(ctx, store.Filter{
-			From: from, To: to, Username: username, Model: model, Platform: platform,
+			From: from, To: to, Username: username, Model: model, Platform: platform, Runtime: runtimeSel,
 		})
 		if err != nil {
 			return true, err
@@ -426,7 +455,7 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 	}
 
 	rows, err := store.SessionRows(ctx, store.Filter{
-		From: from, To: to, Username: username, Model: model, Platform: platform, Limit: limit,
+		From: from, To: to, Username: username, Model: model, Platform: platform, Runtime: runtimeSel, Limit: limit,
 	})
 	if err != nil {
 		return true, err
@@ -553,7 +582,7 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 	if p == "/api/usage/coverage" {
 		// 사용자 축을 함께 싣는다 — "이 사람의 PC 들이 언제 마지막으로 보고했나"가
 		// 개인 화면의 "왜 내 데이터가 없나"에 대한 답이다.
-		reporters, err := store.ReporterCoverageWithFilter(ctx, store.Filter{Platform: platform, Username: userParam})
+		reporters, err := store.ReporterCoverageWithFilter(ctx, store.Filter{Platform: platform, Runtime: runtimeSel, Username: userParam})
 		if err != nil {
 			return true, err
 		}
@@ -567,7 +596,7 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 	// ── 품질축 ────────────────────────────────────────────────────────────
 	if p == "/api/usage/quality" {
 		qt, err := store.SeriesQualityTotals(ctx, store.Filter{
-			From: from, To: to, Username: username, Platform: platform,
+			From: from, To: to, Username: username, Platform: platform, Runtime: runtimeSel,
 		})
 		if err != nil {
 			return true, err
@@ -718,7 +747,7 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 	if byHour {
 		srcLimit = store.SeriesRowsDefault
 		buckets, err := store.SeriesRows(ctx, store.Filter{
-			From: wFrom, To: wTo, Username: username, Model: model, Platform: platform, Limit: srcLimit,
+			From: wFrom, To: wTo, Username: username, Model: model, Platform: platform, Runtime: runtimeSel, Limit: srcLimit,
 		})
 		if err != nil {
 			return true, err
@@ -734,7 +763,7 @@ func (s *server) routeAnalytics(w http.ResponseWriter, r *http.Request, c *rctx)
 		}
 	} else {
 		sessions, err := store.SessionRows(ctx, store.Filter{
-			From: wFrom, To: wTo, Username: username, Model: model, Platform: platform, Limit: srcLimit,
+			From: wFrom, To: wTo, Username: username, Model: model, Platform: platform, Runtime: runtimeSel, Limit: srcLimit,
 		})
 		if err != nil {
 			return true, err

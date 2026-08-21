@@ -187,6 +187,21 @@ type Session struct {
 	// 허용목록 밖→other)은 저장 계층이 단일 출처로 갖는다. 여기서 또 접으면 규칙이 두 벌이 된다.
 	Platform *string
 
+	/*
+	 * Runtime 은 이 세션이 **로컬 모델**로 돌았는지다(`local` 또는 nil).
+	 *
+	 * platform 과 다른 축이다 — platform 은 "어느 도구"이고 이건 "어디서 돌았나"다. 로컬
+	 * 모델을 클라우드 에이전트가 물고 돌면 platform 은 여전히 `codex` 라 두 값이 구별되지
+	 * 않는다(docs/PLAN-local-llm.md §2.2).
+	 *
+	 * Platform 과 **같은 규율**이다: 선택적 필드이고, 값을 좁히는 규칙(빈 값→cloud,
+	 * 허용목록 밖→cloud)은 저장 계층이 단일 출처로 갖는다. 여기서 또 접으면 두 벌이 된다.
+	 *
+	 * 왜 거부하지 않나: 서버보다 새로운 수집기가 모르는 값을 보내면 그 세션이 통째로
+	 * 사라지는 것이 최악이다. platform 이 `other` 로 살아남는 것과 같은 이유다.
+	 */
+	Runtime *string
+
 	Input       int64
 	Output      int64
 	CacheRead   int64
@@ -410,6 +425,7 @@ func NormSession(raw map[string]any, ctx ...Ctx) (Session, bool) {
 		Model:     nilIfEmpty(normModel(raw["model"])),
 		// 40자로 자른다 — 식별자 하나이고, 길면 어차피 저장 계층이 other 로 접는다.
 		Platform:        nilIfEmpty(clip(jsString(raw["platform"]), 40)),
+		Runtime:         nilIfEmpty(clip(jsString(raw["runtime"]), 40)),
 		Input:           in,
 		Output:          out,
 		CacheRead:       cr,
