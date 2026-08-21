@@ -352,7 +352,53 @@ func (a *Aggregator) runtimeOf(provider string) string {
 	if a.ResolveEndpoint == nil || provider == "" || provider == DefaultProvider {
 		return ""
 	}
-	return runtime.Of(a.ResolveEndpoint(provider))
+	if ep := a.ResolveEndpoint(provider); ep != "" {
+		/*
+		 * config 가 답을 줬으면 **그것이 정본이다** — 이름으로 뒤집지 않는다.
+		 *
+		 * 누군가 `[model_providers.ollama].base_url` 을 공인 주소로 적어 두었으면 그건 로컬이
+		 * 아니고, 이름이 `ollama` 라는 사실은 그 앞에서 아무 힘이 없다. 아래 이름 판정이
+		 * 이 분기 **뒤에** 오는 것이 그 순서다.
+		 */
+		return runtime.Of(ep)
+	}
+	// config 에 블록이 없다 → 이름 자체가 로컬을 뜻하는 내장 provider 인지 본다.
+	if localProviders[strings.ToLower(provider)] {
+		return runtime.Local
+	}
+	return ""
+}
+
+/*
+ * localProviders — **이름 자체가 로컬을 뜻하는** provider 다.
+ *
+ * ── 왜 필요한가 ────────────────────────────────────────────────────────────
+ *
+ * 로컬 모델을 Codex 로 쓰는 가장 흔한 방법은 `config.toml` 에 provider 블록을 손으로 적는 것이
+ * 아니라 **CLI 플래그**다(`codex --oss --local-provider ollama|lmstudio` — `codex --help` 로 확인).
+ * 그 경로는 provider 정의가 바이너리에 내장돼 있어 `config.toml` 에 블록이 없을 수 있고, 그러면
+ * 이름→엔드포인트 조회가 빈손으로 돌아와 **locality 가 조용히 빠진다.** 가장 흔한 사용법에서
+ * 축이 비는 것이 이 축의 최악이므로 이름으로도 받는다.
+ *
+ * ── 왜 이름으로 판정해도 안전한가 ──────────────────────────────────────────
+ *
+ * 이 셋은 로컬 런타임의 고유명사다(`oss` 는 Codex 가 그 경로에 붙인 이름이고, 나머지 둘은
+ * 런타임 제품명이다). 원격을 가리키게 만들려면 `config.toml` 에 base_url 을 적어야 하는데,
+ * 그러면 위 분기가 먼저 답하므로 이 목록은 타지 않는다. 즉 오탐 경로가 없다.
+ *
+ * ⚠ **추측으로 목록을 늘리지 않는다.** `vllm`·`llamacpp` 같은 이름을 넣고 싶어지지만, Codex 가
+ *   그 이름을 내장 provider 로 갖고 있다는 근거가 없다. 근거 없이 넣으면 사용자가 그 이름으로
+ *   **원격** provider 를 정의했을 때(그리고 config 를 못 읽었을 때) 원격 사용량이 로컬로
+ *   위조된다 — 이 축에서 가장 나쁜 방향의 오류다.
+ *
+ * ⚠ **미실증:** `--oss` 가 `session_meta.model_provider` 에 실제로 무엇을 쓰는지는 아직 확인하지
+ *   못했다(이 머신에 Ollama 가 없어 실행이 provider 검증 단계에서 멈춘다). 세 이름을 모두 받는
+ *   것은 그 불확실성을 덮기 위한 것이고, 실데이터가 생기면 실제 값 하나로 좁힐 수 있다.
+ */
+var localProviders = map[string]bool{
+	"oss":      true, // codex --oss 가 붙이는 이름(추정 — 실데이터로 확인 필요)
+	"ollama":   true,
+	"lmstudio": true,
 }
 
 // AddFile 은 롤아웃 파일 하나를 누적한다. fallbackID 는 `session_meta` 가 없거나 그 id 가
