@@ -23,7 +23,10 @@
 //	Output      = output_tokens                               ← reasoning 이 **이미 포함**돼 있다
 //	CacheCreate = 0                                           ← 관측 불가(아래 주석 참고)
 //
-// 표준 라이브러리와 collector/internal/{payload,policy} 말고 아무것도 import 하지 않는다.
+// 표준 라이브러리와 collector/internal/{payload,policy,runtime} 말고 아무것도 import 하지
+// 않는다. runtime 도 순수 계층이다(엔드포인트 문자열 → locality 낱말) — 파일을 열지 않으므로
+// 이 패키지의 "순수" 성질이 유지된다. provider 이름 → 엔드포인트 매핑은 주입받는다
+// (Aggregator.ResolveEndpoint) — config.toml 을 읽는 것은 CLI 계층의 일이다.
 package codex
 
 import (
@@ -39,10 +42,18 @@ import (
 
 	"github.com/tscorp/user-usage/collector/internal/payload"
 	"github.com/tscorp/user-usage/collector/internal/policy"
+	"github.com/tscorp/user-usage/collector/internal/runtime"
 )
 
 // Platform 은 이 원천이 서버에 자기를 밝히는 이름이다(payload.Session.Platform).
 const Platform = "codex"
+
+// DefaultProvider 는 Codex 의 **내장 기본** provider 다(`session_meta.model_provider`).
+//
+// 이 값이면 공식 클라우드 엔드포인트이고 `config.toml` 에 블록이 **없는 것이 정상**이다
+// (실측: 이 머신의 실세션 8/8 이 이 값이고 config 에 `[model_providers.*]` 가 없다).
+// 그래서 locality 판정에서 이 값은 "설정 없음"과 다르게 다뤄야 한다 — runtimeOf 참고.
+const DefaultProvider = "openai"
 
 // maxLineBytes — 한 줄의 상한. 롤아웃 한 줄에 큰 tool 출력·unified_diff 가 통째로 실려
 // bufio 기본 버퍼(64KB)로는 잘린다. 잘린 줄은 JSON 파싱에 실패해 조용히 버려지는데,
@@ -82,6 +93,15 @@ type sessionMeta struct {
 	ID        string `json:"id"`
 	SessionID string `json:"session_id"` // 일부 버전은 이쪽에 싣는다
 	Cwd       string `json:"cwd"`
+
+	// ModelProvider 는 이 세션이 쓴 provider **이름**이다(실측: 실세션 8/8 에 존재, 값 `openai`).
+	//
+	// 이름만 있고 엔드포인트는 없다 — 매핑은 `~/.codex/config.toml` 의
+	// `[model_providers.<이름>]` 에 있고, 그것을 읽는 것은 internal/codexcfg 다.
+	//
+	// **세션 파일에 있다는 것이 중요하다.** 설정 파일만 보면 "지금" 값이라 과거 세션에
+	// 소급하면 틀리는데, 이름이 세션에 박혀 있으므로 세션 시점의 사실이 보존된다.
+	ModelProvider string `json:"model_provider"`
 }
 
 type turnContext struct {
@@ -238,6 +258,10 @@ type sessionAgg struct {
 	maxTs   string
 	model   string // 가장 최근 turn_context 의 모델 — 턴마다 바뀔 수 있다
 
+	// provider 는 session_meta.model_provider 의 값이다(이름만, 엔드포인트 아님).
+	// Aggregator.ResolveEndpoint 가 이것을 엔드포인트로 바꿔 locality 를 판정한다.
+	provider string
+
 	input, cacheRead, output int64
 	// 계단 몫(위 총량의 부분집합). 세션 총량은 버킷에서 파생되지 않고 따로 누적되므로
 	// 버킷과 같은 자리에서 같이 더한다.
@@ -292,11 +316,43 @@ func newSessionAgg() *sessionAgg {
 type Aggregator struct {
 	sessions map[string]*sessionAgg
 	order    []string // 결정적 출력 순서(첫 등장 순)
+
+	/*
+	 * ResolveEndpoint 는 provider 이름 → 엔드포인트다. nil 이면 locality 를 판정하지 않는다.
+	 *
+	 * 왜 주입인가: 이 패키지는 순수 계층이라 파일을 열지 않는다(io.Reader 만 받는다).
+	 * provider 이름 → base_url 매핑은 `~/.codex/config.toml` 에 있고, 그 파일을 읽는 것은
+	 * CLI 계층의 일이다. 여기서 직접 읽으면 테스트가 실제 홈 디렉터리에 의존하게 된다.
+	 *
+	 * nil 을 기본값으로 두는 것이 중요하다 — 주입하지 않으면 Runtime 이 비고, 그건
+	 * "판정하지 않았다"는 정직한 상태다(§ internal/runtime 의 침묵 규율).
+	 */
+	ResolveEndpoint func(provider string) string
 }
 
-// New 는 빈 누적기를 만든다.
+// New 는 빈 누적기를 만든다. locality 판정을 원하면 ResolveEndpoint 를 채운다.
 func New() *Aggregator {
 	return &Aggregator{sessions: map[string]*sessionAgg{}}
+}
+
+/*
+ * runtimeOf 는 세션의 provider 를 locality 낱말로 줄인다. 판정 못 하면 "" 다.
+ *
+ * 판정하지 않는 경우가 셋이고, 셋 다 **빈 값**이다 — "로컬 아님"과 "모른다"를 갈라 봐야
+ * 화면에서 할 수 있는 일이 없고, 갈라 두면 판정 실패가 클라우드로 위조되는 경로가 생긴다:
+ *
+ *   ① 리졸버가 없다(주입 안 됨)
+ *   ② provider 가 내장 기본값(`openai`)이다 — 공식 클라우드 엔드포인트다
+ *   ③ provider 이름이 config 에 없다 — 블록이 지워졌거나 파싱에 실패했다
+ *
+ * ②를 리졸버에 맡기지 않고 여기서 걸러 내는 이유: 기본 provider 는 config.toml 에 블록이
+ * **없는 것이 정상**이라(실측), 그것을 ③과 같이 다루면 "설정이 이상하다"는 신호가 죽는다.
+ */
+func (a *Aggregator) runtimeOf(provider string) string {
+	if a.ResolveEndpoint == nil || provider == "" || provider == DefaultProvider {
+		return ""
+	}
+	return runtime.Of(a.ResolveEndpoint(provider))
 }
 
 // AddFile 은 롤아웃 파일 하나를 누적한다. fallbackID 는 `session_meta` 가 없거나 그 id 가
@@ -341,6 +397,11 @@ func (sa *sessionAgg) merge(src *sessionAgg) {
 	}
 	if src.model != "" {
 		sa.model = src.model
+	}
+	// provider 는 세션 속성이다(파일마다 바뀌지 않는다). 재개로 파일이 갈렸어도 같은 값이
+	// 오므로 마지막에 본 것을 쓴다.
+	if src.provider != "" {
+		sa.provider = src.provider
 	}
 	if src.minTs != "" && (sa.minTs == "" || src.minTs < sa.minTs) {
 		sa.minTs = src.minTs
@@ -411,6 +472,9 @@ func (sa *sessionAgg) addLine(raw []byte) {
 		}
 		if m.Cwd != "" {
 			sa.project = baseName(m.Cwd) // 경로 원문은 남기지 않는다 — basename 만(Claude 와 동일)
+		}
+		if m.ModelProvider != "" {
+			sa.provider = m.ModelProvider
 		}
 	case "turn_context":
 		var c turnContext
@@ -898,6 +962,7 @@ func (a *Aggregator) Sessions() []payload.Session {
 		out = append(out, payload.Session{
 			ID:        sid,
 			Platform:  Platform,
+			Runtime:   a.runtimeOf(sa.provider),
 			StartedAt: sa.minTs,
 			EndedAt:   sa.maxTs,
 			Project:   sa.project,
