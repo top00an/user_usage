@@ -49,20 +49,28 @@ import (
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 type options struct {
-	dir       string
-	codexDir  string
-	geminiDir string
-	agyDir    string
-	agyHome   string
-	platform  string
-	server    string
-	token     string
-	state     string
-	user      string
-	machine   string
-	limit     int
-	dryRun    bool
-	all       bool
+	dir      string
+	codexDir string
+	/*
+	 * codexDirSet 은 `-codex-dir` 을 **사용자가 직접 줬는가**다.
+	 *
+	 * 필요한 이유: 기본값은 환경(CODEX_HOME)에서 오고, 그때는 기본 홈도 함께 훑어야 한다
+	 * (codexDirs 참고 — 둘 중 하나만 보면 나머지가 조용히 빠진다). 반면 사용자가 명시했으면
+	 * "이 디렉터리만 보라"는 지시이므로 넓히면 안 된다. 값만으로는 둘을 가를 수 없다.
+	 */
+	codexDirSet bool
+	geminiDir   string
+	agyDir      string
+	agyHome     string
+	platform    string
+	server      string
+	token       string
+	state       string
+	user        string
+	machine     string
+	limit       int
+	dryRun      bool
+	all         bool
 	// statusLine 은 수집이 아니라 **기록** 모드다(§ runStatusLine).
 	statusLine bool
 }
@@ -114,29 +122,45 @@ func sourcesOf(opt options) []source {
 	}
 	if wants(opt.platform, "codex") && opt.codexDir != "" {
 		/*
-		 * provider 이름 → 엔드포인트 매핑을 **한 번만** 읽어 리졸버로 주입한다.
+		 * Codex 롤아웃 디렉터리는 **하나가 아닐 수 있다.**
 		 *
-		 * 왜 여기서 읽나: codex 파서는 순수 계층이라 파일을 열지 않는다. config.toml 을
-		 * 읽는 것은 CLI 의 일이고, 파서는 이름→엔드포인트 함수만 받는다.
+		 * 실측(2026-08-21): 이 머신은 Orca 가 `CODEX_HOME` 을 옮겨 띄우고, 그때 세션은 그 홈에만
+		 * 쌓인다. 그런데 사람은 같은 PC 에서 **다른 터미널로도** Codex 를 쓴다(그쪽은 기본
+		 * `~/.codex`). 둘 중 하나만 훑으면 나머지가 통째로 빠지는데 경고가 없다.
 		 *
-		 * 왜 한 번인가: 세션 수만큼 다시 읽을 이유가 없고, 훑는 도중 파일이 바뀌면
-		 * 세션마다 다른 답이 나와 결과가 비결정적이 된다.
+		 * 훅이 물려받는 환경이 어느 쪽이냐에 따라 빠지는 쪽이 달라지므로, "환경변수를 존중한다"만
+		 * 으로는 침묵 손실이 **자리만 옮긴다.** 그래서 서로 다르면 **둘 다** 훑는다.
 		 *
-		 * 읽기에 실패하면 빈 맵이다 → 리졸버가 "" 를 내고 locality 는 판정되지 않는다.
-		 * 그게 맞는 실패다 — 없는 정보를 추측하지 않는다.
+		 * 중복 계상은 나지 않는다: 세션 id 가 uuidv7 이고 서버는 그 키로 절대값 UPSERT 를 한다.
+		 * 같은 세션이 두 곳에 있어도 같은 행을 두 번 덮어쓸 뿐이다.
+		 *
+		 * ⚠ 사용자가 `-codex-dir` 을 **명시**했으면 그 하나만 본다. 명시적 지시를 넓히면
+		 *   "이 디렉터리만 보라"는 뜻이 깨진다(진단·다른 계정 검사에 쓰는 플래그다).
 		 */
-		providers := codexProviders(opt.codexDir)
-		out = append(out, source{
-			platform: codex.Platform,
-			dir:      opt.codexDir,
-			match:    matchJSONL,
-			key:      codex.SessionIDFromPath,
-			newAgg: func() aggregator {
-				a := codex.New()
-				a.ResolveEndpoint = func(p string) string { return providers[p] }
-				return a
-			},
-		})
+		for _, dir := range codexDirs(opt) {
+			/*
+			 * provider 이름 → 엔드포인트 매핑을 그 홈의 config 에서 **한 번만** 읽어 주입한다.
+			 *
+			 * 홈마다 따로 읽는 것이 중요하다 — 두 홈은 서로 다른 설치이고 provider 정의가 다를
+			 * 수 있다. 한쪽 config 로 양쪽을 판정하면 다른 설치의 설정으로 locality 를 매긴다.
+			 *
+			 * 세션 수만큼 다시 읽지는 않는다: 훑는 도중 파일이 바뀌면 세션마다 다른 답이 나와
+			 * 결과가 비결정적이 된다. 읽기 실패는 빈 맵이고, 그러면 locality 가 판정되지 않는다
+			 * (없는 정보를 추측하지 않는다).
+			 */
+			providers := codexProviders(dir)
+			out = append(out, source{
+				platform: codex.Platform,
+				dir:      dir,
+				match:    matchJSONL,
+				key:      codex.SessionIDFromPath,
+				newAgg: func() aggregator {
+					a := codex.New()
+					a.ResolveEndpoint = func(p string) string { return providers[p] }
+					return a
+				},
+			})
+		}
 	}
 	if wants(opt.platform, gemini.Platform) && opt.geminiDir != "" {
 		// 세션은 `<geminiDir>/tmp/` 아래에만 있다. 스캔 뿌리를 거기로 좁혀야
@@ -352,6 +376,14 @@ func parseFlags(args []string, stderr *os.File) (options, error) {
 	default:
 		return options{}, fmt.Errorf("-platform 은 all|claude|codex|gemini|antigravity 중 하나다(받은 값: %q)", opt.platform)
 	}
+	// `-codex-dir` 을 사람이 직접 줬는지는 **값이 아니라 Visit** 으로만 알 수 있다
+	// (환경에서 온 기본값과 같은 문자열일 수 있다).
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "codex-dir" {
+			opt.codexDirSet = true
+		}
+	})
+
 	// 기록 모드는 원천을 훑지 않는다 — 원천이 하나도 없어도 정상이다.
 	if !opt.statusLine && len(sourcesOf(opt)) == 0 {
 		return options{}, fmt.Errorf("훑을 원천이 없다 — -dir·-codex-dir·-gemini-dir·-antigravity-dir 중 하나를 정하라(-platform=%s)", opt.platform)
@@ -561,9 +593,26 @@ func intakeToken() string {
 	return strings.TrimSpace(os.Getenv("USAGE_ADMIN_TOKEN"))
 }
 
+/*
+ * defaultDir 는 Claude 트랜스크립트 디렉터리다.
+ *
+ * ⚠ **CLAUDE_CONFIG_DIR 을 보는 것이 이 함수의 핵심이다.** Claude Code 는 자기 설정 디렉터리를
+ *   그 변수로 옮길 수 있고(claude 바이너리가 그 이름을 읽는다 — 실측), 옮기면 트랜스크립트도
+ *   `<그 경로>/projects` 로 따라간다. `~/.claude/projects` 만 보면 그 사람의 사용량이 통째로
+ *   빠지는데 **거부도 경고도 없다.**
+ *
+ *   같은 함정을 Codex 에서 실제로 맞았다(defaultCodexDir 의 주석 — CODEX_HOME 을 안 봐서
+ *   세션 11개가 조용히 빠졌다). 원천마다 그 도구 자신이 쓰는 변수를 존중하는 것이 규율이다.
+ *
+ * 우선순위: 명시적 경로 > 도구의 설정 디렉터리 > 기본 홈.
+ */
 func defaultDir() string {
 	if v := strings.TrimSpace(os.Getenv("CLAUDE_PROJECTS_DIR")); v != "" {
 		return v
+	}
+	// CLAUDE_CONFIG_DIR 은 Claude Code 자신이 읽는 변수다 — 같은 이름을 그대로 존중한다.
+	if v := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); v != "" {
+		return filepath.Join(v, "projects")
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		return filepath.Join(home, ".claude", "projects")
@@ -595,9 +644,57 @@ func codexProviders(codexDir string) map[string]string {
 	return codexcfg.Providers(f)
 }
 
+/*
+ * codexDirs 는 훑을 Codex 롤아웃 디렉터리들이다 — **보통 하나, 홈이 옮겨져 있으면 둘.**
+ *
+ * 왜 여럿인가: 실측(2026-08-21) 이 머신은 `CODEX_HOME` 이 옮겨진 상태로 돌고, 그때 세션은 그
+ * 홈에만 쌓인다. 그런데 같은 PC 에서 다른 터미널로 쓴 Codex 는 기본 `~/.codex` 에 쌓인다.
+ * 하나만 훑으면 나머지가 통째로 빠지고 **경고가 없다.**
+ *
+ * opt.codexDir 이 기본값과 다르면(=사용자가 `-codex-dir` 로 명시했거나 환경이 옮겼거나) 그것을
+ * 먼저 쓰고, 기본 홈이 그와 다르면 그것도 덧붙인다. 순서는 결정적이다(옮긴 홈 → 기본 홈).
+ *
+ * ⚠ **경로가 같으면 하나만 낸다.** 같은 디렉터리를 두 번 훑으면 파일 수·세션 수 로그가 두 배로
+ *   보여 사람이 데이터가 늘었다고 오해한다(값은 UPSERT 라 안 틀리지만 로그가 거짓말을 한다).
+ */
+func codexDirs(opt options) []string {
+	out := []string{opt.codexDir}
+	// 명시적 지시는 넓히지 않는다 — `-codex-dir` 은 "이 디렉터리만 보라"는 뜻이다.
+	if opt.codexDirSet {
+		return out
+	}
+	// 환경이 옮긴 홈만 보고 있을 때, 기본 홈에도 옛 세션이 남아 있으면 그것까지 본다.
+	if home, err := os.UserHomeDir(); err == nil {
+		fallback := filepath.Join(home, ".codex", "sessions")
+		if fallback != opt.codexDir {
+			out = append(out, fallback)
+		}
+	}
+	return out
+}
+
+/*
+ * defaultCodexDir 는 Codex 롤아웃 디렉터리다.
+ *
+ * ⚠ **CODEX_HOME 을 보는 것이 이 함수의 핵심이다.** Codex 는 자기 홈을 그 환경변수로 옮길 수
+ *   있고, 옮기는 도구가 실제로 있다(실측: Orca 가 `CODEX_HOME=~/.local/share/orca/
+ *   codex-runtime-home/home` 으로 띄운다). 그때 세션은 **거기에만** 쌓이고 `~/.codex` 는
+ *   옛 파일만 남는다.
+ *
+ *   이 한 줄이 없으면 수집기가 "세션 8개 전송 완료"라고 말하는 동안 그 홈의 11개가 통째로
+ *   빠진다(2026-08-21 실측 수치다). 거부도 경고도 없는 침묵이라, 화면은 그 사람이 Codex 를
+ *   덜 썼다고 말하게 된다 — 이 수집기가 가장 경계하는 실패 모양이다.
+ *
+ * 우선순위: 명시적 세션 경로 > Codex 홈 > 기본 홈. CODEX_SESSIONS_DIR 이 먼저인 이유는
+ * 그것이 "이 디렉터리를 훑어라"는 직접 지시이고, CODEX_HOME 은 그보다 넓은 설정이기 때문이다.
+ */
 func defaultCodexDir() string {
 	if v := strings.TrimSpace(os.Getenv("CODEX_SESSIONS_DIR")); v != "" {
 		return v
+	}
+	// CODEX_HOME 은 Codex 자신이 읽는 변수다 — 같은 이름을 그대로 존중한다.
+	if v := strings.TrimSpace(os.Getenv("CODEX_HOME")); v != "" {
+		return filepath.Join(v, "sessions")
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		return filepath.Join(home, ".codex", "sessions")
