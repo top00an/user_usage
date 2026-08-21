@@ -4,7 +4,7 @@
 > [`../README.md`](../README.md) 과 [`OPERATIONS.md`](OPERATIONS.md) 가 소유한다.
 > §0 이 **어디까지 구현됐는지**를 밝히므로, 본문의 미래형 서술을 현행 사실로 읽지 말 것.
 >
-> 상태: 초안(2026-08-21). **구현된 코드는 아직 없다** — 이 문서는 조사 결과와 동결한 계약이다.
+> 상태: 초안(2026-08-21), **1차 착지(2026-08-21)**. §0 이 구현 현황의 단일 출처다.
 >
 > 결정된 방향 — **로컬 여부는 기록한다(추론하지 않는다) · 비용은 미등록으로 둔다 ·
 > platform 은 원천당 하나를 유지한다.**
@@ -19,8 +19,10 @@
 | 허용목록 밖 platform 의 안전한 폴백 | **이미 구현됨** | `go/internal/store/platform.go` — `other` 로 정규화, 절대값 UPSERT 라 재전송이 제자리를 찾는다 |
 | 로컬 여부(locality) 신호 — 판정 계층 | **구현 완료** | `collector/internal/runtime` (엔드포인트 → 낱말) · `payload.Session.Runtime` |
 | 〃 — Codex 배선 | **구현 완료** | `session_meta.model_provider` → `codexcfg` 의 이름→base_url → `runtime.Of` |
-| 〃 — Claude·Gemini·Antigravity 배선 | **미구현** | 그 원천들이 엔드포인트를 남기는지 미확인 |
-| 서버가 `runtime` 을 받아 저장·조회 | **미구현** | 인테이크·컬럼·마이그레이션·필터가 남았다(W1-2~4) |
+| 〃 — Claude 배선 | **불가(실측)** | 트랜스크립트에 엔드포인트·provider 가 **없다** — 아래 §3.1 |
+| 〃 — Gemini·Antigravity 배선 | **미구현** | 그 원천들이 엔드포인트를 남기는지 미확인 |
+| 서버가 `runtime` 을 받아 저장·조회 | **구현 완료** | 인테이크 · `usage_sessions.runtime`(sqlite+pg) · `?runtime=` 필터 |
+| 화면(웹)에 runtime 표시·필터 | **미구현** | D1 미결 — 지원표를 platform × runtime 으로 늘릴지 |
 
 ## 1. 왜 이것이 단순한 원천 추가가 아닌가
 
@@ -118,9 +120,22 @@ runtime.Of(base_url) = "local"                  ← 낱말 하나
 판정 못 하는 경우는 전부 **침묵**이다 — 리졸버 미주입 · 기본 provider(`openai`) ·
 config 에 이름 없음 · `model_provider` 미기록.
 
-⚠ **Claude·Gemini·Antigravity 는 아직 미해결이다.** 그쪽 세션 파일이 엔드포인트나 provider 를
-남기는지 확인하지 못했다. Claude 는 `ANTHROPIC_BASE_URL` 이 환경변수라 세션에 안 남을
-가능성이 높고, 그러면 설정 파일 소급 문제로 되돌아간다 → D2.
+⚠ **Claude 는 세션 파일로는 불가하다(2026-08-21 실측).** 트랜스크립트 1,583개 중 40개
+(9,090줄)를 훑어 키 이름을 전수 확인했다. `base_url`·`provider`·`endpoint` 계열이 **없다.**
+비슷해 보이는 것은 전부 다른 것이었다 — `origin` 은 메시지 출처(`{kind:human}`),
+`entrypoint` 는 항상 `cli`, `originalModel` 은 모델 폴백 기록이다.
+
+그래서 Claude 의 locality 는 세 갈래뿐이고 셋 다 문제가 있다:
+
+| 방법 | 문제 |
+|---|---|
+| 설정 파일·환경변수를 수집기가 읽는다 | "지금" 값이라 **과거 세션에 소급하면 틀린다** |
+| SessionEnd 훅이 자기 env 를 기록한다 | 훅은 그 세션의 프로세스에서 도니 **시점이 정확하다.** 다만 백필로 훑는 옛 세션은 여전히 판정 불가이고, 세션별 주입 경로를 새로 만들어야 한다 |
+| 판정하지 않는다 | 현재 상태. Claude 로 로컬 모델을 쓰면 그 사실이 보이지 않는다 |
+
+**두 번째가 유력하지만 이 기획 범위 밖이다** — 훅이 세션 id 를 알고 있으므로 그 세션 하나에만
+표시를 붙이는 경로가 필요하고, 그건 수집기 CLI 의 계약 변경이다. Gemini·Antigravity 는 실물
+데이터가 없어 아직 확인하지 못했다.
 
 또 하나: 로컬 엔드포인트는 캐시 축을 주지 않는다. `cacheRead`·`cacheCreate` 가 0 으로 오는데,
 지원표는 이것을 **`해당 없음`** 으로 표기해야 한다(`미수집` 이 아니다 — 그 개념이 없다).
@@ -155,13 +170,18 @@ Ollama 의 응답에는 `prompt_eval_count`·`eval_count` 가 있지만 어디�
 
 ### 1차 — 샘플 불필요 · 지금 착지·검증 가능
 
-| # | 무엇 | 오너 경계 | 검증 |
+| # | 무엇 | 오너 경계 | 상태 |
 |---|---|---|---|
-| W1-1 | `payload.Session.Runtime` 필드 + 수집기 판정 함수(순수 · 엔드포인트 문자열 → local 여부) | `collector/internal/payload/` · 신규 `collector/internal/runtime/` | 단위 테스트 — loopback·사설 IP·공인 IP·빈 값 |
-| W1-2 | 인테이크가 `runtime` 을 받아 좁힌다(빈 값 → cloud, 허용목록 밖 → 거부하지 않고 cloud) | `go/internal/intake/` | 단위 테스트 + 골든 |
-| W1-3 | `usage_sessions.runtime` 컬럼 + 마이그레이션(기본값 `cloud`, NOT NULL) | `go/internal/store/` · `migrations/` | sqlite·pg 양쪽 왕복 |
-| W1-4 | 조회 필터 `?runtime=local\|cloud` + 모델별 표의 근거 열에 로컬 표시 | `go/internal/httpapi/` | 골든 스냅샷 추가 |
-| W1-5 | 미등록 모델이 로컬 이름으로 와도 정직하게 나가는지 회귀 테스트(`qwen3-coder:30b` 류) | `go/internal/cost/` | 단위 테스트 |
+| W1-1 | `payload.Session.Runtime` 필드 + 판정 함수(순수 · 엔드포인트 → local 여부) | `collector/internal/payload/` · `collector/internal/runtime/` | **완료** — 테스트 6건 |
+| W1-2 | 인테이크가 `runtime` 을 받아 좁힌다 | `go/internal/intake/` | **완료** |
+| W1-3 | `usage_sessions.runtime` 컬럼 + 마이그레이션(기본값 `cloud`, NOT NULL) | `go/internal/store/` · `migrations/pg/0042_runtime.sql` | **완료** — sqlite 왕복 확인 · pg 미실측 |
+| W1-4 | 조회 필터 `?runtime=local\|cloud` | `go/internal/httpapi/` | **완료** — 400/200 실측 · 골든 44 무회귀 |
+| W1-5 | 미등록 모델이 로컬 이름으로 와도 정직하게 나가는지 회귀 테스트 | `go/internal/cost/` | **완료** — 테스트 4건 |
+| W1-6 | Codex 배선(`model_provider` → `config.toml` → 판정) | `collector/internal/codex*` | **완료** — 테스트 11건 |
+| W1-7 | 화면에 runtime 표시·필터 | `web/` | **미착수** — D1 미결 |
+
+W1-4 가 골든 44개를 흔들지 않은 이유: **응답에 필드를 늘리지 않았다.** 필터만 받는다.
+runtime 을 응답 shape 에 싣는 것은 W1-7 의 일이고, 그때 골든을 다시 뜨게 된다.
 
 W1-5 는 코드 변경이 아니라 **현행 동작을 못박는 테스트**다. `NormalizeModel` 의 변형 접미사
 절단(`-thinking`·`-high`·`-medium`·`-low`)이 로컬 모델명을 건드리지 않는지도 여기서 본다.
@@ -170,7 +190,7 @@ W1-5 는 코드 변경이 아니라 **현행 동작을 못박는 테스트**다.
 
 | # | 무엇 | 선행 조건 |
 |---|---|---|
-| W2-1 | §3.1 의 `Runtime` 판정 근거 배선(세션 파일 vs 설정 파일) | Codex·Claude 세션 파일에 엔드포인트가 남는지 확인 |
+| W2-1 | Claude 의 locality — SessionEnd 훅이 자기 env 를 그 세션에만 붙이는 경로 | 수집기 CLI 계약 변경 결정(§3.1) |
 | W2-2 | LM Studio 파서 | `~/.lmstudio` 실물 경로·스키마 |
 | W2-3 | Ollama 런타임 캡처 | 토큰이 보이는 지점 특정 |
 | W2-4 | opencode/aider/cline 중 **선택된 하나**의 파서 | 도구 결정 + 세션 파일 실물 |

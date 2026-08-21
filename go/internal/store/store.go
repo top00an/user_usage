@@ -108,6 +108,11 @@ var sqliteDDL = []string{
 		-- 이 필드를 보내지 않으므로 DEFAULT 가 하위호환의 전부다(platform.go 주석).
 		-- pg 는 migrations/pg/0035_platform.sql 이 같은 컬럼을 소유한다(양 방언 동기).
 		platform TEXT NOT NULL DEFAULT 'claude',
+		-- 이 세션이 어디서 돌았나(cloud|local). platform 과 **다른 축**이다 — 같은 도구가
+		-- 클라우드 모델도 로컬 모델도 문다(runtime.go 주석).
+		-- DEFAULT 'cloud' 는 "클라우드였다"는 관측이 아니라 "로컬이라는 표시가 없다"는 뜻이다.
+		-- pg 는 migrations/pg/0042_runtime.sql 이 같은 컬럼을 소유한다(양 방언 동기).
+		runtime TEXT NOT NULL DEFAULT 'cloud',
 		input INTEGER NOT NULL DEFAULT 0,
 		output INTEGER NOT NULL DEFAULT 0,
 		cache_read INTEGER NOT NULL DEFAULT 0,
@@ -292,6 +297,20 @@ func Init(ctx context.Context, d db.DB) error {
 	if err := d.Exec(ctx,
 		"CREATE INDEX IF NOT EXISTS idx_usage_sessions_platform ON usage_sessions(platform)"); err != nil {
 		return fmt.Errorf("store: platform 인덱스 생성 실패: %w", err)
+	}
+	/*
+	 * runtime 축. pg 는 migrations/pg/0042_runtime.sql 이 소유한다.
+	 *
+	 * NOT NULL DEFAULT 로 추가하므로 기존 행이 전부 cloud 로 채워진다. 그 값은 "클라우드였다"는
+	 * 관측이 아니라 **"로컬이라는 표시가 없다"** 는 뜻이다 — 압도적 다수가 실제로 클라우드이므로
+	 * 그 이름을 쓰지만, 화면이 이 값을 "확인된 클라우드"로 말하면 과장이다.
+	 */
+	if err := ensureColumn(ctx, d, "usage_sessions", "runtime", "TEXT NOT NULL DEFAULT 'cloud'"); err != nil {
+		return err
+	}
+	if err := d.Exec(ctx,
+		"CREATE INDEX IF NOT EXISTS idx_usage_sessions_runtime ON usage_sessions(runtime)"); err != nil {
+		return fmt.Errorf("store: runtime 인덱스 생성 실패: %w", err)
 	}
 	/*
 	 * 계단(롱컨텍스트) 분리분. pg 는 migrations/pg/0036_long_context.sql 이 소유한다.

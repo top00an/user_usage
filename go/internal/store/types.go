@@ -23,6 +23,10 @@ type SessionInput struct {
 	// 허용목록 밖은 other 로 접는다 — 규칙의 단일 출처는 NormalizePlatform 이다.
 	// 현행 수집기는 이 필드를 보내지 않으므로 **빈 값이 정상 입력**이다.
 	Platform string
+	// Runtime 은 이 세션이 어디서 돌았는지다(cloud|local). 빈 값과 허용목록 밖은 cloud 로
+	// 접는다 — 규칙의 단일 출처는 NormalizeRuntime 이다. platform 과 **직교하는 축**이고
+	// (같은 도구가 두 쪽을 다 문다), 빈 값이 정상 입력이다.
+	Runtime string
 
 	Input       int64
 	Output      int64
@@ -286,12 +290,15 @@ type QualityTotals struct {
 //
 // 시각 셋이 포인터인 이유: 안 보낸 값을 0 이나 "" 로 지어내지 않는다 — "모른다"가 그대로 보여야 한다.
 type Session struct {
-	SessionID   string
-	Machine     string
-	Username    string
-	Project     string
-	Model       string
-	Platform    string
+	SessionID string
+	Machine   string
+	Username  string
+	Project   string
+	Model     string
+	Platform  string
+	// Runtime 은 이 세션이 어디서 돌았는지다(cloud|local). platform 과 직교한다.
+	// `cloud` 는 "확인된 클라우드"가 아니라 **"로컬이라는 표시가 없다"** 는 뜻이다.
+	Runtime     string
 	Input       int64
 	Output      int64
 	CacheRead   int64
@@ -421,7 +428,10 @@ type Filter struct {
 	// 정규화하지 않는다 — 오타를 other 로 접으면 요청과 다른 집합이 조용히 돌아온다.
 	// 호출부가 IsPlatformFilter 로 걸러 400 을 내는 것이 정직하다.
 	Platform string
-	Limit    int // 0 이면 기본값
+	// Runtime 은 Platform 과 같은 규율이다 — 빈 값이면 조건 없음(전체), 정규화하지 않고
+	// 호출부가 IsRuntimeFilter 로 걸러 400 을 낸다.
+	Runtime string
+	Limit   int // 0 이면 기본값
 }
 
 // GateKey 는 "게이트로 보이는 명령" 한 줄이다.
