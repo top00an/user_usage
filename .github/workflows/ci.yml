@@ -20,6 +20,19 @@ jobs:
         with:
           node-version: '22'
 
+      # gofmt 는 vet·test 가 잡지 못한다. 게이트가 없으면 서식이 조용히 갈라지고, 나중에
+      # 누군가 파일 하나를 고칠 때 무관한 재정렬이 diff 에 섞여 리뷰가 흐려진다.
+      # 실제로 두 파일이 그 상태로 있었다(cost/seed_openai.go · cost/multiprovider_test.go —
+      # 2026-08-21 에 정리). 두 모듈을 함께 본다 — collector 는 별도 모듈이다.
+      - name: gofmt (서식 드리프트)
+        run: |
+          out=$(gofmt -l go collector)
+          if [ -n "$out" ]; then
+            echo "gofmt 필요:"; echo "$out"
+            echo "→ gofmt -w $out"
+            exit 1
+          fi
+
       - name: go vet + test (백엔드 11 패키지)
         run: cd go && go vet ./... && go test ./... -count=1
 
