@@ -118,7 +118,34 @@ runtime.Of(base_url) = "local"                  ← 낱말 하나
 이름→URL 매핑만 "지금" 값이므로 잔여 드리프트가 있다(이름을 다른 URL 로 재지정하면 과거
 세션이 새 판정을 받는다). 전역 base_url 을 읽는 것보다 훨씬 좁고, 이름 재지정은 드물다.
 판정 못 하는 경우는 전부 **침묵**이다 — 리졸버 미주입 · 기본 provider(`openai`) ·
-config 에 이름 없음 · `model_provider` 미기록.
+모르는 provider 이름 · `model_provider` 미기록.
+
+**⚠ config 만 보면 가장 흔한 경우를 놓친다(2026-08-21 실측).** 로컬 모델을 Codex 로 쓰는 흔한
+방법은 config 를 손으로 적는 것이 아니라 **CLI 플래그**다:
+
+```
+codex --oss --local-provider ollama|lmstudio
+```
+
+이 경로는 provider 정의가 **바이너리 내장**이라 `config.toml` 에 블록이 생기지 않는다
+(실측: `--oss` 를 실행한 뒤에도 `grep -c model_providers ~/.codex/config.toml` = **0**).
+그러면 이름→엔드포인트 조회가 빈손으로 돌아와 locality 가 조용히 빠진다.
+
+그래서 판정을 2단으로 둔다:
+
+1. **config 가 답하면 그것이 정본이다.** `[model_providers.ollama].base_url` 이 공인 주소면
+   로컬이 아니고, 이름이 `ollama` 라는 사실은 그 앞에서 힘이 없다.
+2. config 에 블록이 없으면 **이름 자체가 로컬을 뜻하는 내장 provider**인지 본다 —
+   `oss` · `ollama` · `lmstudio`.
+
+②의 오탐 경로는 없다: 그 이름으로 원격을 가리키려면 config 에 base_url 을 적어야 하고, 그러면
+①이 먼저 답한다. 목록을 추측으로 넓히지 않는다(`vllm`·`llamacpp` 등은 Codex 내장이라는 근거가
+없고, 근거 없이 넣으면 그 이름의 **원격** provider 사용량이 로컬로 위조된다).
+
+⚠ **미실증 한 조각:** `--oss` 가 `model_provider` 에 실제로 쓰는 값이 `oss` 인지 `ollama` 인지
+확인하지 못했다. Codex 는 provider 검증을 **세션 생성 전에** 하므로 Ollama 없이 실행하면 세션
+파일이 아예 남지 않는다(실측: 실패 후 새 세션 0건). 그래서 세 이름을 모두 받는다 — 실데이터가
+생기면 실제 값 하나로 좁힐 수 있다.
 
 ⚠ **Claude 는 세션 파일로는 불가하다(2026-08-21 실측).** 트랜스크립트 1,583개 중 40개
 (9,090줄)를 훑어 키 이름을 전수 확인했다. `base_url`·`provider`·`endpoint` 계열이 **없다.**

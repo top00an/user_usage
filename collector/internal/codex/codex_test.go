@@ -538,6 +538,57 @@ func TestRuntime_SilentWhenUndeterminable(t *testing.T) {
 	}
 }
 
+/*
+ * 내장 provider — config.toml 에 블록이 없어도 이름으로 로컬을 판정한다.
+ *
+ * 로컬 모델을 Codex 로 쓰는 가장 흔한 방법은 `--oss --local-provider ollama|lmstudio` 이고,
+ * 그 경로는 provider 가 바이너리 내장이라 config 에 블록이 없을 수 있다. 이름으로도 받지
+ * 않으면 **가장 흔한 사용법에서 축이 조용히 빈다.**
+ */
+func TestRuntime_BuiltinLocalProviderNeedsNoConfig(t *testing.T) {
+	noConfig := func(string) string { return "" } // config 에 블록이 없는 상태
+	for _, p := range []string{"oss", "ollama", "lmstudio", "Ollama", "LMSTUDIO"} {
+		s := parseWithResolver(t, noConfig,
+			metaWithProvider(p), ctxLine,
+			tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15),
+		)
+		if s.Runtime != "local" {
+			t.Errorf("provider %q → Runtime = %q, want local", p, s.Runtime)
+		}
+	}
+}
+
+/*
+ * config 가 답을 주면 **그것이 정본이다** — 이름으로 뒤집지 않는다.
+ *
+ * `[model_providers.ollama].base_url` 을 공인 주소로 적어 두었으면 그건 로컬이 아니다.
+ * 이름 판정이 config 를 이기면 원격 사용량이 로컬로 위조된다.
+ */
+func TestRuntime_ConfigBeatsProviderName(t *testing.T) {
+	remote := func(string) string { return "https://ollama.example.com/v1" }
+	s := parseWithResolver(t, remote,
+		metaWithProvider("ollama"), ctxLine,
+		tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15),
+	)
+	if s.Runtime != "" {
+		t.Errorf("Runtime = %q, want empty — config 가 공인 주소를 말했다", s.Runtime)
+	}
+}
+
+// 모르는 이름은 여전히 침묵이다 — 목록을 추측으로 넓히지 않는다.
+func TestRuntime_UnknownProviderNameStaysSilent(t *testing.T) {
+	noConfig := func(string) string { return "" }
+	for _, p := range []string{"together", "vllm", "llamacpp", "my-gpu-box"} {
+		s := parseWithResolver(t, noConfig,
+			metaWithProvider(p), ctxLine,
+			tokenCount("2026-07-06T00:49:10.000Z", 10, 0, 5, 0, 15),
+		)
+		if s.Runtime != "" {
+			t.Errorf("provider %q → Runtime = %q, want empty", p, s.Runtime)
+		}
+	}
+}
+
 // 재개로 세션이 두 파일에 갈려도 provider 가 유지된다(파일마다 오지 않을 수 있다).
 func TestRuntime_ProviderSurvivesFileSplit(t *testing.T) {
 	a := New()
