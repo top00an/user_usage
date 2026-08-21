@@ -303,21 +303,29 @@ function withScope(path: string, p: ScopeParams = {}): string {
   return qs ? `${path}?${qs}` : path;
 }
 
-function withUser(path: string, user?: string): string {
-  return withScope(path, { user });
-}
-
 /* ── 엔드포인트 ───────────────────────────────────────────────────────── */
 
 /*
- * platform 축은 받지 않는다(위 표 참고). user 축은 받는다 — 사용 추적 화면이 쓴다.
+ * ⚠ **스코프 세 축을 전부 받는다.** 예전에는 `UserParams` 만 받아 platform·runtime 을 **조용히
+ *   버렸다** — 호출부가 `{platform, runtime, user}` 를 넘겨도 컴파일이 통과하고(스프레드는
+ *   TypeScript 의 초과 속성 검사를 우회한다) 질의에서만 사라졌다.
+ *
+ *   그 결과가 실제로 났다(2026-08-21 브라우저 실측): 대시보드에서 '실행 위치=로컬'을 골랐을 때
+ *   `seats`·`dev` 는 좁혀졌는데 `summary` 는 안 좁혀져 **활성 세션 타일이 1,589 그대로**였다.
+ *   같은 화면의 두 카드가 서로 다른 모집단을 그리면서 그 사실을 말하지 않은 것 — 이 축에서
+ *   가장 나쁜 실패다.
+ *
+ *   서버는 처음부터 두 축을 읽고 있었다(httpapi 의 platformParam·runtimeParam →
+ *   store.Filter). 못 하는 쪽은 서버가 아니라 화면이었다. 예전 주석이 "platform 축은 받지
+ *   않는다"고 적어 둔 것이 그 오해의 출처다.
+ *
  * 두 조회에 **같은 값**을 실어야 한다: 한쪽만 걸면 같은 화면의 두 카드가 서로 다른
  * 모집단을 그리면서 그 사실을 말하지 않는다.
  */
-export const getSummary = (p: UserParams = {}, o?: RequestOptions) =>
-  request<Summary>(withUser('/api/usage/summary', p.user), o);
-export const getDispatch = (p: UserParams = {}, o?: RequestOptions) =>
-  request<Dispatch>(withUser('/api/usage/dispatch', p.user), o);
+export const getSummary = (p: ScopeParams = {}, o?: RequestOptions) =>
+  request<Summary>(withScope('/api/usage/summary', p), o);
+export const getDispatch = (p: ScopeParams = {}, o?: RequestOptions) =>
+  request<Dispatch>(withScope('/api/usage/dispatch', p), o);
 /*
  * seats·teams·dev — days + 스코프 두 축.
  *

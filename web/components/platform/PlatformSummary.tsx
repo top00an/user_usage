@@ -28,6 +28,7 @@ import { fmtTime, n, shortTokens, usd } from '@/lib/format';
 import { COMMON_CORE, METRIC_LABEL, platformMeta, type MetricId } from '@/lib/platforms';
 import { COST_DISCLAIMER, COST_LABEL, COST_LABEL_SHORT, COST_WHY } from '@/lib/costLabels';
 import { usePlatformFilter } from '@/lib/platformFilter';
+import { useRuntimeFilter } from '@/lib/runtimeFilter';
 import { TableWrap } from '@/components/ui';
 import { MetricValue } from './SupportBadge';
 
@@ -103,6 +104,20 @@ function PlatformCard({ row, selected }: { row: PlatformRow; selected: boolean }
 
 export default function PlatformSummary({ rows }: { rows: PlatformRow[] | null }) {
   const cur = usePlatformFilter();
+  /*
+   * 이 카드는 **필터를 싣지 않는 조회**에서 온다(lib/api.ts 의 getPlatforms — 선택지의 원천이라
+   * 스코프를 걸면 고른 순간 목록이 자기 자신으로 좁혀진다).
+   *
+   * 그래서 다른 축(실행 위치·사용자)이 걸려 있으면 이 카드만 전체 모집단을 그리고, 아래 타일은
+   * 좁혀진 값을 그린다. 실측으로 그 상태를 봤다(2026-08-21 브라우저): '실행 위치=로컬' 에서
+   * 활성 세션 타일은 4 인데 이 카드는 Claude 1,576 · Codex 13 이었다.
+   *
+   * 숫자를 좁히는 것은 답이 아니다(선택지가 사라진다). 대신 **밝힌다** — PlatformScope 가
+   * 걸러지지 않는 패널에 쓰는 것과 같은 규율이다. 밝히지 않으면 화면이 두 모집단을 한 화면에
+   * 놓고 그 사실을 말하지 않는 상태가 된다.
+   */
+  const runtimeSel = useRuntimeFilter();
+  const scoped = Boolean(runtimeSel);
 
   if (rows === null) {
     return (
@@ -128,7 +143,16 @@ export default function PlatformSummary({ rows }: { rows: PlatformRow[] | null }
     <section className="card glass" aria-labelledby="pf-sum-h">
       <div className="between mb">
         <h3 id="pf-sum-h">플랫폼별 사용량</h3>
-        <span className="help">전체 기간 누적 · {COST_LABEL}은 {COST_DISCLAIMER}</span>
+        <span className="help">
+          {scoped ? (
+            <>
+              <span className="badge mute" title="이 카드는 플랫폼 선택지의 원천이라 실행 위치·사용자 필터를 싣지 않습니다 — 아래 패널과 모집단이 다릅니다.">
+                필터 무관 · 전체 기준
+              </span>{' '}
+            </>
+          ) : null}
+          전체 기간 누적 · {COST_LABEL}은 {COST_DISCLAIMER}
+        </span>
       </div>
 
       {/* ① 카드 */}
