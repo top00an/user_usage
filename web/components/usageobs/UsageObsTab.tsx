@@ -11,10 +11,11 @@ import type {
 } from '@/lib/types';
 import { n, pctOf, relTime, fmtTime, seconds, shortTokens, usd } from '@/lib/format';
 import { Card, ErrorState, Flag, Loading, TableWrap } from '@/components/ui';
-import { usePlatformFilter } from '@/lib/platformFilter';
+import { useScope } from '@/lib/scope';
 import { platformMeta } from '@/lib/platforms';
 import { COST_LABEL, COST_LABEL_SHORT, COST_WHY } from '@/lib/costLabels';
 import PlatformFilter from '@/components/platform/PlatformFilter';
+import RuntimeFilter from '@/components/platform/RuntimeFilter';
 import UserFilter from '@/components/usagetrack/UserFilter';
 import CostCard from './CostCard';
 import SeatsCard from './SeatsCard';
@@ -238,8 +239,6 @@ export default function UsageObsTab() {
    * 서버가 platform 축으로 실제로 거른다 — 그래서 여기서는 필터가 **작동한다**.
    * seats·teams 는 못 거른다(lib/api.ts 의 표) → 그 두 카드는 '전체 플랫폼 기준'이라고 말한다.
    */
-  const platform = usePlatformFilter();
-
   /*
    * 플랫폼 목록은 조회 조건과 무관하므로 **따로** 싣는다(deps []). 같은 로더에 묶으면
    * 플랫폼을 고를 때마다 선택지 목록까지 다시 받아온다 — 그동안 셀렉트가 사라진다.
@@ -265,6 +264,12 @@ export default function UsageObsTab() {
   const [user, setUser] = useState('');
 
   /*
+   * 스코프 세 축(platform · runtime · user)을 한 곳에서 조립한다(lib/scope.ts).
+   * **user 선언 뒤여야 한다** — 위로 올리면 TDZ 에 걸린다.
+   */
+  const scope = useScope(user || undefined);
+
+  /*
    * 명단은 **필터를 절대 싣지 않는** 조회로 받는다(deps []). 걸린 leaderboard 로 만들면
    * 한 사람을 고른 순간 목록에 그 사람만 남아 다른 사람으로 갈아탈 수 없다.
    */
@@ -277,36 +282,43 @@ export default function UsageObsTab() {
     ? (rosterRes.state.data?.users ?? []).map((u) => u.username).filter((u): u is string => !!u)
     : [];
 
+  /*
+   * 의존성으로 쓸 **원시값**을 먼저 뽑는다 — useResource 는 deps 를 문자열로 이어 키를
+   * 만들므로 객체를 넣으면 키가 굳어 재조회가 안 된다(lib/scope.ts 의 경고).
+   */
+  const { platform, runtime } = scope;
+
   const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<ObsData> => {
     // 빈 값은 파라미터 자체를 안 붙인다(=전체, 현행 동작)
-    const scope = { platform: platform || undefined, user: user || undefined };
+    const s = { platform, runtime, user: user || undefined };
     const [dist, sessions, leaderboard, quality, coverage, seats, teams] = await Promise.all([
-      getDistribution(scope, { signal }),
-      getSessions({ sort: 'cost', top: 25, ...scope }, { signal }),
-      softly(getLeaderboard(scope, { signal }), { users: [], pricedAt: '', sample: { limit: 0, rows: 0, truncated: false }, unpriced: [] } as Leaderboard),
-      softly(getQuality(scope, { signal }), null as Quality | null),
-      softly(getCoverage(scope, { signal }), { now: '', reporters: [] } as Coverage),
+      getDistribution(s, { signal }),
+      getSessions({ sort: 'cost', top: 25, ...s }, { signal }),
+      softly(getLeaderboard(s, { signal }), { users: [], pricedAt: '', sample: { limit: 0, rows: 0, truncated: false }, unpriced: [] } as Leaderboard),
+      softly(getQuality(s, { signal }), null as Quality | null),
+      softly(getCoverage(s, { signal }), { now: '', reporters: [] } as Coverage),
       /*
        * seats·teams 는 관리자 전용(교차 뷰) — member 스코프는 403 이라 softly 로 null 처리해
        * 카드가 스스로 숨는다. 이것이 프런트의 RBAC 화면 분기다.
        *
        * ⚠ 예전 주석은 "이 둘은 platform 축을 받지 않는다"며 스코프를 안 넘겼다. 사실이
        *   아니었다(2026-08-13 실측: ?platform=codex 로 seats 본문이 647→261 바이트).
-       *   user 축도 같은 날 서버에 배선했다 — 두 축을 모두 싣는다.
+       *   user 축도 같은 날 서버에 배선했고, runtime 은 2026-08-21 에 붙였다 — 세 축을 모두 싣는다.
        */
-      softly(getSeats(30, { signal }, scope), null as Seats | null),
-      softly(getTeams(30, { signal }, scope), null as Teams | null),
+      softly(getSeats(30, { signal }, s), null as Seats | null),
+      softly(getTeams(30, { signal }, s), null as Teams | null),
     ]);
     return { dist, sessions, leaderboard, quality, coverage, seats, teams };
-  }, [platform, user]);
+  }, [platform, runtime, user]);
 
-  // 두 축이 키에 들어간다 — 바뀌면 낡은 응답이 렌더에 오르지 못한다(hooks/useResource.ts ③).
-  const { state, reload } = useResource(load, [platform, user]);
+  // 세 축이 키에 들어간다 — 바뀌면 낡은 응답이 렌더에 오르지 못한다(hooks/useResource.ts ③).
+  const { state, reload } = useResource(load, [platform, runtime, user]);
 
   /* 컨트롤은 로딩·실패 중에도 남는다 — 사라지면 되돌릴 방법이 화면에서 없어진다. */
   const bar = (
     <>
       <PlatformFilter rows={platformRows} applies what="아래 지표는 이 플랫폼만 집계합니다" />
+      <RuntimeFilter />
       <UserFilter users={roster} value={user} onChange={setUser} />
     </>
   );
@@ -321,9 +333,9 @@ export default function UsageObsTab() {
 
     if (!sessions.sessions?.length) {
       body = (
-        <Card title={platform ? `${platformMeta(platform).label} 보고가 없습니다` : '아직 보고가 없습니다'}>
+        <Card title={scope.platform ? `${platformMeta(scope.platform).label} 보고가 없습니다` : '아직 보고가 없습니다'}>
           <p className="help">
-            {platform
+            {scope.platform
               ? '이 플랫폼으로 보고된 세션이 없습니다 — 다른 플랫폼의 데이터는 위 선택을 전체로 바꾸면 보입니다.'
               : '팀원 PC 가 수집기를 갱신한 뒤 세션을 한 번 열면 집계가 올라옵니다.'}
           </p>

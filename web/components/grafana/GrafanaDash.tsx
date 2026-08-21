@@ -27,9 +27,10 @@ import { softly, useResource } from '@/hooks/useResource';
 import type { Dev, Leaderboard, PlatformsResponse, Seats, Summary } from '@/lib/types';
 import { Empty, ErrorState, Loading } from '@/components/ui';
 import PlatformFilter from '@/components/platform/PlatformFilter';
+import RuntimeFilter from '@/components/platform/RuntimeFilter';
 import UserFilter from '@/components/usagetrack/UserFilter';
 import PlatformSummary from '@/components/platform/PlatformSummary';
-import { usePlatformFilter } from '@/lib/platformFilter';
+import { useScope } from '@/lib/scope';
 import { COST_DISCLAIMER, COST_LABEL, COST_WHY } from '@/lib/costLabels';
 import EChart from '@/components/charts/EChart';
 import CanvasGrid, { type CanvasItem } from './CanvasGrid';
@@ -354,7 +355,8 @@ export default function GrafanaDash() {
    * (커스텀 패널도 같은 summary 를 근거로 그린다 — 별도 배선이 필요 없다.)
    */
   const [user, setUser] = useState('');
-  const platform = usePlatformFilter();
+  // 스코프 세 축을 한 곳에서 읽는다(lib/scope.ts) — 축을 하나 잊는 사고를 구조로 막는다.
+  const scope = useScope(user || undefined);
 
   /*
    * 배치 — 서버가 주인이다. `ready` 전에는 캔버스를 그리지 않는다: 저장된 배치가 도착하기 전에
@@ -423,22 +425,29 @@ export default function GrafanaDash() {
     ? (rosterRes.state.data?.users ?? []).map((u) => u.username).filter((u): u is string => !!u)
     : [];
 
+  /*
+   * 의존성으로 쓸 **원시값**을 먼저 뽑는다 — useResource 는 deps 를 문자열로 이어 키를
+   * 만들므로 객체를 넣으면 키가 굳어 재조회가 안 된다(lib/scope.ts 의 경고).
+   */
+  const { platform, runtime } = scope;
+
   const load = useCallback(async ({ signal }: { signal: AbortSignal }): Promise<Data> => {
     /*
-     * 두 축을 함께 싣는다. platform 도 이 셋이 원래부터 받는다 — 예전 주석이 "이 패널은
-     * 플랫폼 축으로 걸러지지 않는다"고 적어 두었지만 사실이 아니었다(2026-08-13 실측).
+     * 스코프 세 축(platform · runtime · user)을 함께 싣는다. platform 도 이 셋이 원래부터
+     * 받는다 — 예전 주석이 "이 패널은 플랫폼 축으로 걸러지지 않는다"고 적어 두었지만
+     * 사실이 아니었다(2026-08-13 실측).
      */
-    const scope = { platform: platform || undefined, user: user || undefined };
+    const s = { platform, runtime, user: user || undefined };
     const [summary, seats, dev, platforms] = await Promise.all([
-      softly(getSummary(scope, { signal }), null as Summary | null),
-      softly(getSeats(3650, { signal }, scope), null as Seats | null),
-      softly(getDev(365, { signal }, scope), null as Dev | null),
+      softly(getSummary(s, { signal }), null as Summary | null),
+      softly(getSeats(3650, { signal }, s), null as Seats | null),
+      softly(getDev(365, { signal }, s), null as Dev | null),
       // 플랫폼 목록은 선택지의 원천이라 필터를 싣지 않는다(사용자 축도 마찬가지).
       softly(getPlatforms({ signal }), null as PlatformsResponse | null),
     ]);
     return { summary, seats, dev, platforms };
-  }, [platform, user]);
-  const { state, reload } = useResource(load, [platform, user]);
+  }, [platform, runtime, user]);
+  const { state, reload } = useResource(load, [platform, runtime, user]);
 
   // 커스텀 패널(내 그래프) — 저장소 구독으로 추가/삭제 즉시 반영.
   const panelsSnap = useSyncExternalStore(subscribePanels, panelsSnapshot, () => '[]');
@@ -658,6 +667,7 @@ export default function GrafanaDash() {
         * 받는다 — 화면이 안 싣고 있었을 뿐이다. 이제 싣는다.
         */}
       <PlatformFilter rows={platformRows} applies what="아래 패널은 이 플랫폼만 집계합니다" />
+      <RuntimeFilter />
       <UserFilter users={roster} value={user} onChange={setUser} />
 
       {/*
